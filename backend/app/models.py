@@ -15,6 +15,7 @@ NodeType = Literal[
     "item",
     "clue",
     "map",
+    "lore",
 ]
 
 RelationType = Literal[
@@ -30,6 +31,10 @@ RelationType = Literal[
     "involved_in",
     "member_of",
     "parent_of",
+    "associated_with",
+    "worships",
+    "created_by",
+    "recorded_in",
     "custom",
 ]
 

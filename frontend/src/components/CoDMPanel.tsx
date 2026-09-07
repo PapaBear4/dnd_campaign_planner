@@ -67,6 +67,10 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
   };
+
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+
   const [messages, setMessages] = useState<AgentChatMessage[]>([
     {
       role: 'assistant',
@@ -76,6 +80,13 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // Auto-scroll chat independently
+  useEffect(() => {
+    if (toolMode === 'chat') {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages, toolMode, loading]);
 
   // Active Tool Modal states
   const [toolMode, setToolMode] = useState<
@@ -263,6 +274,7 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
           alignItems: 'center',
           justifyContent: 'space-between',
           background: 'rgba(15, 20, 32, 0.95)',
+          flexShrink: 0,
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -302,6 +314,7 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
           gap: '6px',
           overflowX: 'auto',
           background: 'var(--bg-surface)',
+          flexShrink: 0,
         }}
       >
         <button
@@ -343,7 +356,7 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
 
       {/* Tool Modal View or Chat View */}
       {toolMode === 'boxed_text' && (
-        <div style={{ padding: '16px', overflowY: 'auto', flex: 1 }}>
+        <div style={{ padding: '16px', overflowY: 'auto', flex: 1, minHeight: 0, overscrollBehavior: 'contain' }} className="codm-chat-scroller">
           <h4 style={{ fontSize: '0.95rem', marginBottom: '10px', color: 'var(--color-gold)' }}>
             📜 Evocative Boxed Text Generator
           </h4>
@@ -390,7 +403,7 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
       )}
 
       {toolMode === 'coach' && (
-        <div style={{ padding: '16px', overflowY: 'auto', flex: 1 }}>
+        <div style={{ padding: '16px', overflowY: 'auto', flex: 1, minHeight: 0, overscrollBehavior: 'contain' }} className="codm-chat-scroller">
           <h4 style={{ fontSize: '0.95rem', marginBottom: '10px', color: 'var(--color-gold)' }}>
             🛡️ GM Mentor &amp; Pacing Coach
           </h4>
@@ -408,18 +421,17 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
             <option value="fail_forward">Fail-Forward (Players failed critical check)</option>
             <option value="pacing">Pacing &amp; Urgency (Table is stalling / dragging)</option>
             <option value="three_clue_rule">Three-Clue Rule (Investigation mystery)</option>
-            <option value="encounter_balance">Action Economy &amp; Encounter Balance</option>
-            <option value="player_agency">Player Off-Rails (Party went somewhere unexpected)</option>
+            <option value="spotlight">PC Spotlight Balancing</option>
           </select>
 
           <label style={{ fontSize: '0.78rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
-            What is happening right now?
+            Current Table Situation
           </label>
           <textarea
             rows={4}
             value={coachSituation}
             onChange={(e) => setCoachSituation(e.target.value)}
-            placeholder="e.g. Rogue rolled a 3 trying to lockpick the dungeon gate, sentries are nearby..."
+            placeholder="Describe what's happening at the table..."
             style={{ width: '100%', padding: '8px', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '6px', color: '#fff', marginBottom: '16px' }}
           />
 
@@ -430,7 +442,7 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
       )}
 
       {toolMode === 'weave_hook' && (
-        <div style={{ padding: '16px', overflowY: 'auto', flex: 1 }}>
+        <div style={{ padding: '16px', overflowY: 'auto', flex: 1, minHeight: 0, overscrollBehavior: 'contain' }} className="codm-chat-scroller">
           <h4 style={{ fontSize: '0.95rem', marginBottom: '10px', color: 'var(--color-gold)' }}>
             🪶 PC Backstory Hook Weaver
           </h4>
@@ -466,7 +478,7 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
       )}
 
       {toolMode === 'extract_doc' && (
-        <div style={{ padding: '16px', overflowY: 'auto', flex: 1 }}>
+        <div style={{ padding: '16px', overflowY: 'auto', flex: 1, minHeight: 0, overscrollBehavior: 'contain' }} className="codm-chat-scroller">
           <h4 style={{ fontSize: '0.95rem', marginBottom: '10px', color: 'var(--color-gold)' }}>
             🧙‍♂️ Document &amp; Adventure Text Extractor
           </h4>
@@ -508,7 +520,21 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
       {/* Main Chat Stream */}
       {toolMode === 'chat' && (
         <>
-          <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div
+            ref={chatScrollRef}
+            className="codm-chat-scroller"
+            style={{
+              flex: 1,
+              minHeight: 0,
+              overflowY: 'auto',
+              padding: '16px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '14px',
+              overscrollBehavior: 'contain',
+              scrollBehavior: 'smooth',
+            }}
+          >
             {messages.map((m, idx) => (
               <div
                 key={idx}
@@ -574,6 +600,7 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
                 <span>The Weaver is consulting the arcane texts...</span>
               </div>
             )}
+            <div ref={messagesEndRef} style={{ height: '1px', flexShrink: 0 }} />
           </div>
 
           {/* Chat Input */}
@@ -585,6 +612,7 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
               display: 'flex',
               gap: '8px',
               background: 'rgba(15, 20, 32, 0.95)',
+              flexShrink: 0,
             }}
           >
             <input

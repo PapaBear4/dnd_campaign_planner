@@ -619,6 +619,15 @@ def decompose_adventure_document(
             "- Extract specific combat encounters, puzzles, social challenges, and traps.\n"
             "- Include threat difficulty, monsters present, and fail-forward outcomes."
         ),
+        "world_lore": (
+            "DECOMPOSITION MODE: World Lore, Pantheons, History & Setting Primers.\n"
+            "- Extract key historical eras, cataclysms, myths, and planar cosmology as 'lore' nodes.\n"
+            "- Extract deities, divine domains, holy orders, and secret cabals as 'faction' nodes.\n"
+            "- Extract sacred sanctuaries, ancient ruins, and planar rifts as 'location' nodes.\n"
+            "- Extract legendary artifacts and lost texts as 'item' nodes.\n"
+            "- Extract tavern rumors, lost prophecies, and folk superstitions as 'clue' nodes.\n"
+            "- Create rich relationships: associated_with, worships, created_by, recorded_in, located_at."
+        ),
         "custom": (
             "DECOMPOSITION MODE: Custom DM Directive.\n"
             "- Closely follow the DM's specific instruction below and extract appropriate campaign nodes and edges."
@@ -685,9 +694,9 @@ def decompose_adventure_document(
             ),
             "extracted_nodes": [
                 {
-                    "type": "arc" if decomposition_mode == "campaign_structure" else ("monster" if decomposition_mode == "monsters" else "quest"),
+                    "type": "lore" if decomposition_mode == "world_lore" else ("arc" if decomposition_mode == "campaign_structure" else ("monster" if decomposition_mode == "monsters" else "quest")),
                     "title": title_guess,
-                    "subtitle": "Imported from Document",
+                    "subtitle": "World Lore & Setting" if decomposition_mode == "world_lore" else "Imported from Document",
                     "summary": f"Extracted via {decomposition_mode} parser. Ready for DM editing and refinement.",
                     "content_markdown": text_content[:1200],
                     "data_json": {"status": "planned"},
@@ -1292,14 +1301,15 @@ def apply_session_adaptation(
         author = player_note.get("author_name", author)
 
     if note_content:
-        created_note = player_service.create_note(
+        created_note = graph_service.create_player_note(
             PlayerNoteCreate(
                 campaign_id=campaign_id,
                 author_name=author,
                 title=note_title,
                 content=note_content,
                 node_id=created_next_session_id or (session_node_id if session_node_id else None)
-            )
+            ),
+            default_campaign_id=campaign_id
         )
         created_player_note_id = created_note.id
 

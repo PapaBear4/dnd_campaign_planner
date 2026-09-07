@@ -147,7 +147,7 @@ def check_duplicate_upload(
 @router.post("")
 async def upload_file(
     file: UploadFile = File(...),
-    category: Optional[str] = Form("general"), # "pdf", "statblock", "pc", "transcript", "map", "general"
+    category: Optional[str] = Form("general"), # "pdf", "statblock", "pc", "transcript", "map", "lore", "general"
     campaign_id: Optional[str] = Form(None),
     replace: Optional[bool] = Form(False)
 ):

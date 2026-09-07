@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
 CREATE TABLE IF NOT EXISTS nodes (
     id TEXT PRIMARY KEY,
     campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
-    type TEXT NOT NULL, -- arc, quest, session, encounter, pc, npc, monster, location, faction, item, clue, map
+    type TEXT NOT NULL, -- arc, quest, session, encounter, pc, npc, monster, location, faction, item, clue, map, lore
     title TEXT NOT NULL,
     subtitle TEXT DEFAULT '',
     summary TEXT DEFAULT '',
@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS uploaded_documents (
     campaign_id TEXT REFERENCES campaigns(id) ON DELETE CASCADE,
     filename TEXT NOT NULL UNIQUE,
     original_name TEXT NOT NULL,
-    category TEXT NOT NULL DEFAULT 'general', -- pdf, statblock, pc, transcript, map, general
+    category TEXT NOT NULL DEFAULT 'general', -- pdf, statblock, pc, transcript, map, lore, general
     file_size INTEGER NOT NULL DEFAULT 0,
     page_count INTEGER DEFAULT 0,
     file_hash TEXT DEFAULT '',

@@ -11,7 +11,8 @@ export type NodeType =
   | 'faction'
   | 'item'
   | 'clue'
-  | 'map';
+  | 'map'
+  | 'lore';
 
 export type RelationType =
   | 'contains'
@@ -26,6 +27,10 @@ export type RelationType =
   | 'involved_in'
   | 'member_of'
   | 'parent_of'
+  | 'associated_with'
+  | 'worships'
+  | 'created_by'
+  | 'recorded_in'
   | 'custom';
 
 export interface Campaign {
