@@ -1,0 +1,2117 @@
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  AlertCircle,
+  ArrowRight,
+  BookOpen,
+  Calendar,
+  Check,
+  CheckCircle,
+  ChevronRight,
+  Clock,
+  Compass,
+  FileText,
+  Flame,
+  HelpCircle,
+  Layers,
+  Loader2,
+  MessageSquare,
+  Mic,
+  Plus,
+  RefreshCw,
+  Scroll,
+  Send,
+  Shield,
+  Sparkles,
+  Split,
+  Square,
+  Swords,
+  Tag,
+  Trash2,
+  FolderOpen,
+  Upload,
+  User,
+  Wand2,
+} from 'lucide-react';
+import {
+  agentAdaptSession,
+  agentApplyExtracted,
+  agentApplySessionAdaptation,
+  agentDecomposeAdventure,
+  checkDuplicateUpload,
+  createNode,
+  deleteUploadedFile,
+  listUploads,
+  parsePdfDocument,
+  uploadFile,
+  UploadedDoc,
+} from '../api';
+import { DocumentLibraryModal } from './DocumentLibraryModal';
+import { DuplicateUploadModal } from './DuplicateUploadModal';
+import { NodeItem, NodeType } from '../types';
+
+interface IngestionHubProps {
+  campaignId: string;
+  onRefresh: () => void;
+  onNavigateTab: (tab: string) => void;
+  initialCategory?: 'book' | 'monster' | 'character' | 'session';
+  initialSessionNodeId?: string;
+  sessions?: NodeItem[];
+}
+
+interface SteeringMessage {
+  id: string;
+  role: 'assistant' | 'user';
+  content: string;
+  timestamp: string;
+  nodeCount?: number;
+}
+
+const SAMPLE_ACTUAL_PLAY_TRANSCRIPT = `[00:02:15] DM: You descend the treacherous ravine using the old knotted rope. The damp air smells of sulfur and old dust. Before you is the cracked courtyard of the sunken Sunless Citadel.
+[00:08:40] Elora (Rogue): I'm checking the cracked masonry for traps. Rolling Investigation... 18!
+[00:09:12] DM: You notice a subtle pressure plate wired to a hidden pit trap. You wedge an iron spike into the counterweight to disarm it safely.
+[00:15:30] Torvin (Fighter): Let's push through into the vestibule. We keep weapons drawn.
+[00:17:00] DM: Three Dire Rats leap out from behind the fallen masonry! Initiative!
+[00:24:45] DM: Torvin cuts down the lead rat with a sweeping blow, and Elora's arrow finishes the last one. Combat ends. You take a brief breath.
+[00:31:10] Varis (Wizard): There's a wooden door slightly ajar to the north. I hear weeping.
+[00:33:00] DM: You open the door. Cowering in the corner in rags is a small reptilian creature with large watery eyes—a Kobold clutching a dragon scale.
+[00:34:20] Meepo: "Meepo fails! Calcryx is gone! Dragon stolen by vile goblins! Yusdrayl will feed Meepo to the beasts!"
+[00:38:00] Elora: "Wait! We aren't here to hurt you. Who stole your dragon?"
+[00:41:15] Meepo: "Goblins! Under chief Durnn! They crept through the dry moat and snatched Calcryx from Meepo's nursery cage!"
+[00:44:00] Torvin: Persuasion check... 19! "Meepo, take us to your leader Yusdrayl. We will retrieve your dragon if you grant us safe passage and share what you know of the citadel."
+[00:46:30] Meepo: "You speak truth?! Big soft-skins help Meepo?! Meepo takes you to Yusdrayl! But beware, the trap hall has a secret trigger!"
+[00:52:10] DM: Meepo hands you an old brass key—the nursery key—and agrees to guide you through Kobold territory safely. You take a short rest in the guard room. We will pick up right outside the throne room of Kobold Queen Yusdrayl next week!`;
+
+const SAMPLE_SESSION_SUMMARY = `Session 1 Debrief & Summary:
+- Date: Eleint 14, 1492 DR
+- The party carefully climbed down the knotted ropes into the Ashen Plain ravine to reach the sunken fortress.
+- Elora discovered a hidden pressure plate pit trap in the courtyard and disabled it with an iron spike.
+- Encounter Resolved: 3 Dire Rats attacked from the courtyard rubble. Torvin and Elora eliminated them in 2 rounds.
+- Social Interaction: The party discovered Meepo, a weeping kobold dragon-keeper, locked in a side chamber.
+- Roleplay Outcome: Meepo explained that goblins under chieftain Durnn stole the kobolds' prized white dragon wyrmling, Calcryx. Torvin rolled a 19 Persuasion check and promised to help rescue the wyrmling.
+- Fallout & State Change: Meepo became a friendly guide, giving the party an old brass nursery key and agreeing to lead them safely past the trap hall to Queen Yusdrayl.
+- Stopping Point / Cliffhanger: The party completed a short rest in the guard post and stopped right outside the double doors of Queen Yusdrayl's throne chamber.`;
+
+export const IngestionHub: React.FC<IngestionHubProps> = ({
+  campaignId,
+  onRefresh,
+  onNavigateTab,
+  initialCategory = 'book',
+  initialSessionNodeId,
+  sessions = [],
+}) => {
+  const [activeCategory, setActiveCategory] = useState<'book' | 'monster' | 'character' | 'session'>(initialCategory);
+
+  // Synchronize if initialCategory or initialSessionNodeId changes from parent
+  useEffect(() => {
+    if (initialCategory) {
+      setActiveCategory(initialCategory);
+    }
+    if (initialSessionNodeId) {
+      setTargetSessionId(initialSessionNodeId);
+    }
+  }, [initialCategory, initialSessionNodeId]);
+
+  // Document Library & Duplicate Resolution state
+  const [showLibraryModal, setShowLibraryModal] = useState<boolean>(false);
+  const [libraryDocsCount, setLibraryDocsCount] = useState<number>(0);
+  const [duplicateModalData, setDuplicateModalData] = useState<{
+    file: File;
+    existing: UploadedDoc;
+    category: string;
+  } | null>(null);
+
+  const refreshLibraryCount = () => {
+    listUploads(campaignId)
+      .then((docs) => setLibraryDocsCount(docs.length))
+      .catch((err) => console.error('Error loading library count:', err));
+  };
+
+  useEffect(() => {
+    refreshLibraryCount();
+  }, [campaignId]);
+
+  // ==========================================
+  // 1. ADVENTURE DECOMPOSER STATE
+  // ==========================================
+  const [uploadedFilename, setUploadedFilename] = useState<string>('');
+  const [originalName, setOriginalName] = useState<string>('');
+  const [totalPages, setTotalPages] = useState<number>(0);
+  const [startPage, setStartPage] = useState<number>(1);
+  const [endPage, setEndPage] = useState<number>(20);
+  const [pastedText, setPastedText] = useState<string>('');
+  const [isUploading, setIsUploading] = useState<boolean>(false);
+
+  const [instruction, setInstruction] = useState<string>(
+    'Chapter 1: Decompose this chapter into the overarching Campaign Arc, primary Quests, key Sessions, and initial Encounters. Extract all named NPCs and factions.'
+  );
+  const [decompMode, setDecompMode] = useState<'campaign_structure' | 'monsters' | 'characters' | 'general'>('campaign_structure');
+
+  const [isDecomposing, setIsDecomposing] = useState<boolean>(false);
+  const [overviewSummary, setOverviewSummary] = useState<string>('');
+  const [extractedNodes, setExtractedNodes] = useState<any[]>([]);
+  const [extractedEdges, setExtractedEdges] = useState<any[]>([]);
+  const [selectedNodeIndices, setSelectedNodeIndices] = useState<Set<number>>(new Set());
+  const [commitStatus, setCommitStatus] = useState<string>('');
+
+  const [steeringConversation, setSteeringConversation] = useState<SteeringMessage[]>([]);
+  const [feedbackInput, setFeedbackInput] = useState<string>('');
+  const [isRefining, setIsRefining] = useState<boolean>(false);
+  const chatBottomRef = useRef<HTMLDivElement | null>(null);
+
+  // ==========================================
+  // 2. SESSION TRANSCRIPT ADAPTATION STATE
+  // ==========================================
+  const [targetSessionId, setTargetSessionId] = useState<string>(initialSessionNodeId || '');
+  const [sessionTranscript, setSessionTranscript] = useState<string>('');
+  const [sessionInstruction, setSessionInstruction] = useState<string>(
+    'Analyze what happened in this session. Update completed encounters, mark session status, change NPC dispositions/states based on player actions, extract any discovered loot or secrets, and draft the prep hook for the next session.'
+  );
+  const [isAdaptingSession, setIsAdaptingSession] = useState<boolean>(false);
+  const [sessionAdaptationResult, setSessionAdaptationResult] = useState<{
+    overview: string;
+    status_updates: { node_id: string; title: string; node_type: string; new_status: string; reason: string }[];
+    npc_updates: { node_id?: string; name: string; disposition: string; state_changes: string; notes: string }[];
+    emergent_nodes: any[];
+    emergent_edges: any[];
+    next_session_prep: {
+      title: string;
+      description: string;
+      suggested_encounters: string[];
+      dm_secrets: string;
+    };
+    player_recap: string;
+    model: string;
+  } | null>(null);
+
+  const [selectedStatusUpdates, setSelectedStatusUpdates] = useState<Set<string>>(new Set());
+  const [selectedEmergentNodeIndices, setSelectedEmergentNodeIndices] = useState<Set<number>>(new Set());
+  const [applyNextSessionPrep, setApplyNextSessionPrep] = useState<boolean>(true);
+  const [applyPlayerRecap, setApplyPlayerRecap] = useState<boolean>(true);
+  const [sessionCommitStatus, setSessionCommitStatus] = useState<string>('');
+  const [sessionCommitMessage, setSessionCommitMessage] = useState<string>('');
+
+  const [sessionChatHistory, setSessionChatHistory] = useState<SteeringMessage[]>([]);
+  const [sessionFeedbackInput, setSessionFeedbackInput] = useState<string>('');
+  const [isRefiningSession, setIsRefiningSession] = useState<boolean>(false);
+  const sessionChatBottomRef = useRef<HTMLDivElement | null>(null);
+
+  // Preset chips for Decomposer
+  const bookPresets = [
+    {
+      label: 'Chapter 1: Campaign Arc & Quests',
+      prompt: 'Chapter 1: Decompose this chapter into the overarching Campaign Arc, primary Quests, key Sessions, and initial Encounters. Extract all named NPCs and factions.',
+      mode: 'campaign_structure' as const,
+    },
+    {
+      label: 'Dungeon / Act: Encounters & Rooms',
+      prompt: 'Decompose this dungeon level into location nodes for each keyed room, encounters with monster rosters, and treasure/clue items.',
+      mode: 'campaign_structure' as const,
+    },
+    {
+      label: 'Faction Intrigue & Secrets',
+      prompt: 'Extract all factions, their leaders, active rivalries, hidden motivations, and rumor table entries as connected nodes.',
+      mode: 'general' as const,
+    },
+  ];
+
+  const monsterPresets = [
+    {
+      label: 'Extract 5e Monster Stat Blocks',
+      prompt: 'Extract all monsters and bosses mentioned with full 5e stats: AC, HP, Speed, CR, STR/DEX/CON/INT/WIS/CHA, traits, and action lists.',
+      mode: 'monsters' as const,
+    },
+  ];
+
+  const characterPresets = [
+    {
+      label: 'Extract PC Sheets & Backstories',
+      prompt: 'Extract player characters including Name, Class, Level, Race, Core Stats, Backstory, Personality Traits, Ideals, Bonds, and Flaws for campaign integration.',
+      mode: 'characters' as const,
+    },
+  ];
+
+  const decomposerSuggestions = [
+    'Split the primary quest into two sequential quests',
+    'Add an ambush encounter before the boss room',
+    'Make the kobolds open to diplomatic negotiation',
+    'Add a secret treasure cache room location with hidden lore',
+    'Scale combat encounters down for a 1st-level party',
+    'Add a personal quest hook tied to a missing family member',
+  ];
+
+  // Preset chips for Session Adaptation
+  const sessionPresets = [
+    {
+      label: 'Full Session Fallout & Pacing',
+      prompt: 'Analyze what happened in this session. Update completed encounters, mark session status, change NPC dispositions/states based on player actions, extract any discovered loot or secrets, and draft the prep hook for the next session.',
+    },
+    {
+      label: 'NPC & Faction Allegiance Shift',
+      prompt: 'Focus on social interactions: analyze how player roleplay and skill checks shifted NPC attitudes, faction standings, and loyalties. Update NPC notes accordingly.',
+    },
+    {
+      label: 'Emergent Loot, Clues & Discoveries',
+      prompt: 'Extract all loot, magical trinkets, rumors, and clues discovered by the players during this session into connected graph nodes.',
+    },
+    {
+      label: 'Next Session Prep & Cliffhanger',
+      prompt: 'Analyze where the party stopped, their remaining resources/spell slots, and draft a high-tension opening hook and suggested encounters for Session N+1.',
+    },
+  ];
+
+  const sessionSteeringSuggestions = [
+    'Mark Session 1 as completed and resolve the ravine encounter',
+    'Meepo should become an allied follower and guide',
+    'The party also discovered an engraved silver dagger with dwarven runes',
+    'Yusdrayl is still suspicious of the party',
+    'Make the next session prep focus on goblin diplomacy or combat',
+    'Shorten the player recap for the party journal',
+  ];
+
+  // ==========================================
+  // DECOMPOSER & UPLOAD HANDLERS
+  // ==========================================
+  const performUpload = async (file: File, category: string, replace: boolean = false) => {
+    setIsUploading(true);
+    try {
+      const res = await uploadFile(file, category, campaignId, replace);
+      setUploadedFilename(res.filename);
+      setOriginalName(res.original_name);
+      if (res.page_count) {
+        setTotalPages(res.page_count);
+        setEndPage(Math.min(res.page_count, 20));
+      } else if (res.original_name.toLowerCase().endsWith('.pdf')) {
+        try {
+          const pdfInfo = await parsePdfDocument(res.filename, 50);
+          setTotalPages(pdfInfo.total_pages || 1);
+          setEndPage(Math.min(pdfInfo.total_pages || 20, 20));
+        } catch {
+          // fallback default
+        }
+      }
+
+      if (category === 'transcript') {
+        try {
+          const text = await file.text();
+          setSessionTranscript(text);
+        } catch {}
+      }
+
+      refreshLibraryCount();
+    } catch (err: any) {
+      alert('File upload failed: ' + err.message);
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handleSelectDoc = async (doc: UploadedDoc) => {
+    setUploadedFilename(doc.filename);
+    setOriginalName(doc.original_name);
+    if (doc.page_count) {
+      setTotalPages(doc.page_count);
+      setEndPage(Math.min(doc.page_count, 20));
+    }
+    if (doc.category === 'transcript') {
+      setActiveCategory('session');
+      try {
+        const resp = await fetch(doc.url);
+        const text = await resp.text();
+        setSessionTranscript(text);
+      } catch {}
+    } else if (doc.category === 'pdf') {
+      setActiveCategory('book');
+    } else if (doc.category === 'statblock') {
+      setActiveCategory('monster');
+    } else if (doc.category === 'pc') {
+      setActiveCategory('character');
+    }
+    setShowLibraryModal(false);
+  };
+
+  const handleReuseExisting = (existing: UploadedDoc) => {
+    handleSelectDoc(existing);
+    setDuplicateModalData(null);
+  };
+
+  const handleReplaceFile = async () => {
+    if (!duplicateModalData) return;
+    const { file, category } = duplicateModalData;
+    setDuplicateModalData(null);
+    await performUpload(file, category, true);
+  };
+
+  const handleUploadAsCopy = async () => {
+    if (!duplicateModalData) return;
+    const { file, category } = duplicateModalData;
+    setDuplicateModalData(null);
+    await performUpload(file, category, false);
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const category = activeCategory === 'book' ? 'pdf' : activeCategory === 'monster' ? 'statblock' : 'pc';
+
+    try {
+      const dup = await checkDuplicateUpload(file.name, campaignId, category);
+      if (dup.exists && dup.existing_file) {
+        setDuplicateModalData({ file, existing: dup.existing_file, category });
+        e.target.value = '';
+        return;
+      }
+    } catch (err) {
+      console.error('Duplicate check error:', err);
+    }
+
+    await performUpload(file, category, false);
+    e.target.value = '';
+  };
+
+  const handleRunDecomposition = async () => {
+    if (!uploadedFilename && !pastedText.trim()) {
+      alert('Please upload a file or paste text to decompose.');
+      return;
+    }
+
+    setIsDecomposing(true);
+    setCommitStatus('');
+    try {
+      const res = await agentDecomposeAdventure({
+        filename: uploadedFilename || undefined,
+        text_content: pastedText || undefined,
+        instruction: instruction.trim(),
+        decomposition_mode: activeCategory === 'monster' ? 'monsters' : activeCategory === 'character' ? 'characters' : decompMode,
+        start_page: startPage,
+        end_page: endPage,
+        campaign_id: campaignId,
+      });
+
+      const nodes = res.extracted_nodes || [];
+      const edges = res.extracted_edges || [];
+      setOverviewSummary(res.overview_summary || '');
+      setExtractedNodes(nodes);
+      setExtractedEdges(edges);
+      setSelectedNodeIndices(new Set(nodes.map((_: any, i: number) => i)));
+
+      setSteeringConversation([
+        {
+          id: `msg-${Date.now()}`,
+          role: 'assistant',
+          content: res.overview_summary || 'I have decomposed the chapter into draft campaign nodes and relationships. Review below and reply to steer or refine any elements.',
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          nodeCount: nodes.length,
+        },
+      ]);
+    } catch (err: any) {
+      alert('Decomposition failed: ' + err.message);
+    } finally {
+      setIsDecomposing(false);
+    }
+  };
+
+  const handleSendFeedback = async (textOverride?: string) => {
+    const feedbackText = (textOverride || feedbackInput).trim();
+    if (!feedbackText || isRefining || isDecomposing) return;
+
+    const userMsg: SteeringMessage = {
+      id: `msg-${Date.now()}`,
+      role: 'user',
+      content: feedbackText,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+
+    const newHistory = [...steeringConversation, userMsg];
+    setSteeringConversation(newHistory);
+    setFeedbackInput('');
+    setIsRefining(true);
+
+    try {
+      const res = await agentDecomposeAdventure({
+        filename: uploadedFilename || undefined,
+        text_content: pastedText || undefined,
+        instruction: feedbackText,
+        decomposition_mode: activeCategory === 'monster' ? 'monsters' : activeCategory === 'character' ? 'characters' : decompMode,
+        start_page: startPage,
+        end_page: endPage,
+        campaign_id: campaignId,
+        current_nodes: extractedNodes,
+        current_edges: extractedEdges,
+        conversation_history: newHistory.map((m) => ({ role: m.role, content: m.content })),
+      });
+
+      const updatedNodes = res.extracted_nodes || extractedNodes;
+      const updatedEdges = res.extracted_edges || extractedEdges;
+      setExtractedNodes(updatedNodes);
+      setExtractedEdges(updatedEdges);
+      setSelectedNodeIndices(new Set(updatedNodes.map((_: any, i: number) => i)));
+      setOverviewSummary(res.overview_summary || '');
+
+      const assistantReply: SteeringMessage = {
+        id: `msg-${Date.now() + 1}`,
+        role: 'assistant',
+        content: res.overview_summary || 'Adjusted working draft nodes per your instructions.',
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        nodeCount: updatedNodes.length,
+      };
+
+      setSteeringConversation([...newHistory, assistantReply]);
+
+      setTimeout(() => {
+        chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }, 100);
+    } catch (err: any) {
+      alert('Failed to steer decomposition: ' + err.message);
+    } finally {
+      setIsRefining(false);
+    }
+  };
+
+  const toggleSelectNode = (index: number) => {
+    setSelectedNodeIndices((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  };
+
+  const handleCommitToCampaign = async () => {
+    const nodesToCommit = extractedNodes.filter((_, i) => selectedNodeIndices.has(i));
+    if (nodesToCommit.length === 0) {
+      alert('Please select at least one node to commit.');
+      return;
+    }
+
+    setCommitStatus('committing');
+    try {
+      const allowedTitles = new Set(nodesToCommit.map((n) => n.title));
+      const edgesToCommit = extractedEdges.filter(
+        (e) => allowedTitles.has(e.source_title) && allowedTitles.has(e.target_title)
+      );
+
+      await agentApplyExtracted(nodesToCommit, edgesToCommit, campaignId);
+      setCommitStatus('success');
+      onRefresh();
+    } catch (err: any) {
+      alert('Failed to commit to campaign: ' + err.message);
+      setCommitStatus('error');
+    }
+  };
+
+  // ==========================================
+  // SESSION TRANSCRIPT ADAPTATION HANDLERS
+  // ==========================================
+  const handleLoadSampleTranscript = () => {
+    setSessionTranscript(SAMPLE_ACTUAL_PLAY_TRANSCRIPT);
+    if (sessions && sessions.length > 0 && !targetSessionId) {
+      const match = sessions.find(
+        (s) => s.title.toLowerCase().includes('session 1') || s.title.toLowerCase().includes('sunless')
+      );
+      if (match) setTargetSessionId(match.id);
+      else setTargetSessionId(sessions[0].id);
+    }
+  };
+
+  const handleLoadSampleSummary = () => {
+    setSessionTranscript(SAMPLE_SESSION_SUMMARY);
+    if (sessions && sessions.length > 0 && !targetSessionId) {
+      const match = sessions.find(
+        (s) => s.title.toLowerCase().includes('session 1') || s.title.toLowerCase().includes('sunless')
+      );
+      if (match) setTargetSessionId(match.id);
+      else setTargetSessionId(sessions[0].id);
+    }
+  };
+
+  const handleSessionFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const category = 'transcript';
+
+    try {
+      const dup = await checkDuplicateUpload(file.name, campaignId, category);
+      if (dup.exists && dup.existing_file) {
+        setDuplicateModalData({ file, existing: dup.existing_file, category });
+        e.target.value = '';
+        return;
+      }
+    } catch (err) {
+      console.error('Duplicate check error:', err);
+    }
+
+    await performUpload(file, category, false);
+    e.target.value = '';
+  };
+
+  const handleRunSessionAdaptation = async () => {
+    if (!sessionTranscript.trim()) {
+      alert('Please paste or upload a session transcript first.');
+      return;
+    }
+    setIsAdaptingSession(true);
+    setSessionCommitStatus('');
+    try {
+      const res = await agentAdaptSession({
+        session_node_id: targetSessionId || undefined,
+        transcript_text: sessionTranscript,
+        user_instruction: sessionInstruction.trim(),
+        campaign_id: campaignId,
+      });
+
+      setSessionAdaptationResult(res);
+      setSelectedStatusUpdates(new Set((res.status_updates || []).map((u) => u.node_id)));
+      setSelectedEmergentNodeIndices(new Set((res.emergent_nodes || []).map((_, i) => i)));
+      setApplyNextSessionPrep(Boolean(res.next_session_prep?.title));
+      setApplyPlayerRecap(Boolean(res.player_recap));
+
+      setSessionChatHistory([
+        {
+          id: `msg-${Date.now()}`,
+          role: 'assistant',
+          content:
+            res.overview ||
+            'I have analyzed the session transcript against your campaign graph and timeline. Review the proposed status updates, NPC shifts, emergent loot, and Next Session prep below. You can continue our conversation to steer any adjustments.',
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        },
+      ]);
+    } catch (err: any) {
+      alert('Session adaptation failed: ' + err.message);
+    } finally {
+      setIsAdaptingSession(false);
+    }
+  };
+
+  const handleSendSessionFeedback = async (textOverride?: string) => {
+    const feedbackText = (textOverride || sessionFeedbackInput).trim();
+    if (!feedbackText || isRefiningSession || isAdaptingSession) return;
+
+    const userMsg: SteeringMessage = {
+      id: `msg-${Date.now()}`,
+      role: 'user',
+      content: feedbackText,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+
+    const newHistory = [...sessionChatHistory, userMsg];
+    setSessionChatHistory(newHistory);
+    setSessionFeedbackInput('');
+    setIsRefiningSession(true);
+
+    try {
+      const res = await agentAdaptSession({
+        session_node_id: targetSessionId || undefined,
+        transcript_text: sessionTranscript,
+        user_instruction: feedbackText,
+        campaign_id: campaignId,
+        conversation_history: newHistory.map((m) => ({ role: m.role, content: m.content })),
+      });
+
+      setSessionAdaptationResult(res);
+      setSelectedStatusUpdates(new Set((res.status_updates || []).map((u) => u.node_id)));
+      setSelectedEmergentNodeIndices(new Set((res.emergent_nodes || []).map((_, i) => i)));
+
+      const assistantReply: SteeringMessage = {
+        id: `msg-${Date.now() + 1}`,
+        role: 'assistant',
+        content: res.overview || 'Adjusted the session adaptation fallout per your steering instructions.',
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      };
+
+      setSessionChatHistory([...newHistory, assistantReply]);
+
+      setTimeout(() => {
+        sessionChatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }, 100);
+    } catch (err: any) {
+      alert('Failed to steer session adaptation: ' + err.message);
+    } finally {
+      setIsRefiningSession(false);
+    }
+  };
+
+  const toggleSelectStatusUpdate = (nodeId: string) => {
+    setSelectedStatusUpdates((prev) => {
+      const next = new Set(prev);
+      if (next.has(nodeId)) next.delete(nodeId);
+      else next.add(nodeId);
+      return next;
+    });
+  };
+
+  const toggleSelectEmergentNode = (index: number) => {
+    setSelectedEmergentNodeIndices((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  };
+
+  const handleApplySessionFallout = async () => {
+    if (!sessionAdaptationResult) return;
+
+    setSessionCommitStatus('committing');
+    try {
+      const statusUpdatesToApply = (sessionAdaptationResult.status_updates || []).filter((u) =>
+        selectedStatusUpdates.has(u.node_id)
+      );
+      const emergentNodesToApply = (sessionAdaptationResult.emergent_nodes || []).filter((_, i) =>
+        selectedEmergentNodeIndices.has(i)
+      );
+      const allowedTitles = new Set(emergentNodesToApply.map((n) => n.title));
+      const emergentEdgesToApply = (sessionAdaptationResult.emergent_edges || []).filter(
+        (e) => allowedTitles.has(e.source_title) && allowedTitles.has(e.target_title)
+      );
+
+      const res = await agentApplySessionAdaptation({
+        campaign_id: campaignId,
+        session_node_id: targetSessionId || undefined,
+        status_updates: statusUpdatesToApply,
+        npc_updates: sessionAdaptationResult.npc_updates,
+        emergent_nodes: emergentNodesToApply,
+        emergent_edges: emergentEdgesToApply,
+        next_session_prep: applyNextSessionPrep ? sessionAdaptationResult.next_session_prep : undefined,
+        player_recap: applyPlayerRecap ? sessionAdaptationResult.player_recap : undefined,
+      });
+
+      setSessionCommitStatus('success');
+      setSessionCommitMessage(res.message || 'Successfully applied session adaptation to campaign!');
+      onRefresh();
+    } catch (err: any) {
+      alert('Failed to apply session fallout: ' + err.message);
+      setSessionCommitStatus('error');
+    }
+  };
+
+  return (
+    <div style={{ padding: '24px', maxWidth: '1360px', margin: '0 auto' }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+        <div>
+          <h2 style={{ fontSize: '1.6rem', display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <BookOpen style={{ color: 'var(--color-gold)' }} /> Ingestion, Decomposer &amp; Co-DM Adaptation Hub
+          </h2>
+          <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+            Decompose adventure books into campaign arcs, or ingest actual play session transcripts to have the Co-DM dynamically adapt the graph, timeline, NPC dispositions, and next session prep.
+          </p>
+        </div>
+        <button
+          onClick={() => {
+            refreshLibraryCount();
+            setShowLibraryModal(true);
+          }}
+          className="btn btn-secondary"
+          style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#93c5fd', borderColor: 'rgba(96, 165, 250, 0.4)' }}
+          title="View and manage all uploaded adventure books, stat sheets, and session logs"
+        >
+          <FolderOpen size={16} style={{ color: '#60a5fa' }} />
+          📂 Document Library ({libraryDocsCount})
+        </button>
+      </div>
+
+      {/* Category Selection Tabs */}
+      <div
+        style={{
+          display: 'flex',
+          gap: '12px',
+          marginBottom: '20px',
+          borderBottom: '1px solid var(--border-subtle)',
+          paddingBottom: '12px',
+          flexWrap: 'wrap',
+        }}
+      >
+        <button
+          onClick={() => {
+            setActiveCategory('book');
+            setDecompMode('campaign_structure');
+            setInstruction(bookPresets[0].prompt);
+          }}
+          className={`btn ${activeCategory === 'book' ? 'btn-primary' : 'btn-ghost'}`}
+          style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+        >
+          <BookOpen size={16} /> 📖 Adventure Books &amp; Chapters
+        </button>
+
+        <button
+          onClick={() => {
+            setActiveCategory('monster');
+            setDecompMode('monsters');
+            setInstruction(monsterPresets[0].prompt);
+          }}
+          className={`btn ${activeCategory === 'monster' ? 'btn-primary' : 'btn-ghost'}`}
+          style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+        >
+          <Swords size={16} /> 🐉 Monster Stat Sheets &amp; Bestiary
+        </button>
+
+        <button
+          onClick={() => {
+            setActiveCategory('character');
+            setDecompMode('characters');
+            setInstruction(characterPresets[0].prompt);
+          }}
+          className={`btn ${activeCategory === 'character' ? 'btn-primary' : 'btn-ghost'}`}
+          style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+        >
+          <Shield size={16} /> 🛡️ Player Character (PC) Sheets
+        </button>
+
+        <button
+          onClick={() => {
+            setActiveCategory('session');
+          }}
+          className={`btn ${activeCategory === 'session' ? 'btn-primary' : 'btn-ghost'}`}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            borderColor: activeCategory === 'session' ? '#60a5fa' : 'rgba(96, 165, 250, 0.4)',
+            color: activeCategory === 'session' ? '#fff' : '#93c5fd',
+            background: activeCategory === 'session' ? 'rgba(59, 130, 246, 0.25)' : 'rgba(59, 130, 246, 0.05)',
+          }}
+        >
+          <Mic size={16} style={{ color: '#60a5fa' }} /> 🎙️ Session Transcripts &amp; Summaries
+        </button>
+      </div>
+
+      {/* ========================================================================= */}
+      {/* SESSION TRANSCRIPTS & ACTUAL PLAY ADAPTATION VIEW */}
+      {/* ========================================================================= */}
+      {activeCategory === 'session' ? (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.25fr', gap: '24px', alignItems: 'start' }}>
+          {/* Left Column: Target Session, Transcript Input & Steering Guidance */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+            {/* Target Session Selector */}
+            <div
+              className="glass-panel"
+              style={{
+                padding: '16px',
+                borderRadius: '10px',
+                border: '1px solid var(--border-medium)',
+                background: 'rgba(15, 20, 32, 0.7)',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                <Calendar size={16} style={{ color: '#60a5fa' }} />
+                <label style={{ fontSize: '0.88rem', fontWeight: 600 }}>Target Session in Timeline:</label>
+              </div>
+              <p style={{ fontSize: '0.76rem', color: 'var(--text-secondary)', marginBottom: '10px' }}>
+                Choose which planned session this transcript reflects. The Co-DM will compare events against planned encounters.
+              </p>
+              <select
+                value={targetSessionId}
+                onChange={(e) => setTargetSessionId(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '9px 12px',
+                  borderRadius: '8px',
+                  background: 'var(--bg-surface)',
+                  border: '1px solid var(--border-subtle)',
+                  color: '#fff',
+                  fontSize: '0.85rem',
+                }}
+              >
+                <option value="">— Auto-Detect Session from Transcript / General Session —</option>
+                {sessions.map((s) => {
+                  const status = (s.data_json?.status as string) || 'planned';
+                  return (
+                    <option key={s.id} value={s.id}>
+                      [{status.toUpperCase()}] {s.title}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+
+            {/* Transcript Dropzone & Text Area */}
+            <div
+              className="glass-panel"
+              style={{
+                padding: '18px',
+                borderRadius: '12px',
+                border: '2px dashed rgba(96, 165, 250, 0.4)',
+                background: 'rgba(15, 20, 32, 0.6)',
+                textAlign: 'center',
+              }}
+            >
+              <Mic size={32} style={{ color: '#60a5fa', margin: '0 auto 8px' }} />
+              <h4 style={{ fontSize: '1rem', marginBottom: '4px' }}>Upload Session Audio/VTT Transcript or Text Log</h4>
+              <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '14px' }}>
+                Supports VTT, SRT, TXT, MD, PDF, or chat exports from Discord, Roll20, or Foundry.
+              </p>
+
+              <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                <label className="btn btn-primary" style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+                  {isUploading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+                  {isUploading ? 'Loading...' : 'Upload Transcript File'}
+                  <input
+                    type="file"
+                    accept=".txt,.md,.vtt,.srt,.json,.pdf"
+                    onChange={handleSessionFileUpload}
+                    style={{ display: 'none' }}
+                  />
+                </label>
+
+                <button
+                  type="button"
+                  onClick={handleLoadSampleTranscript}
+                  className="btn btn-secondary"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', color: '#93c5fd' }}
+                  title="Load full Sunless Citadel Session 1 dialogue transcript"
+                >
+                  <Sparkles size={14} /> Load Dialogue Transcript
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleLoadSampleSummary}
+                  className="btn btn-secondary"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', color: '#c084fc' }}
+                  title="Load bulleted Sunless Citadel Session 1 debrief summary"
+                >
+                  <FileText size={14} /> Load Bulleted Summary
+                </button>
+              </div>
+
+              <div style={{ marginTop: '10px' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowLibraryModal(true)}
+                  className="btn btn-ghost"
+                  style={{ fontSize: '0.74rem', color: '#93c5fd', textDecoration: 'underline', padding: '2px 8px' }}
+                >
+                  📂 Or choose from Document Library ({libraryDocsCount} files)
+                </button>
+              </div>
+
+              {originalName && (
+                <div
+                  style={{
+                    marginTop: '12px',
+                    padding: '6px 12px',
+                    borderRadius: '6px',
+                    background: 'rgba(59, 130, 246, 0.1)',
+                    border: '1px solid rgba(59, 130, 246, 0.3)',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    fontSize: '0.8rem',
+                    color: '#93c5fd',
+                  }}
+                >
+                  <CheckCircle size={15} /> Loaded: <strong>{originalName}</strong>
+                </div>
+              )}
+            </div>
+
+            {/* Paste Raw Transcript Text */}
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                <label style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                  Session Transcript / Actual Play Notes:
+                </label>
+                {sessionTranscript && (
+                  <button
+                    onClick={() => setSessionTranscript('')}
+                    style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '0.75rem', cursor: 'pointer' }}
+                  >
+                    Clear Text
+                  </button>
+                )}
+              </div>
+              <textarea
+                value={sessionTranscript}
+                onChange={(e) => setSessionTranscript(e.target.value)}
+                placeholder="Paste raw transcript, timestamps, player actions, combat rolls, or DM debrief..."
+                rows={7}
+                style={{
+                  width: '100%',
+                  padding: '10px 12px',
+                  borderRadius: '8px',
+                  background: 'var(--bg-surface)',
+                  border: '1px solid var(--border-subtle)',
+                  color: '#fff',
+                  fontSize: '0.82rem',
+                  resize: 'vertical',
+                  fontFamily: 'monospace',
+                }}
+              />
+            </div>
+
+            {/* Co-DM Adaptation Guidance */}
+            <div
+              className="glass-panel"
+              style={{
+                padding: '16px',
+                borderRadius: '10px',
+                border: '1px solid var(--border-medium)',
+                background: 'rgba(15, 20, 32, 0.8)',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                <Sparkles size={16} style={{ color: '#60a5fa' }} />
+                <label style={{ fontSize: '0.85rem', fontWeight: 600 }}>Co-DM Adaptation Guidance:</label>
+              </div>
+
+              {/* Preset chips */}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '10px' }}>
+                {sessionPresets.map((p, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => setSessionInstruction(p.prompt)}
+                    className="btn btn-ghost"
+                    style={{
+                      padding: '3px 8px',
+                      fontSize: '0.72rem',
+                      borderRadius: '12px',
+                      background: sessionInstruction === p.prompt ? 'rgba(59, 130, 246, 0.2)' : 'rgba(255,255,255,0.05)',
+                      border: `1px solid ${sessionInstruction === p.prompt ? '#60a5fa' : 'var(--border-subtle)'}`,
+                      color: sessionInstruction === p.prompt ? '#93c5fd' : 'var(--text-secondary)',
+                    }}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+
+              <textarea
+                value={sessionInstruction}
+                onChange={(e) => setSessionInstruction(e.target.value)}
+                placeholder="Instruct Co-DM on how to adapt the campaign to this session..."
+                rows={3}
+                style={{
+                  width: '100%',
+                  padding: '10px',
+                  borderRadius: '8px',
+                  background: 'var(--bg-surface)',
+                  border: '1px solid var(--border-subtle)',
+                  color: '#fff',
+                  fontSize: '0.82rem',
+                  resize: 'vertical',
+                  marginBottom: '14px',
+                }}
+              />
+
+              {/* Run Session Adaptation Button */}
+              <button
+                onClick={handleRunSessionAdaptation}
+                disabled={isAdaptingSession || !sessionTranscript.trim()}
+                className="btn btn-primary"
+                style={{
+                  width: '100%',
+                  padding: '12px',
+                  fontSize: '0.9rem',
+                  fontWeight: 600,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  background: 'linear-gradient(135deg, #2563eb, #1d4ed8)',
+                  borderColor: '#3b82f6',
+                }}
+              >
+                {isAdaptingSession ? (
+                  <>
+                    <Loader2 size={18} className="animate-spin" />
+                    Analyzing Actual Play &amp; Adapting Campaign...
+                  </>
+                ) : (
+                  <>
+                    <Wand2 size={18} />
+                    Adapt Graph &amp; Timeline with Co-DM
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* Right Column: Interactive Steering Dialogue & Adaptation Fallout Review */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div
+              className="glass-panel"
+              style={{
+                padding: '20px',
+                borderRadius: '12px',
+                border: '1px solid var(--border-medium)',
+                display: 'flex',
+                flexDirection: 'column',
+                background: 'rgba(15, 20, 32, 0.85)',
+              }}
+            >
+              {/* Action Bar */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
+                <div>
+                  <h3 style={{ fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Layers size={18} style={{ color: '#60a5fa' }} />
+                    Session Fallout &amp; Campaign Adaptation
+                  </h3>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                    {sessionAdaptationResult
+                      ? 'Review status transitions, NPC shifts, emergent loot, and next session prep.'
+                      : 'Upload or paste a transcript on the left to adapt your campaign to what actually happened.'}
+                  </span>
+                </div>
+
+                {sessionAdaptationResult && (
+                  <button
+                    onClick={handleApplySessionFallout}
+                    disabled={sessionCommitStatus === 'committing'}
+                    className="btn btn-primary"
+                    style={{
+                      padding: '8px 16px',
+                      fontSize: '0.82rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      background: 'linear-gradient(135deg, #10b981, #059669)',
+                      borderColor: '#10b981',
+                    }}
+                  >
+                    {sessionCommitStatus === 'committing' ? (
+                      <Loader2 size={14} className="animate-spin" />
+                    ) : (
+                      <Check size={14} />
+                    )}
+                    Apply Session Fallout to Campaign
+                  </button>
+                )}
+              </div>
+
+              {/* Commit Success Banner */}
+              {sessionCommitStatus === 'success' && (
+                <div
+                  style={{
+                    padding: '12px 16px',
+                    borderRadius: '8px',
+                    background: 'rgba(16, 185, 129, 0.15)',
+                    border: '1px solid #10b981',
+                    color: '#34d399',
+                    fontSize: '0.85rem',
+                    marginBottom: '14px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                  }}
+                >
+                  <span>✨ {sessionCommitMessage || 'Successfully adapted campaign graph and timeline to session!'}</span>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button
+                      onClick={() => onNavigateTab('hierarchy')}
+                      className="btn btn-secondary"
+                      style={{ fontSize: '0.75rem', padding: '4px 8px' }}
+                    >
+                      View Timeline
+                    </button>
+                    <button
+                      onClick={() => onNavigateTab('graph')}
+                      className="btn btn-secondary"
+                      style={{ fontSize: '0.75rem', padding: '4px 8px' }}
+                    >
+                      View Graph
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Conversational Steering & Feedback Loop for Session Adaptation */}
+              {sessionAdaptationResult && (
+                <div
+                  style={{
+                    marginBottom: '16px',
+                    background: 'rgba(9, 13, 21, 0.7)',
+                    borderRadius: '10px',
+                    border: '1px solid rgba(96, 165, 250, 0.25)',
+                    padding: '14px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '10px',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#93c5fd', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <MessageSquare size={15} /> Co-DM Steering &amp; Refinement Conversation:
+                    </span>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                      {sessionChatHistory.length} exchanges
+                    </span>
+                  </div>
+
+                  {/* Chat History Box */}
+                  <div
+                    style={{
+                      maxHeight: '190px',
+                      overflowY: 'auto',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '8px',
+                      paddingRight: '4px',
+                    }}
+                  >
+                    {sessionChatHistory.map((msg) => (
+                      <div
+                        key={msg.id}
+                        style={{
+                          padding: '8px 12px',
+                          borderRadius: '8px',
+                          fontSize: '0.8rem',
+                          lineHeight: '1.4',
+                          background:
+                            msg.role === 'user'
+                              ? 'rgba(59, 130, 246, 0.15)'
+                              : 'rgba(16, 185, 129, 0.08)',
+                          border: `1px solid ${
+                            msg.role === 'user'
+                              ? 'rgba(59, 130, 246, 0.3)'
+                              : 'rgba(16, 185, 129, 0.25)'
+                          }`,
+                          alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                          maxWidth: '92%',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>
+                          <span style={{ fontWeight: 700, color: msg.role === 'user' ? '#60a5fa' : '#34d399' }}>
+                            {msg.role === 'user' ? 'Dungeon Master' : 'Co-DM Assistant'}
+                          </span>
+                          <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>{msg.timestamp}</span>
+                        </div>
+                        <div style={{ color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>
+                          {msg.content}
+                        </div>
+                      </div>
+                    ))}
+                    <div ref={sessionChatBottomRef} />
+                  </div>
+
+                  {/* Quick Feedback Steering Chips */}
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '2px' }}>
+                    {sessionSteeringSuggestions.map((sug, idx) => (
+                      <button
+                        key={idx}
+                        onClick={() => handleSendSessionFeedback(sug)}
+                        disabled={isRefiningSession}
+                        className="btn btn-ghost"
+                        style={{
+                          padding: '2px 8px',
+                          fontSize: '0.7rem',
+                          borderRadius: '10px',
+                          background: 'rgba(255,255,255,0.04)',
+                          border: '1px solid var(--border-subtle)',
+                          color: 'var(--text-muted)',
+                        }}
+                      >
+                        + {sug}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Feedback Input Row */}
+                  <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
+                    <input
+                      type="text"
+                      value={sessionFeedbackInput}
+                      onChange={(e) => setSessionFeedbackInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleSendSessionFeedback();
+                      }}
+                      placeholder="Steer Co-DM (e.g. 'Meepo was actually allied', 'Party missed the secret chest', 'Change next session hook')..."
+                      style={{
+                        flex: 1,
+                        padding: '8px 12px',
+                        borderRadius: '8px',
+                        background: 'var(--bg-surface)',
+                        border: '1px solid var(--border-medium)',
+                        color: '#fff',
+                        fontSize: '0.82rem',
+                      }}
+                    />
+                    <button
+                      onClick={() => handleSendSessionFeedback()}
+                      disabled={isRefiningSession || !sessionFeedbackInput.trim()}
+                      className="btn btn-primary"
+                      style={{ padding: '8px 14px', fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: '6px' }}
+                    >
+                      {isRefiningSession ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
+                      Steer Co-DM
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* No Adaptation Results Placeholder */}
+              {!sessionAdaptationResult ? (
+                <div
+                  style={{
+                    padding: '40px 20px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: 'var(--text-muted)',
+                    textAlign: 'center',
+                    gap: '12px',
+                  }}
+                >
+                  <FileText size={42} style={{ color: 'rgba(96, 165, 250, 0.4)' }} />
+                  <h4 style={{ fontSize: '1.05rem', color: '#fff' }}>No Session Adaptation Run Yet</h4>
+                  <p style={{ fontSize: '0.8rem', maxWidth: '420px', lineHeight: '1.5' }}>
+                    1. Select your target session and paste your transcript (or click <strong>Load Sample Session Transcript</strong>).<br />
+                    2. Click <strong>Adapt Graph &amp; Timeline with Co-DM</strong>.<br />
+                    3. The Co-DM will analyze actual combat and dialogue, mark resolved encounters as completed, adjust NPC attitudes, spawn emergent loot nodes, and plan Session N+1!
+                  </p>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  {/* 1. Status Transitions Checklist */}
+                  {sessionAdaptationResult.status_updates && sessionAdaptationResult.status_updates.length > 0 && (
+                    <div
+                      style={{
+                        padding: '12px 14px',
+                        borderRadius: '8px',
+                        background: 'rgba(15, 23, 42, 0.7)',
+                        border: '1px solid var(--border-subtle)',
+                      }}
+                    >
+                      <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#60a5fa', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
+                        <Clock size={15} /> Timeline Status Updates ({sessionAdaptationResult.status_updates.length}):
+                      </span>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        {sessionAdaptationResult.status_updates.map((u) => {
+                          const isChecked = selectedStatusUpdates.has(u.node_id);
+                          return (
+                            <div
+                              key={u.node_id}
+                              onClick={() => toggleSelectStatusUpdate(u.node_id)}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '10px',
+                                padding: '6px 10px',
+                                borderRadius: '6px',
+                                background: isChecked ? 'rgba(59, 130, 246, 0.08)' : 'rgba(255, 255, 255, 0.02)',
+                                border: `1px solid ${isChecked ? 'rgba(59, 130, 246, 0.3)' : 'transparent'}`,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={() => toggleSelectStatusUpdate(u.node_id)}
+                                style={{ cursor: 'pointer' }}
+                              />
+                              <div style={{ flex: 1, fontSize: '0.8rem' }}>
+                                <span style={{ fontWeight: 600, color: '#fff' }}>{u.title}</span>{' '}
+                                <span className={`badge badge-${u.node_type}`}>{u.node_type}</span>{' '}
+                                <span style={{ color: '#34d399', fontWeight: 600 }}>➔ {u.new_status.toUpperCase()}</span>
+                                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                                  {u.reason}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 2. NPC & Faction Updates */}
+                  {sessionAdaptationResult.npc_updates && sessionAdaptationResult.npc_updates.length > 0 && (
+                    <div
+                      style={{
+                        padding: '12px 14px',
+                        borderRadius: '8px',
+                        background: 'rgba(15, 23, 42, 0.7)',
+                        border: '1px solid var(--border-subtle)',
+                      }}
+                    >
+                      <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--color-gold)', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
+                        <User size={15} /> NPC Dispositions &amp; State Changes ({sessionAdaptationResult.npc_updates.length}):
+                      </span>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '8px' }}>
+                        {sessionAdaptationResult.npc_updates.map((npc, idx) => (
+                          <div
+                            key={idx}
+                            style={{
+                              padding: '8px 10px',
+                              borderRadius: '6px',
+                              background: 'rgba(245, 158, 11, 0.05)',
+                              border: '1px solid rgba(245, 158, 11, 0.2)',
+                              fontSize: '0.78rem',
+                            }}
+                          >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                              <span style={{ fontWeight: 700, color: '#fff' }}>{npc.name}</span>
+                              <span style={{ fontSize: '0.7rem', padding: '1px 6px', borderRadius: '4px', background: 'rgba(245, 158, 11, 0.2)', color: 'var(--color-gold)' }}>
+                                {npc.disposition}
+                              </span>
+                            </div>
+                            <div style={{ color: 'var(--text-secondary)', marginBottom: '2px' }}>
+                              {npc.state_changes}
+                            </div>
+                            {npc.notes && (
+                              <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                                &quot;{npc.notes}&quot;
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 3. Emergent Entities (Loot, Clues, Locations) */}
+                  {sessionAdaptationResult.emergent_nodes && sessionAdaptationResult.emergent_nodes.length > 0 && (
+                    <div
+                      style={{
+                        padding: '12px 14px',
+                        borderRadius: '8px',
+                        background: 'rgba(15, 23, 42, 0.7)',
+                        border: '1px solid var(--border-subtle)',
+                      }}
+                    >
+                      <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#a78bfa', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
+                        <Sparkles size={15} /> Emergent Discoveries &amp; Loot ({sessionAdaptationResult.emergent_nodes.length}):
+                      </span>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        {sessionAdaptationResult.emergent_nodes.map((n, idx) => {
+                          const isChecked = selectedEmergentNodeIndices.has(idx);
+                          return (
+                            <div
+                              key={idx}
+                              onClick={() => toggleSelectEmergentNode(idx)}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '10px',
+                                padding: '6px 10px',
+                                borderRadius: '6px',
+                                background: isChecked ? 'rgba(167, 139, 250, 0.08)' : 'rgba(255, 255, 255, 0.02)',
+                                border: `1px solid ${isChecked ? 'rgba(167, 139, 250, 0.3)' : 'transparent'}`,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={() => toggleSelectEmergentNode(idx)}
+                                style={{ cursor: 'pointer' }}
+                              />
+                              <div style={{ flex: 1, fontSize: '0.8rem' }}>
+                                <span className={`badge badge-${n.type || 'item'}`}>{n.type}</span>{' '}
+                                <span style={{ fontWeight: 600, color: '#fff' }}>{n.title}</span>
+                                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                                  {n.summary || n.content_markdown?.slice(0, 100)}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 4. Session N+1 Next Prep Card */}
+                  {sessionAdaptationResult.next_session_prep && sessionAdaptationResult.next_session_prep.title && (
+                    <div
+                      style={{
+                        padding: '14px',
+                        borderRadius: '8px',
+                        background: 'rgba(30, 41, 59, 0.7)',
+                        border: '1px solid rgba(96, 165, 250, 0.3)',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#60a5fa', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <Calendar size={16} /> Timeline Next Session Prep (Session N+1 Proposal):
+                        </span>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.78rem', color: '#fff', cursor: 'pointer' }}>
+                          <input
+                            type="checkbox"
+                            checked={applyNextSessionPrep}
+                            onChange={(e) => setApplyNextSessionPrep(e.target.checked)}
+                          />
+                          Create Session in Timeline
+                        </label>
+                      </div>
+                      <h4 style={{ fontSize: '0.95rem', color: '#fff', marginBottom: '4px' }}>
+                        {sessionAdaptationResult.next_session_prep.title}
+                      </h4>
+                      <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>
+                        {sessionAdaptationResult.next_session_prep.description}
+                      </p>
+                      {sessionAdaptationResult.next_session_prep.suggested_encounters && sessionAdaptationResult.next_session_prep.suggested_encounters.length > 0 && (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '8px' }}>
+                          {sessionAdaptationResult.next_session_prep.suggested_encounters.map((enc, i) => (
+                            <span
+                              key={i}
+                              style={{
+                                fontSize: '0.72rem',
+                                padding: '2px 8px',
+                                borderRadius: '6px',
+                                background: 'rgba(96, 165, 250, 0.15)',
+                                color: '#93c5fd',
+                                border: '1px solid rgba(96, 165, 250, 0.3)',
+                              }}
+                            >
+                              ⚔️ {enc}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {sessionAdaptationResult.next_session_prep.dm_secrets && (
+                        <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', background: 'rgba(0,0,0,0.3)', padding: '6px 10px', borderRadius: '6px' }}>
+                          🔒 <strong>DM Secrets:</strong> {sessionAdaptationResult.next_session_prep.dm_secrets}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* 5. Player Portal Journal Recap Card */}
+                  {sessionAdaptationResult.player_recap && (
+                    <div
+                      style={{
+                        padding: '14px',
+                        borderRadius: '8px',
+                        background: 'rgba(16, 185, 129, 0.05)',
+                        border: '1px solid rgba(16, 185, 129, 0.25)',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#34d399', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <Scroll size={16} /> Player Portal Journal Recap:
+                        </span>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.78rem', color: '#fff', cursor: 'pointer' }}>
+                          <input
+                            type="checkbox"
+                            checked={applyPlayerRecap}
+                            onChange={(e) => setApplyPlayerRecap(e.target.checked)}
+                          />
+                          Publish to Player Portal Journal
+                        </label>
+                      </div>
+                      <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: '1.5', margin: 0 }}>
+                        {sessionAdaptationResult.player_recap}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Convenient Bottom Apply Button */}
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '10px' }}>
+                    <button
+                      onClick={handleApplySessionFallout}
+                      disabled={sessionCommitStatus === 'committing'}
+                      className="btn btn-primary"
+                      style={{
+                        padding: '10px 20px',
+                        fontSize: '0.9rem',
+                        fontWeight: 600,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        background: 'linear-gradient(135deg, #10b981, #059669)',
+                        borderColor: '#10b981',
+                        boxShadow: '0 4px 14px rgba(16, 185, 129, 0.3)',
+                      }}
+                    >
+                      {sessionCommitStatus === 'committing' ? (
+                        <Loader2 size={16} className="animate-spin" />
+                      ) : (
+                        <Check size={16} />
+                      )}
+                      Apply Session Fallout to Campaign (Graph &amp; Timeline)
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : (
+        /* ========================================================================= */
+        /* ADVENTURE BOOKS & STAT SHEETS DECOMPOSER VIEW */
+        /* ========================================================================= */
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.15fr', gap: '24px', alignItems: 'start' }}>
+          {/* Left Column: Upload, Page Range, and Initial Instructions */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+            {/* File Dropzone */}
+            <div
+              className="glass-panel"
+              style={{
+                padding: '20px',
+                borderRadius: '12px',
+                border: '2px dashed var(--border-medium)',
+                background: 'rgba(15, 20, 32, 0.6)',
+                textAlign: 'center',
+              }}
+            >
+              <Upload size={32} style={{ color: 'var(--color-gold)', margin: '0 auto 8px' }} />
+              <h4 style={{ fontSize: '1rem', marginBottom: '4px' }}>
+                Upload {activeCategory === 'book' ? 'Adventure PDF or Chapter' : activeCategory === 'monster' ? 'Monster Stat Sheet / PDF' : 'Character Sheet (PDF, Image, Text)'}
+              </h4>
+              <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '14px' }}>
+                Supports PDF, PNG, JPG, or TXT documents.
+              </p>
+
+              <label className="btn btn-primary" style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+                {isUploading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+                {isUploading ? 'Uploading...' : 'Choose Document File'}
+                <input
+                  type="file"
+                  accept={activeCategory === 'book' ? '.pdf,.txt,.md' : '.pdf,.png,.jpg,.jpeg,.txt,.json'}
+                  onChange={handleFileUpload}
+                  style={{ display: 'none' }}
+                />
+              </label>
+
+              <div style={{ marginTop: '10px' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowLibraryModal(true)}
+                  className="btn btn-ghost"
+                  style={{ fontSize: '0.74rem', color: '#93c5fd', textDecoration: 'underline', padding: '2px 8px' }}
+                >
+                  📂 Or choose from Document Library ({libraryDocsCount} files)
+                </button>
+              </div>
+
+              {originalName && (
+                <div
+                  style={{
+                    marginTop: '12px',
+                    padding: '8px 12px',
+                    borderRadius: '6px',
+                    background: 'rgba(16, 185, 129, 0.1)',
+                    border: '1px solid rgba(16, 185, 129, 0.3)',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    fontSize: '0.8rem',
+                    color: '#34d399',
+                  }}
+                >
+                  <CheckCircle size={15} /> Uploaded: <strong>{originalName}</strong>
+                  {totalPages > 0 && <span>({totalPages} pages)</span>}
+                </div>
+              )}
+            </div>
+
+            {/* PDF Page Range Selector (for Adventure Books) */}
+            {totalPages > 0 && (
+              <div
+                className="glass-panel"
+                style={{
+                  padding: '14px 18px',
+                  borderRadius: '10px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                }}
+              >
+                <div>
+                  <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Chapter / Page Range:</span>
+                  <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                    Target specific chapter pages (e.g. Chapter 1: Pages 1-25)
+                  </p>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>From</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={totalPages}
+                    value={startPage}
+                    onChange={(e) => setStartPage(Number(e.target.value))}
+                    style={{
+                      width: '60px',
+                      padding: '4px 8px',
+                      borderRadius: '6px',
+                      background: 'var(--bg-surface)',
+                      border: '1px solid var(--border-subtle)',
+                      color: '#fff',
+                      textAlign: 'center',
+                    }}
+                  />
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>to</span>
+                  <input
+                    type="number"
+                    min={startPage}
+                    max={totalPages}
+                    value={endPage}
+                    onChange={(e) => setEndPage(Number(e.target.value))}
+                    style={{
+                      width: '60px',
+                      padding: '4px 8px',
+                      borderRadius: '6px',
+                      background: 'var(--bg-surface)',
+                      border: '1px solid var(--border-subtle)',
+                      color: '#fff',
+                      textAlign: 'center',
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Paste Raw Text Alternative */}
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                <label style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                  Or Paste Excerpt / Stat Block Directly:
+                </label>
+                {pastedText && (
+                  <button
+                    onClick={() => setPastedText('')}
+                    style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '0.75rem', cursor: 'pointer' }}
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+              <textarea
+                value={pastedText}
+                onChange={(e) => setPastedText(e.target.value)}
+                placeholder="Paste adventure chapter text, monster stat block, or PC backstory..."
+                rows={4}
+                style={{
+                  width: '100%',
+                  padding: '10px 12px',
+                  borderRadius: '8px',
+                  background: 'var(--bg-surface)',
+                  border: '1px solid var(--border-subtle)',
+                  color: '#fff',
+                  fontSize: '0.82rem',
+                  resize: 'vertical',
+                }}
+              />
+            </div>
+
+            {/* Initial Co-DM Instructions & Prompt Chips */}
+            <div
+              className="glass-panel"
+              style={{
+                padding: '16px',
+                borderRadius: '10px',
+                border: '1px solid var(--border-medium)',
+                background: 'rgba(15, 20, 32, 0.8)',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                <Sparkles size={16} style={{ color: 'var(--color-gold)' }} />
+                <label style={{ fontSize: '0.85rem', fontWeight: 600 }}>Initial Instruction to Co-DM:</label>
+              </div>
+
+              {/* Quick Suggestion Chips */}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '10px' }}>
+                {(activeCategory === 'book' ? bookPresets : activeCategory === 'monster' ? monsterPresets : characterPresets).map((p, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => {
+                      setInstruction(p.prompt);
+                      setDecompMode(p.mode);
+                    }}
+                    className="btn btn-ghost"
+                    style={{
+                      padding: '3px 8px',
+                      fontSize: '0.72rem',
+                      borderRadius: '12px',
+                      background: instruction === p.prompt ? 'rgba(245, 158, 11, 0.2)' : 'rgba(255,255,255,0.05)',
+                      border: `1px solid ${instruction === p.prompt ? 'var(--color-gold)' : 'var(--border-subtle)'}`,
+                      color: instruction === p.prompt ? 'var(--color-gold)' : 'var(--text-secondary)',
+                    }}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+
+              <textarea
+                value={instruction}
+                onChange={(e) => setInstruction(e.target.value)}
+                placeholder="Give specific guidance on how the Co-DM should decompose this material into your campaign..."
+                rows={3}
+                style={{
+                  width: '100%',
+                  padding: '10px',
+                  borderRadius: '8px',
+                  background: 'var(--bg-surface)',
+                  border: '1px solid var(--border-subtle)',
+                  color: '#fff',
+                  fontSize: '0.82rem',
+                  resize: 'vertical',
+                  marginBottom: '14px',
+                }}
+              />
+
+              {/* Run Decomposition Button */}
+              <button
+                onClick={handleRunDecomposition}
+                disabled={isDecomposing || (!uploadedFilename && !pastedText.trim())}
+                className="btn btn-primary"
+                style={{
+                  width: '100%',
+                  padding: '12px',
+                  fontSize: '0.9rem',
+                  fontWeight: 600,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                }}
+              >
+                {isDecomposing ? (
+                  <>
+                    <Loader2 size={18} className="animate-spin" />
+                    Decomposing with Co-DM Architect...
+                  </>
+                ) : (
+                  <>
+                    <Wand2 size={18} />
+                    Decompose with Co-DM
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* Right Column: Interactive Steering Dialogue & Draft Preview */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            {/* Main Working Draft Card */}
+            <div
+              className="glass-panel"
+              style={{
+                padding: '20px',
+                borderRadius: '12px',
+                border: '1px solid var(--border-medium)',
+                display: 'flex',
+                flexDirection: 'column',
+                background: 'rgba(15, 20, 32, 0.85)',
+              }}
+            >
+              {/* Action Bar */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
+                <div>
+                  <h3 style={{ fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Layers size={18} style={{ color: 'var(--color-gold)' }} />
+                    Working Draft: {extractedNodes.length} Nodes, {extractedEdges.length} Edges
+                  </h3>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                    Chat with the Co-DM below to steer and refine before committing.
+                  </span>
+                </div>
+
+                {extractedNodes.length > 0 && (
+                  <button
+                    onClick={handleCommitToCampaign}
+                    disabled={commitStatus === 'committing' || selectedNodeIndices.size === 0}
+                    className="btn btn-primary"
+                    style={{ padding: '7px 14px', fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: '6px' }}
+                  >
+                    {commitStatus === 'committing' ? (
+                      <Loader2 size={14} className="animate-spin" />
+                    ) : (
+                      <Check size={14} />
+                    )}
+                    Apply to Campaign Graph
+                  </button>
+                )}
+              </div>
+
+              {/* Commit Success Banner */}
+              {commitStatus === 'success' && (
+                <div
+                  style={{
+                    padding: '12px 16px',
+                    borderRadius: '8px',
+                    background: 'rgba(16, 185, 129, 0.15)',
+                    border: '1px solid #10b981',
+                    color: '#34d399',
+                    fontSize: '0.85rem',
+                    marginBottom: '14px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                  }}
+                >
+                  <span>✨ Successfully committed entities and relationships to Campaign Graph!</span>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button
+                      onClick={() => onNavigateTab('hierarchy')}
+                      className="btn btn-secondary"
+                      style={{ fontSize: '0.75rem', padding: '4px 8px' }}
+                    >
+                      View Timeline
+                    </button>
+                    <button
+                      onClick={() => onNavigateTab('graph')}
+                      className="btn btn-secondary"
+                      style={{ fontSize: '0.75rem', padding: '4px 8px' }}
+                    >
+                      View Graph
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Conversational Steering & Feedback Section */}
+              {extractedNodes.length > 0 && (
+                <div
+                  style={{
+                    marginBottom: '16px',
+                    background: 'rgba(9, 13, 21, 0.7)',
+                    borderRadius: '10px',
+                    border: '1px solid var(--border-subtle)',
+                    padding: '14px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '10px',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--color-gold)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <MessageSquare size={15} /> Co-DM Steering &amp; Refinement Conversation:
+                    </span>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                      {steeringConversation.length} exchanges
+                    </span>
+                  </div>
+
+                  {/* Chat History Box */}
+                  <div
+                    style={{
+                      maxHeight: '190px',
+                      overflowY: 'auto',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '8px',
+                      paddingRight: '4px',
+                    }}
+                  >
+                    {steeringConversation.map((msg) => (
+                      <div
+                        key={msg.id}
+                        style={{
+                          padding: '8px 12px',
+                          borderRadius: '8px',
+                          fontSize: '0.8rem',
+                          lineHeight: '1.4',
+                          background:
+                            msg.role === 'user'
+                              ? 'rgba(59, 130, 246, 0.15)'
+                              : 'rgba(245, 158, 11, 0.08)',
+                          border: `1px solid ${
+                            msg.role === 'user'
+                              ? 'rgba(59, 130, 246, 0.3)'
+                              : 'rgba(245, 158, 11, 0.25)'
+                          }`,
+                          alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                          maxWidth: '92%',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>
+                          <span style={{ fontWeight: 700, color: msg.role === 'user' ? '#60a5fa' : 'var(--color-gold)' }}>
+                            {msg.role === 'user' ? 'Dungeon Master' : 'Co-DM Architect'}
+                          </span>
+                          <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>{msg.timestamp}</span>
+                          {msg.nodeCount !== undefined && (
+                            <span
+                              style={{
+                                marginLeft: 'auto',
+                                fontSize: '0.68rem',
+                                background: 'rgba(245, 158, 11, 0.2)',
+                                color: 'var(--color-gold)',
+                                padding: '1px 5px',
+                                borderRadius: '4px',
+                              }}
+                            >
+                              Draft: {msg.nodeCount} nodes
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>
+                          {msg.content}
+                        </div>
+                      </div>
+                    ))}
+                    <div ref={chatBottomRef} />
+                  </div>
+
+                  {/* Quick Feedback Steering Chips */}
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '2px' }}>
+                    {decomposerSuggestions.map((sug, idx) => (
+                      <button
+                        key={idx}
+                        onClick={() => handleSendFeedback(sug)}
+                        disabled={isRefining}
+                        className="btn btn-ghost"
+                        style={{
+                          padding: '2px 8px',
+                          fontSize: '0.7rem',
+                          borderRadius: '10px',
+                          background: 'rgba(255,255,255,0.04)',
+                          border: '1px solid var(--border-subtle)',
+                          color: 'var(--text-muted)',
+                        }}
+                      >
+                        + {sug}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Feedback Input Row */}
+                  <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
+                    <input
+                      type="text"
+                      value={feedbackInput}
+                      onChange={(e) => setFeedbackInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleSendFeedback();
+                      }}
+                      placeholder="Provide feedback to steer nodes (e.g. 'Split Quest 1 into 2 parts', 'Make Yusdrayl an ally', 'Add a secret room')..."
+                      style={{
+                        flex: 1,
+                        padding: '8px 12px',
+                        borderRadius: '8px',
+                        background: 'var(--bg-surface)',
+                        border: '1px solid var(--border-medium)',
+                        color: '#fff',
+                        fontSize: '0.82rem',
+                      }}
+                    />
+                    <button
+                      onClick={() => handleSendFeedback()}
+                      disabled={isRefining || !feedbackInput.trim()}
+                      className="btn btn-primary"
+                      style={{ padding: '8px 14px', fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: '6px' }}
+                    >
+                      {isRefining ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
+                      Steer Co-DM
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Extracted Nodes List with live checkboxes */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '380px', overflowY: 'auto' }}>
+                {extractedNodes.length === 0 ? (
+                  <div
+                    style={{
+                      height: '240px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: 'var(--text-muted)',
+                      textAlign: 'center',
+                      gap: '8px',
+                    }}
+                  >
+                    <FileText size={36} style={{ color: 'var(--border-medium)' }} />
+                    <p style={{ fontSize: '0.85rem' }}>No decomposition results yet.</p>
+                    <p style={{ fontSize: '0.75rem', maxWidth: '320px' }}>
+                      Upload an adventure chapter or stat sheet, choose your instructions, and click <strong>Decompose with Co-DM</strong>.
+                    </p>
+                  </div>
+                ) : (
+                  extractedNodes.map((n, idx) => {
+                    const isChecked = selectedNodeIndices.has(idx);
+                    return (
+                      <div
+                        key={idx}
+                        onClick={() => toggleSelectNode(idx)}
+                        className="glass-panel"
+                        style={{
+                          padding: '10px 14px',
+                          borderRadius: '8px',
+                          border: `1px solid ${isChecked ? 'rgba(245, 158, 11, 0.4)' : 'var(--border-subtle)'}`,
+                          background: isChecked ? 'rgba(245, 158, 11, 0.04)' : 'var(--bg-surface)',
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          gap: '10px',
+                          cursor: 'pointer',
+                          transition: 'all 0.15s ease',
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() => toggleSelectNode(idx)}
+                          style={{ marginTop: '3px', cursor: 'pointer' }}
+                        />
+                        <div style={{ flex: 1 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '2px' }}>
+                            <span className={`badge badge-${n.type || 'quest'}`}>{n.type}</span>
+                            <span style={{ fontSize: '0.88rem', fontWeight: 600, color: '#fff' }}>{n.title}</span>
+                            {n.subtitle && (
+                              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                • {n.subtitle}
+                              </span>
+                            )}
+                          </div>
+                          <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: 0 }}>
+                            {n.summary || n.content_markdown?.slice(0, 120)}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+
+              {/* Extracted Relationships Preview */}
+              {extractedEdges.length > 0 && (
+                <div style={{ marginTop: '12px', borderTop: '1px solid var(--border-subtle)', paddingTop: '10px' }}>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>
+                    Connected Relationships ({extractedEdges.length}):
+                  </span>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '6px' }}>
+                    {extractedEdges.slice(0, 8).map((e, i) => (
+                      <span
+                        key={i}
+                        style={{
+                          fontSize: '0.7rem',
+                          padding: '2px 8px',
+                          borderRadius: '6px',
+                          background: 'rgba(255,255,255,0.05)',
+                          border: '1px solid var(--border-subtle)',
+                          color: 'var(--text-secondary)',
+                        }}
+                      >
+                        {e.source_title} ➔ <em>{e.relation_type}</em> ➔ {e.target_title}
+                      </span>
+                    ))}
+                    {extractedEdges.length > 8 && (
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', alignSelf: 'center' }}>
+                        +{extractedEdges.length - 8} more
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Campaign Document Library Modal */}
+      <DocumentLibraryModal
+        isOpen={showLibraryModal}
+        onClose={() => setShowLibraryModal(false)}
+        campaignId={campaignId}
+        onSelectDocument={handleSelectDoc}
+        onRefreshParent={refreshLibraryCount}
+      />
+
+      {/* Duplicate Upload Resolution Modal */}
+      {duplicateModalData && (
+        <DuplicateUploadModal
+          isOpen={Boolean(duplicateModalData)}
+          onClose={() => setDuplicateModalData(null)}
+          file={duplicateModalData.file}
+          existingDoc={duplicateModalData.existing}
+          onReuseExisting={() => handleReuseExisting(duplicateModalData.existing)}
+          onReplaceFile={handleReplaceFile}
+          onUploadAsCopy={handleUploadAsCopy}
+        />
+      )}
+    </div>
+  );
+};
