@@ -14,6 +14,14 @@ export type NodeType =
   | 'map'
   | 'lore';
 
+export type {
+  Alignment,
+  AlignmentCategory,
+  CreatureRole,
+  CreatureSize,
+  CreatureType,
+} from './utils/alignmentAndRoles';
+
 export type RelationType =
   | 'contains'
   | 'precedes'

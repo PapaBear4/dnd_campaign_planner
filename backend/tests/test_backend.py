@@ -1,7 +1,14 @@
 import os
+import sys
 import tempfile
+from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
+
+# Ensure backend root is on sys.path for IDEs and test runners
+backend_dir = Path(__file__).resolve().parent.parent
+if str(backend_dir) not in sys.path:
+    sys.path.insert(0, str(backend_dir))
 
 # Create a temporary test database
 test_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)

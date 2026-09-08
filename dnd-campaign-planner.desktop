@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=D&D Campaign Planner
+Comment=Start D&D Campaign Planner Frontend and Backend
+Exec=/bin/bash -c "cd /home/sidell/dev/dnd_campaign_planner && npm start"
+Path=/home/sidell/dev/dnd_campaign_planner
+Terminal=true
+Icon=utilities-terminal
+Categories=Development;Game;

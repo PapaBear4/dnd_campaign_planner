@@ -1,17 +1,22 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  Check,
   Compass,
   Eye,
   EyeOff,
   Image as ImageIcon,
   MapPin,
   Maximize2,
-  Minimize2,
+  Move,
   Plus,
   RotateCcw,
   Sparkles,
+  Target,
   Trash2,
   Upload,
+  X,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react';
 import { createNode, deleteNode, updateNode, uploadFile } from '../api';
 import { NodeItem } from '../types';
@@ -25,7 +30,7 @@ interface MapStudioProps {
   onFocusCoDM: (node: NodeItem) => void;
 }
 
-interface MapPinData {
+export interface MapPinData {
   id: string;
   nodeId: string;
   x: number; // percentage (0 - 100)
@@ -48,12 +53,23 @@ export const MapStudio: React.FC<MapStudioProps> = ({
 
   // Pin placement mode
   const [isPlacingPin, setIsPlacingPin] = useState(false);
+  const [pendingPinCoords, setPendingPinCoords] = useState<{ xPct: number; yPct: number } | null>(null);
   const [selectedLocationForPin, setSelectedLocationForPin] = useState<string>('');
+  const [customPinLabel, setCustomPinLabel] = useState<string>('');
+  const [pinIsRevealedInitially, setPinIsRevealedInitially] = useState<boolean>(true);
 
-  // Zoom & Pan
+  // Pin dragging state
+  const [draggingPinId, setDraggingPinId] = useState<string | null>(null);
+
+  // Google Maps-Style Pan & Zoom State
   const [scale, setScale] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [isDraggingMap, setIsDraggingMap] = useState(false);
+
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
+  const dragStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const panStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const didDragRef = useRef(false);
 
   // Auto-select first map if none selected
   useEffect(() => {
@@ -65,6 +81,16 @@ export const MapStudio: React.FC<MapStudioProps> = ({
   const activeMap = maps.find((m) => m.id === selectedMapId) || maps[0] || null;
   const mapImage = activeMap?.data_json?.map_url || '';
   const pins: MapPinData[] = activeMap?.data_json?.pins || [];
+
+  // Reset pan/zoom when switching maps
+  const handleSelectMap = (mapId: string) => {
+    setSelectedMapId(mapId);
+    setSelectedPin(null);
+    setScale(1);
+    setPan({ x: 0, y: 0 });
+    setIsPlacingPin(false);
+    setPendingPinCoords(null);
+  };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -87,27 +113,225 @@ export const MapStudio: React.FC<MapStudioProps> = ({
         },
       });
       onRefresh();
-      setSelectedMapId(created.id);
+      handleSelectMap(created.id);
     } catch (err: any) {
       alert('Failed to upload and save map: ' + err.message);
     }
   };
 
-  const handleMapClick = async (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!isPlacingPin || !selectedLocationForPin || !activeMap) return;
+  // Toggle map reveal status for players
+  const handleToggleMapReveal = async (map: NodeItem, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const newRevealed = !map.revealed_to_players;
+    try {
+      await updateNode(map.id, { revealed_to_players: newRevealed });
+      onRefresh();
+    } catch (err: any) {
+      alert('Failed to update map visibility: ' + err.message);
+    }
+  };
 
-    const rect = e.currentTarget.getBoundingClientRect();
-    const xPct = ((e.clientX - rect.left) / rect.width) * 100;
-    const yPct = ((e.clientY - rect.top) / rect.height) * 100;
+  // --- Google Maps-like Pan & Zoom Controls ---
+  const handleMouseDown = (e: React.MouseEvent) => {
+    // Only handle left mouse button
+    if (e.button !== 0) return;
+    if (isPlacingPin) return;
 
-    const loc = locations.find((l) => l.id === selectedLocationForPin);
+    setIsDraggingMap(true);
+    didDragRef.current = false;
+    dragStartRef.current = { x: e.clientX, y: e.clientY };
+    panStartRef.current = { ...pan };
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (draggingPinId && activeMap) {
+      // Pin dragging logic
+      const rect = mapContainerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const clientX = e.clientX - rect.left;
+      const clientY = e.clientY - rect.top;
+      const imgX = (clientX - pan.x) / scale;
+      const imgY = (clientY - pan.y) / scale;
+      const xPct = Math.min(Math.max(Number(((imgX / rect.width) * 100).toFixed(2)), 0), 100);
+      const yPct = Math.min(Math.max(Number(((imgY / rect.height) * 100).toFixed(2)), 0), 100);
+
+      const updated = pins.map((p) => (p.id === draggingPinId ? { ...p, x: xPct, y: yPct } : p));
+      if (!activeMap.data_json) activeMap.data_json = {};
+      activeMap.data_json.pins = updated;
+      return;
+    }
+
+    if (!isDraggingMap) return;
+    const dx = e.clientX - dragStartRef.current.x;
+    const dy = e.clientY - dragStartRef.current.y;
+
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+      didDragRef.current = true;
+    }
+
+    setPan({
+      x: panStartRef.current.x + dx,
+      y: panStartRef.current.y + dy,
+    });
+  };
+
+  const handleMouseUp = async () => {
+    if (draggingPinId && activeMap) {
+      // Persist pin position
+      try {
+        await updateNode(activeMap.id, {
+          data_json: {
+            ...(activeMap.data_json || {}),
+            pins: activeMap.data_json?.pins || [],
+          },
+        });
+        onRefresh();
+      } catch (err) {
+        console.error('Failed to save pin position:', err);
+      }
+      setDraggingPinId(null);
+    }
+    setIsDraggingMap(false);
+  };
+
+  // Google Maps Smooth Wheel Zoom centered at cursor
+  const handleWheel = (e: React.WheelEvent) => {
+    e.preventDefault();
+    const rect = mapContainerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    const zoomFactor = e.deltaY < 0 ? 1.15 : 0.87;
+    const newScale = Math.min(Math.max(scale * zoomFactor, 0.4), 7.0);
+
+    // Anchored pan math: keep the map point under the mouse stationary
+    const worldX = (mouseX - pan.x) / scale;
+    const worldY = (mouseY - pan.y) / scale;
+    const newPanX = mouseX - worldX * newScale;
+    const newPanY = mouseY - worldY * newScale;
+
+    setScale(newScale);
+    setPan({ x: newPanX, y: newPanY });
+  };
+
+  // Double click to zoom in at point
+  const handleDoubleClick = (e: React.MouseEvent) => {
+    if (isPlacingPin) return;
+    const rect = mapContainerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    const newScale = Math.min(scale * 1.5, 7.0);
+    const worldX = (mouseX - pan.x) / scale;
+    const worldY = (mouseY - pan.y) / scale;
+    const newPanX = mouseX - worldX * newScale;
+    const newPanY = mouseY - worldY * newScale;
+
+    setScale(newScale);
+    setPan({ x: newPanX, y: newPanY });
+  };
+
+  // Reset view to center 1.0x
+  const handleResetView = () => {
+    setScale(1);
+    setPan({ x: 0, y: 0 });
+  };
+
+  // Fit view / Zoom to fit all pins
+  const handleFitPins = () => {
+    if (!pins.length) {
+      handleResetView();
+      return;
+    }
+    const minX = Math.min(...pins.map((p) => p.x));
+    const maxX = Math.max(...pins.map((p) => p.x));
+    const minY = Math.min(...pins.map((p) => p.y));
+    const maxY = Math.max(...pins.map((p) => p.y));
+
+    const rect = mapContainerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    const midXPct = (minX + maxX) / 2;
+    const midYPct = (minY + maxY) / 2;
+
+    const targetScale = 1.3;
+    const centerX = rect.width / 2;
+    const centerY = rect.height / 2;
+
+    const targetWorldX = (midXPct / 100) * rect.width;
+    const targetWorldY = (midYPct / 100) * rect.height;
+
+    setScale(targetScale);
+    setPan({
+      x: centerX - targetWorldX * targetScale,
+      y: centerY - targetWorldY * targetScale,
+    });
+  };
+
+  // --- Pin Creation with Exact Coordinates ---
+  const handleMapClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (didDragRef.current) return;
+    if (!isPlacingPin || !activeMap) return;
+
+    const rect = mapContainerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    const clientX = e.clientX - rect.left;
+    const clientY = e.clientY - rect.top;
+
+    // Convert screen coordinates through scale & pan back to image percentage
+    const imgX = (clientX - pan.x) / scale;
+    const imgY = (clientY - pan.y) / scale;
+    const xPct = Number(((imgX / rect.width) * 100).toFixed(2));
+    const yPct = Number(((imgY / rect.height) * 100).toFixed(2));
+
+    setPendingPinCoords({ xPct, yPct });
+  };
+
+  const handleConfirmDropPin = async () => {
+    if (!pendingPinCoords || !activeMap) return;
+
+    let targetNodeId = selectedLocationForPin;
+    let label = customPinLabel.trim();
+
+    // If no existing location chosen, create a new location node
+    if (!targetNodeId && label) {
+      try {
+        const createdLoc = await createNode({
+          campaign_id: campaignId,
+          type: 'location',
+          title: label,
+          summary: `Map Point on ${activeMap.title}`,
+          revealed_to_players: pinIsRevealedInitially,
+          data_json: { parent_map_id: activeMap.id },
+        });
+        targetNodeId = createdLoc.id;
+      } catch (err: any) {
+        alert('Failed to create location node: ' + err.message);
+        return;
+      }
+    } else if (targetNodeId) {
+      const existing = locations.find((l) => l.id === targetNodeId);
+      if (!label && existing) {
+        label = existing.title;
+      }
+    }
+
+    if (!label) {
+      label = 'Map Pin';
+    }
+
     const newPin: MapPinData = {
       id: `pin-${Date.now()}`,
-      nodeId: selectedLocationForPin,
-      x: Number(xPct.toFixed(2)),
-      y: Number(yPct.toFixed(2)),
-      label: loc?.title || 'Location Pin',
-      revealed: loc?.revealed_to_players || false,
+      nodeId: targetNodeId || `loc-${Date.now()}`,
+      x: pendingPinCoords.xPct,
+      y: pendingPinCoords.yPct,
+      label: label,
+      revealed: pinIsRevealedInitially,
     };
 
     const updatedPins = [...pins, newPin];
@@ -120,7 +344,9 @@ export const MapStudio: React.FC<MapStudioProps> = ({
         },
       });
       setIsPlacingPin(false);
+      setPendingPinCoords(null);
       setSelectedLocationForPin('');
+      setCustomPinLabel('');
       onRefresh();
     } catch (err: any) {
       alert('Failed to save pin: ' + err.message);
@@ -140,7 +366,7 @@ export const MapStudio: React.FC<MapStudioProps> = ({
         },
       });
 
-      // Also toggle underlying node if found
+      // Also toggle underlying location node if found
       const loc = locations.find((l) => l.id === pin.nodeId);
       if (loc) {
         await updateNode(loc.id, { revealed_to_players: updated });
@@ -186,69 +412,69 @@ export const MapStudio: React.FC<MapStudioProps> = ({
   };
 
   return (
-    <div style={{ padding: '24px', maxWidth: '1300px', margin: '0 auto' }}>
+    <div style={{ padding: '20px 24px', maxWidth: '1400px', margin: '0 auto', display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* Header & Main Controls */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px', flexShrink: 0 }}>
         <div>
-          <h2 style={{ fontSize: '1.4rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <h2 style={{ fontSize: '1.35rem', display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
             <Compass size={22} style={{ color: 'var(--color-gold)' }} /> Interactive World &amp; Battle Maps
           </h2>
-          <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-            Upload tactical dungeon grids or regional maps, place persistent location pins, and manage player fog-of-war.
+          <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', margin: '2px 0 0 0' }}>
+            Pan and zoom like Google Maps, drop location pins, and manage player visibility &amp; fog of war.
           </p>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <label className="btn btn-primary" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Upload size={15} /> Upload New Map Image
-            <input type="file" accept="image/*,.pdf" onChange={handleFileUpload} style={{ display: 'none' }} />
-          </label>
-
-          {/* Place Pin Dropdown */}
+          {/* Active Map Reveal Status Toggle */}
           {activeMap && (
-            <div
+            <button
+              onClick={(e) => handleToggleMapReveal(activeMap, e)}
+              className="btn"
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 gap: '6px',
-                background: 'var(--bg-surface)',
-                padding: '4px 8px',
-                borderRadius: '8px',
-                border: '1px solid var(--border-subtle)',
+                fontSize: '0.78rem',
+                padding: '6px 12px',
+                background: activeMap.revealed_to_players ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                borderColor: activeMap.revealed_to_players ? '#10b981' : '#f59e0b',
+                color: activeMap.revealed_to_players ? '#10b981' : '#f59e0b',
+                fontWeight: 600,
               }}
+              title={activeMap.revealed_to_players ? 'Click to hide map from players' : 'Click to reveal map to players'}
             >
-              <select
-                value={selectedLocationForPin}
-                onChange={(e) => {
-                  setSelectedLocationForPin(e.target.value);
-                  setIsPlacingPin(Boolean(e.target.value));
-                }}
-                style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', fontSize: '0.8rem', outline: 'none' }}
-              >
-                <option value="" style={{ background: 'var(--bg-card)', color: 'var(--text-primary)' }}>Place Pin on Map...</option>
-                {locations.map((loc) => (
-                  <option key={loc.id} value={loc.id} style={{ background: 'var(--bg-card)', color: 'var(--text-primary)' }}>
-                    {loc.title}
-                  </option>
-                ))}
-              </select>
-              {isPlacingPin && (
-                <span style={{ fontSize: '0.72rem', color: 'var(--color-gold)', fontWeight: 600 }}>
-                  Click map to drop!
-                </span>
-              )}
-            </div>
+              {activeMap.revealed_to_players ? <Eye size={15} /> : <EyeOff size={15} />}
+              {activeMap.revealed_to_players ? 'Revealed to Players' : 'DM Secret Map'}
+            </button>
           )}
 
-          <button onClick={() => setScale((s) => Math.min(s + 0.2, 2.5))} className="btn btn-ghost" title="Zoom In">
-            <Maximize2 size={16} />
-          </button>
-          <button onClick={() => setScale((s) => Math.max(s - 0.2, 0.5))} className="btn btn-ghost" title="Zoom Out">
-            <Minimize2 size={16} />
-          </button>
-          <button onClick={() => { setScale(1); setPan({ x: 0, y: 0 }); }} className="btn btn-ghost" title="Reset View">
-            <RotateCcw size={16} />
-          </button>
+          {/* Pin Drop Mode Button */}
+          {activeMap && (
+            <button
+              onClick={() => {
+                setIsPlacingPin(!isPlacingPin);
+                setPendingPinCoords(null);
+              }}
+              className={`btn ${isPlacingPin ? 'btn-primary' : 'btn-secondary'}`}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                fontSize: '0.8rem',
+                padding: '6px 12px',
+                background: isPlacingPin ? 'var(--color-gold)' : undefined,
+                color: isPlacingPin ? '#000' : undefined,
+              }}
+            >
+              <MapPin size={15} /> {isPlacingPin ? 'Cancel Pin Mode' : 'Drop Pin on Map'}
+            </button>
+          )}
+
+          {/* Upload Map Button */}
+          <label className="btn btn-primary" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem', padding: '6px 12px' }}>
+            <Upload size={15} /> Upload Map File
+            <input type="file" accept="image/*,.pdf" onChange={handleFileUpload} style={{ display: 'none' }} />
+          </label>
         </div>
       </div>
 
@@ -263,28 +489,28 @@ export const MapStudio: React.FC<MapStudioProps> = ({
           background: 'var(--bg-surface)',
           borderRadius: '10px',
           border: '1px solid var(--border-medium)',
-          marginBottom: '16px',
+          marginBottom: '12px',
+          flexShrink: 0,
         }}
       >
         <span style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--color-gold)', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <ImageIcon size={15} /> Campaign Maps ({maps.length}):
+          <ImageIcon size={15} /> Maps Gallery ({maps.length}):
         </span>
 
         {maps.length === 0 ? (
           <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-            No maps uploaded yet. Click &quot;Upload New Map Image&quot; above to add your first battle map!
+            No maps uploaded yet. Click &quot;Upload Map File&quot; above to add your first regional or tactical battle map!
           </span>
         ) : (
           maps.map((m) => {
-            const isSelected = (activeMap?.id === m.id);
+            const isSelected = activeMap?.id === m.id;
             const pinCount = (m.data_json?.pins || []).length;
+            const isRevealed = m.revealed_to_players;
+
             return (
               <div
                 key={m.id}
-                onClick={() => {
-                  setSelectedMapId(m.id);
-                  setSelectedPin(null);
-                }}
+                onClick={() => handleSelectMap(m.id)}
                 className="glass-panel"
                 style={{
                   display: 'flex',
@@ -303,7 +529,7 @@ export const MapStudio: React.FC<MapStudioProps> = ({
                   <img
                     src={m.data_json.map_url}
                     alt={m.title}
-                    style={{ width: '24px', height: '24px', borderRadius: '4px', objectFit: 'cover' }}
+                    style={{ width: '26px', height: '26px', borderRadius: '4px', objectFit: 'cover' }}
                   />
                 ) : (
                   <Compass size={16} style={{ color: 'var(--color-gold)' }} />
@@ -311,6 +537,28 @@ export const MapStudio: React.FC<MapStudioProps> = ({
                 <span style={{ fontSize: '0.82rem', fontWeight: isSelected ? 700 : 500, color: isSelected ? 'var(--text-gold)' : 'var(--text-primary)' }}>
                   {m.title}
                 </span>
+
+                {/* Player Visibility Tag */}
+                <button
+                  onClick={(e) => handleToggleMapReveal(m, e)}
+                  style={{
+                    background: isRevealed ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                    border: `1px solid ${isRevealed ? '#10b981' : '#64748b'}`,
+                    color: isRevealed ? '#10b981' : '#94a3b8',
+                    borderRadius: '6px',
+                    padding: '2px 5px',
+                    fontSize: '0.68rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '3px',
+                    cursor: 'pointer',
+                  }}
+                  title={isRevealed ? 'Revealed to players (click to hide)' : 'DM Secret (click to reveal)'}
+                >
+                  {isRevealed ? <Eye size={11} /> : <EyeOff size={11} />}
+                  {isRevealed ? 'Shared' : 'Secret'}
+                </button>
+
                 <span
                   style={{
                     fontSize: '0.7rem',
@@ -322,6 +570,7 @@ export const MapStudio: React.FC<MapStudioProps> = ({
                 >
                   📍 {pinCount}
                 </span>
+
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
@@ -338,21 +587,64 @@ export const MapStudio: React.FC<MapStudioProps> = ({
         )}
       </div>
 
-      {/* Map Canvas Area */}
+      {/* Pin Placement Guidance Banner */}
+      {isPlacingPin && (
+        <div
+          style={{
+            background: 'linear-gradient(90deg, rgba(245, 158, 11, 0.2) 0%, rgba(245, 158, 11, 0.05) 100%)',
+            border: '1px solid var(--color-gold)',
+            borderRadius: '8px',
+            padding: '8px 16px',
+            marginBottom: '10px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            fontSize: '0.82rem',
+            color: 'var(--text-gold)',
+            flexShrink: 0,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <MapPin size={16} />
+            <span>
+              <strong>Pin Mode Active:</strong> Click anywhere on the map image below to place a persistent location pin! You can pan and zoom freely.
+            </span>
+          </div>
+          <button
+            onClick={() => {
+              setIsPlacingPin(false);
+              setPendingPinCoords(null);
+            }}
+            className="btn btn-ghost"
+            style={{ padding: '2px 8px', fontSize: '0.75rem' }}
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {/* Main Map Viewport */}
       <div
         ref={mapContainerRef}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseUp}
+        onWheel={handleWheel}
+        onDoubleClick={handleDoubleClick}
+        onClick={handleMapClick}
         style={{
           position: 'relative',
-          width: '100%',
-          height: 'calc(100vh - 230px)',
+          flex: 1,
+          minHeight: '460px',
           background: '#090d15',
           borderRadius: '12px',
           overflow: 'hidden',
           border: '1px solid var(--border-medium)',
-          boxShadow: 'inset 0 0 40px rgba(0,0,0,0.8)',
-          cursor: isPlacingPin ? 'crosshair' : 'default',
+          boxShadow: 'inset 0 0 50px rgba(0,0,0,0.85)',
+          cursor: isPlacingPin ? 'crosshair' : isDraggingMap ? 'grabbing' : 'grab',
+          userSelect: 'none',
         }}
-        onClick={handleMapClick}
       >
         {mapImage ? (
           <div
@@ -360,14 +652,15 @@ export const MapStudio: React.FC<MapStudioProps> = ({
               position: 'relative',
               width: '100%',
               height: '100%',
-              transform: `scale(${scale}) translate(${pan.x}px, ${pan.y}px)`,
+              transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
               transformOrigin: '0 0',
-              transition: 'transform 0.1s ease-out',
+              transition: isDraggingMap ? 'none' : 'transform 0.08s ease-out',
             }}
           >
             <img
               src={mapImage}
               alt={activeMap?.title || 'Campaign Map'}
+              draggable={false}
               style={{
                 width: '100%',
                 height: '100%',
@@ -382,6 +675,11 @@ export const MapStudio: React.FC<MapStudioProps> = ({
               return (
                 <div
                   key={pin.id}
+                  onMouseDown={(e) => {
+                    e.stopPropagation();
+                    // Set dragging pin on drag
+                    setDraggingPinId(pin.id);
+                  }}
                   onClick={(e) => {
                     e.stopPropagation();
                     setSelectedPin(pin);
@@ -398,7 +696,9 @@ export const MapStudio: React.FC<MapStudioProps> = ({
                     display: 'flex',
                     flexDirection: 'column',
                     alignItems: 'center',
+                    transition: draggingPinId === pin.id ? 'none' : 'transform 0.15s ease',
                   }}
+                  title={`${pin.label} (${pin.revealed ? 'Revealed' : 'DM Secret'})`}
                 >
                   <div
                     style={{
@@ -413,31 +713,68 @@ export const MapStudio: React.FC<MapStudioProps> = ({
                       alignItems: 'center',
                       justifyContent: 'center',
                       boxShadow: isSelected
-                        ? '0 0 15px rgba(245, 158, 11, 0.8)'
-                        : '0 3px 10px rgba(0,0,0,0.6)',
-                      border: '2px solid #fff',
+                        ? '0 0 16px rgba(245, 158, 11, 0.9), 0 4px 12px rgba(0,0,0,0.6)'
+                        : '0 3px 10px rgba(0,0,0,0.7)',
+                      border: isSelected ? '2.5px solid #f59e0b' : '2px solid #fff',
                     }}
                   >
                     <MapPin size={16} color="#fff" style={{ transform: 'rotate(45deg)' }} />
                   </div>
                   <div
                     style={{
-                      background: 'var(--bg-surface)',
-                      border: '1px solid var(--border-medium)',
+                      background: 'rgba(15, 23, 42, 0.9)',
+                      backdropFilter: 'blur(4px)',
+                      border: `1px solid ${isSelected ? 'var(--color-gold)' : 'var(--border-medium)'}`,
                       borderRadius: '4px',
                       padding: '2px 6px',
                       fontSize: '0.72rem',
                       fontWeight: 700,
-                      color: 'var(--text-primary)',
+                      color: isSelected ? 'var(--text-gold)' : '#fff',
                       whiteSpace: 'nowrap',
                       marginTop: '4px',
+                      boxShadow: '0 2px 6px rgba(0,0,0,0.6)',
                     }}
                   >
                     {pin.label}
+                    {!pin.revealed && <span style={{ color: '#ef4444', marginLeft: '4px' }}>🔒</span>}
                   </div>
                 </div>
               );
             })}
+
+            {/* Temporary Placement Marker */}
+            {pendingPinCoords && (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: `${pendingPinCoords.xPct}%`,
+                  top: `${pendingPinCoords.yPct}%`,
+                  transform: 'translate(-50%, -100%)',
+                  zIndex: 25,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                }}
+              >
+                <div
+                  style={{
+                    width: '36px',
+                    height: '36px',
+                    borderRadius: '50% 50% 50% 0',
+                    transform: 'rotate(-45deg)',
+                    background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    boxShadow: '0 0 20px #f59e0b',
+                    border: '2px solid #fff',
+                    animation: 'pulse 1.5s infinite',
+                  }}
+                >
+                  <MapPin size={18} color="#fff" style={{ transform: 'rotate(45deg)' }} />
+                </div>
+              </div>
+            )}
           </div>
         ) : (
           <div
@@ -454,7 +791,7 @@ export const MapStudio: React.FC<MapStudioProps> = ({
             <ImageIcon size={48} style={{ color: 'var(--color-gold)' }} />
             <h3 style={{ fontSize: '1.2rem', color: '#f8fafc' }}>No Map Selected</h3>
             <p style={{ fontSize: '0.85rem', maxWidth: '400px', textAlign: 'center', color: '#cbd5e1' }}>
-              Select an available map from the gallery above, or upload any battle map or regional map.
+              Select a battle map from the gallery above or upload a high-resolution regional handout.
             </p>
             <label className="btn btn-primary" style={{ cursor: 'pointer' }}>
               <Upload size={15} /> Upload Map File
@@ -463,14 +800,212 @@ export const MapStudio: React.FC<MapStudioProps> = ({
           </div>
         )}
 
-        {/* Selected Pin Info Drawer / Floating Badge */}
-        {selectedPin && (
+        {/* Floating Google Maps-Style Controls Widget */}
+        <div
+          style={{
+            position: 'absolute',
+            bottom: '24px',
+            right: '24px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '6px',
+            zIndex: 30,
+          }}
+        >
+          {/* Zoom In Button */}
+          <button
+            onClick={() => {
+              const newScale = Math.min(scale * 1.25, 7.0);
+              setScale(newScale);
+            }}
+            className="btn btn-secondary glass-panel"
+            style={{ width: '38px', height: '38px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.5)' }}
+            title="Zoom In (+)"
+          >
+            <ZoomIn size={18} />
+          </button>
+
+          {/* Current Zoom Level Pill */}
+          <div
+            style={{
+              background: 'rgba(15, 23, 42, 0.85)',
+              backdropFilter: 'blur(8px)',
+              border: '1px solid var(--border-medium)',
+              borderRadius: '6px',
+              padding: '2px 4px',
+              fontSize: '0.68rem',
+              fontWeight: 700,
+              color: 'var(--text-gold)',
+              textAlign: 'center',
+            }}
+          >
+            {Math.round(scale * 100)}%
+          </div>
+
+          {/* Zoom Out Button */}
+          <button
+            onClick={() => {
+              const newScale = Math.max(scale * 0.8, 0.4);
+              setScale(newScale);
+            }}
+            className="btn btn-secondary glass-panel"
+            style={{ width: '38px', height: '38px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.5)' }}
+            title="Zoom Out (-)"
+          >
+            <ZoomOut size={18} />
+          </button>
+
+          {/* Fit View / Center on Pins */}
+          <button
+            onClick={handleFitPins}
+            className="btn btn-secondary glass-panel"
+            style={{ width: '38px', height: '38px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.5)' }}
+            title="Fit View & Center on Pins"
+          >
+            <Target size={18} />
+          </button>
+
+          {/* Reset View Button */}
+          <button
+            onClick={handleResetView}
+            className="btn btn-secondary glass-panel"
+            style={{ width: '38px', height: '38px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.5)' }}
+            title="Reset Pan & Zoom"
+          >
+            <RotateCcw size={17} />
+          </button>
+        </div>
+
+        {/* Legend / Pan instruction pill at bottom left */}
+        <div
+          className="glass-panel"
+          style={{
+            position: 'absolute',
+            bottom: '16px',
+            left: '20px',
+            borderRadius: '8px',
+            padding: '6px 12px',
+            fontSize: '0.74rem',
+            color: 'var(--text-secondary)',
+            display: 'flex',
+            gap: '12px',
+            alignItems: 'center',
+            zIndex: 15,
+            pointerEvents: 'none',
+          }}
+        >
+          <span><strong style={{ color: '#10b981' }}>🟢 Green Pin:</strong> Revealed to Players</span>
+          <span><strong style={{ color: '#ef4444' }}>🔴 Red Pin:</strong> DM Secret</span>
+          <span>• Drag to Pan • Wheel to Zoom • Double-click to Focus</span>
+        </div>
+
+        {/* Quick Pin Creation Modal */}
+        {pendingPinCoords && (
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              background: 'rgba(5, 8, 15, 0.7)',
+              backdropFilter: 'blur(4px)',
+              zIndex: 40,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '20px',
+            }}
+          >
+            <div className="glass-panel animate-fade-in" style={{ width: '100%', maxWidth: '420px', borderRadius: '12px', padding: '20px', boxShadow: '0 15px 40px rgba(0,0,0,0.8)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
+                <h3 style={{ fontSize: '1.1rem', color: 'var(--text-primary)', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <MapPin size={18} style={{ color: 'var(--color-gold)' }} /> Add Location Pin
+                </h3>
+                <button
+                  onClick={() => setPendingPinCoords(null)}
+                  style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
+                >
+                  <X size={16} />
+                </button>
+              </div>
+
+              {/* Option A: Select Existing Campaign Location */}
+              <div style={{ marginBottom: '12px' }}>
+                <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '4px' }}>
+                  Attach to Existing Location Node:
+                </label>
+                <select
+                  value={selectedLocationForPin}
+                  onChange={(e) => {
+                    setSelectedLocationForPin(e.target.value);
+                    const loc = locations.find((l) => l.id === e.target.value);
+                    if (loc) setCustomPinLabel(loc.title);
+                  }}
+                  style={{ width: '100%', padding: '8px', background: 'var(--bg-surface)', border: '1px solid var(--border-medium)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '0.82rem' }}
+                >
+                  <option value="">-- Create New / Custom Name --</option>
+                  {locations.map((loc) => (
+                    <option key={loc.id} value={loc.id}>
+                      {loc.title}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Option B: Custom Name / New Location */}
+              <div style={{ marginBottom: '14px' }}>
+                <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '4px' }}>
+                  Pin Label / Landmark Name:
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g., Hidden Treasury, Goblin Watchtower..."
+                  value={customPinLabel}
+                  onChange={(e) => setCustomPinLabel(e.target.value)}
+                  style={{ width: '100%', padding: '8px', background: 'var(--bg-surface)', border: '1px solid var(--border-medium)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '0.85rem' }}
+                />
+              </div>
+
+              {/* Initial Player Visibility */}
+              <div style={{ marginBottom: '18px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <input
+                  type="checkbox"
+                  id="pinRevealCheck"
+                  checked={pinIsRevealedInitially}
+                  onChange={(e) => setPinIsRevealedInitially(e.target.checked)}
+                  style={{ accentColor: '#10b981', width: '16px', height: '16px', cursor: 'pointer' }}
+                />
+                <label htmlFor="pinRevealCheck" style={{ fontSize: '0.8rem', color: 'var(--text-primary)', cursor: 'pointer' }}>
+                  Reveal this pin to players immediately
+                </label>
+              </div>
+
+              <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                <button
+                  onClick={() => setPendingPinCoords(null)}
+                  className="btn btn-ghost"
+                  style={{ fontSize: '0.8rem', padding: '6px 14px' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleConfirmDropPin}
+                  className="btn btn-primary"
+                  style={{ fontSize: '0.8rem', padding: '6px 16px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                >
+                  <Check size={15} /> Save Pin to Map
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Selected Pin Info Drawer / Floating Detail Card */}
+        {selectedPin && !pendingPinCoords && (
           <div
             className="glass-panel animate-fade-in"
             style={{
               position: 'absolute',
               bottom: '20px',
-              right: '20px',
+              left: '20px',
               width: '320px',
               borderRadius: '10px',
               padding: '16px',
@@ -480,7 +1015,7 @@ export const MapStudio: React.FC<MapStudioProps> = ({
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-              <span className="badge badge-location">Location Pin</span>
+              <span className="badge badge-location">Map Pin</span>
               <button
                 onClick={() => setSelectedPin(null)}
                 style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
@@ -488,15 +1023,25 @@ export const MapStudio: React.FC<MapStudioProps> = ({
                 ✕
               </button>
             </div>
-            <h4 style={{ fontSize: '1rem', color: 'var(--text-primary)', marginBottom: '4px' }}>{selectedPin.label}</h4>
+            <h4 style={{ fontSize: '1.05rem', color: 'var(--text-primary)', marginBottom: '4px' }}>{selectedPin.label}</h4>
+            <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginBottom: '10px' }}>
+              Coords: {selectedPin.x}%, {selectedPin.y}% • Drag pin to reposition
+            </div>
+
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '10px' }}>
               <button
                 onClick={() => handleTogglePinReveal(selectedPin)}
                 className="btn btn-secondary"
-                style={{ flex: 1, fontSize: '0.75rem', padding: '6px' }}
+                style={{
+                  flex: 1,
+                  fontSize: '0.75rem',
+                  padding: '6px',
+                  borderColor: selectedPin.revealed ? '#10b981' : '#ef4444',
+                  color: selectedPin.revealed ? '#10b981' : '#ef4444',
+                }}
               >
                 {selectedPin.revealed ? <Eye size={14} /> : <EyeOff size={14} />}
-                {selectedPin.revealed ? 'Revealed' : 'DM Secret'}
+                {selectedPin.revealed ? 'Revealed to Players' : 'DM Secret'}
               </button>
               <button
                 onClick={() => handleDeletePin(selectedPin.id)}

@@ -142,7 +142,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
   const [isUploading, setIsUploading] = useState<boolean>(false);
 
   const [instruction, setInstruction] = useState<string>(
-    'Chapter 1: Decompose this chapter into the overarching Campaign Arc, primary Quests, key Sessions, and initial Encounters. Extract all named NPCs and factions.'
+    'Decompose this chapter into the overarching Campaign Arc, primary Quests, key Sessions, and initial Encounters. Extract all named NPCs and factions.'
   );
   const [decompMode, setDecompMode] = useState<'campaign_structure' | 'monsters' | 'characters' | 'world_lore' | 'general'>('campaign_structure');
 
@@ -198,8 +198,8 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
   // Preset chips for Decomposer
   const bookPresets = [
     {
-      label: 'Chapter 1: Campaign Arc & Quests',
-      prompt: 'Chapter 1: Decompose this chapter into the overarching Campaign Arc, primary Quests, key Sessions, and initial Encounters. Extract all named NPCs and factions.',
+      label: 'Campaign Arc & Quests',
+      prompt: 'Decompose this chapter into the overarching Campaign Arc, primary Quests, key Sessions, and initial Encounters. Extract all named NPCs and factions.',
       mode: 'campaign_structure' as const,
     },
     {

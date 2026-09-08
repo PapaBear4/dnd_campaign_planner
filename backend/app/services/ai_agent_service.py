@@ -53,6 +53,30 @@ You have real Python tool functions that directly read and write the campaign's 
 - Three-Clue Rule: ensure critical mysteries have at least 3 distinct discovery avenues.
 - Fail-Forward: failed checks = complications, costs, or escalations — not dead ends.
 - Evocative Boxed Text: multi-sensory, 2-4 punchy sentences of read-aloud prose.
+
+### 5e Alignment & Tactical Role Personality Grounding
+
+When roleplaying an NPC or brainstorming monster tactics, dialogue, or dilemmas:
+- **5e Structured Alignment Spectrum**:
+  - **Lawful Good (LG)**: Honor, altruism, standing against injustice; keeps word and protects the vulnerable with discipline.
+  - **Neutral Good (NG)**: Does whatever is right, cooperating with or defying authority as needed for the greater good.
+  - **Chaotic Good (CG)**: Free-spirited benevolence; rebels against unjust laws and rigid hierarchies to champion personal freedom.
+  - **Lawful Neutral (LN)**: Rigid adherence to tradition, honor, codes, contracts, or civic laws above personal sentiment.
+  - **True Neutral (TN)**: Balance, pragmatism, neutrality, and self-preservation without moral fanaticism.
+  - **Chaotic Neutral (CN)**: Whimsical, individualistic, unpredictable, values personal independence above all else.
+  - **Lawful Evil (LE)**: Tyrants, calculating schemers, devils; strictly honors contracts while ruthlessly exploiting loopholes and hierarchies.
+  - **Neutral Evil (NE)**: Pure, cold self-interest; betrays allies without remorse if it advances their personal power.
+  - **Chaotic Evil (CE)**: Arbitrary malice, bloodlust, demonic fury, carnage, and primal cruelty without restraint.
+  - **Unaligned**: Pure predatory instinct, hunger, fear, or programmed sentinel routine; immune to moral appeals or philosophical guilt.
+- **Tactical Roles**:
+  - **Townsfolk / NPC (`npc`)**: Community-oriented, localized knowledge, trade, rumors, and social ties.
+  - **Party Companion / Sidekick (`companion`)**: Dedicated travel partner, protective of the party, distinct personality quirks and loyalty.
+  - **Villain / Antagonist (`villain`)**: Complex motives, active schemes, ripple effects across quest lines, intelligent counter-moves.
+  - **Legendary Boss (`boss`)**: High threat awareness, commands multi-phase encounters, environment mastery, commands bodyguards.
+  - **Monster (`monster`)**: Tactical combat threat, specific physical or magical weaknesses, territory habits.
+  - **Beast (`beast`)**: Wildlife, primal reactions to territory, fire, hunger, and wounded prey.
+  - **Minion / Grunt (`minion`)**: Swarm tactics, cowardly when isolated, panics or flees if commander falls.
+  - **Patron (`patron`)**: Cosmic, transactional, grants boons with hidden prices, communicates through visions, tests, and omens.
 """
 
 # ---------------------------------------------------------------------------
@@ -121,7 +145,7 @@ AGENT_TOOLS = [
                 "subtitle": {"type": "string", "description": "Optional subtitle or role (e.g. 'Village Elder', 'Side Quest')."},
                 "summary": {"type": "string", "description": "Brief 1-2 sentence summary."},
                 "content_markdown": {"type": "string", "description": "Full DM notes in markdown format."},
-                "data_json": {"type": "string", "description": "Optional JSON string with extra structured key-value pairs (e.g. '{\"status\": \"planned\", \"cr\": 5}')."},
+                "data_json": {"type": "string", "description": "Optional JSON string with extra structured key-value pairs. For creatures/NPCs, include 'role' (npc, companion, villain, boss, monster, beast, minion, patron), 'alignment' (lawful_good, neutral_good, chaotic_good, lawful_neutral, true_neutral, chaotic_neutral, lawful_evil, neutral_evil, chaotic_evil, unaligned, any), 'creature_size', 'creature_type', 'cr', 'hp', 'ac', 'abilities'."},
                 "is_canon": {"type": "boolean", "description": "Set to true for official Canon lore (default), or false for provisional working drafts."},
             },
             "required": ["type", "title"],
@@ -138,7 +162,7 @@ AGENT_TOOLS = [
                 "subtitle": {"type": "string", "description": "New subtitle."},
                 "summary": {"type": "string", "description": "New summary."},
                 "content_markdown": {"type": "string", "description": "New full DM notes content."},
-                "data_json": {"type": "string", "description": "New or merged structured data as a JSON string."},
+                "data_json": {"type": "string", "description": "New or merged structured data as a JSON string (e.g. including role, alignment, creature_size, creature_type, stats)."},
             },
             "required": ["node_id"],
         },
@@ -481,10 +505,19 @@ def chat_with_agent(
         from app.services.graph_service import get_node
         node = get_node(context_node_id)
         if node:
+            data = node.data_json or {}
+            role_line = f"- 5e Tactical Role: {data.get('role', 'standard')}\n" if data.get('role') else ""
+            align_line = f"- 5e Structured Alignment: {data.get('alignment', 'unspecified')}\n" if data.get('alignment') else ""
+            type_line = f"- 5e Classification: {data.get('creature_size', '')} {data.get('creature_type', '')}\n" if data.get('creature_type') else ""
+
             context_extra = (
                 f"\nFocused Node in Workspace:\n"
                 f"- ID: {node.id}\n"
                 f"- Title: {node.title} (Type: {node.type})\n"
+                f"- Subtitle: {node.subtitle or 'N/A'}\n"
+                f"{role_line}"
+                f"{align_line}"
+                f"{type_line}"
                 f"- Summary: {node.summary}\n"
                 f"- Notes: {node.content_markdown}\n"
             )
@@ -1042,10 +1075,13 @@ Return strictly JSON matching this structure:
       "summary": "1-2 sentence description",
       "content_markdown": "Full details, boxed text or stat block info found in the text",
       "data_json": {{
+         "role": "npc|companion|villain|boss|monster|beast|minion|patron",
+         "alignment": "lawful_good|neutral_good|chaotic_good|lawful_neutral|true_neutral|chaotic_neutral|lawful_evil|neutral_evil|chaotic_evil|unaligned|any",
+         "creature_size": "Medium",
+         "creature_type": "Humanoid|Beast|Undead|Dragon|Fiend|Aberration|Construct|Plant|etc",
          "cr": "1/2 (if monster)",
          "hp": 22,
          "ac": 13,
-         "alignment": "Neutral Evil",
          "status": "planned"
       }},
       "revealed_to_players": false

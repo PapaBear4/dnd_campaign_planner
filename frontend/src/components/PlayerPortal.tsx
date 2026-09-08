@@ -1,16 +1,21 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   BookOpen,
   Calendar,
   Compass,
   Edit3,
   FileText,
+  Image as ImageIcon,
   MapPin,
   Plus,
+  RotateCcw,
   Scroll,
   Shield,
+  Target,
   Trash2,
   Users,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react';
 import { createPlayerNote, deletePlayerNote, getPlayerGraph, getPlayerHierarchy, getPlayerNotes } from '../api';
 import { GraphData, HierarchyItem, NodeItem, PlayerNote } from '../types';
@@ -20,11 +25,38 @@ interface PlayerPortalProps {
 }
 
 export const PlayerPortal: React.FC<PlayerPortalProps> = ({ campaignId }) => {
-  const [activeTab, setActiveTab] = useState<'lore' | 'chronicle' | 'notes'>('lore');
+  const [activeTab, setActiveTab] = useState<'lore' | 'chronicle' | 'maps' | 'notes'>('lore');
   const [graphData, setGraphData] = useState<GraphData>({ nodes: [], edges: [] });
   const [hierarchy, setHierarchy] = useState<HierarchyItem[]>([]);
   const [notes, setNotes] = useState<PlayerNote[]>([]);
   const [selectedNode, setSelectedNode] = useState<NodeItem | null>(null);
+
+  // Player Maps State (only maps revealed to players)
+  const playerMaps = graphData.nodes.filter((n) => n.type === 'map' && n.revealed_to_players);
+  const [selectedPlayerMapId, setSelectedPlayerMapId] = useState<string>('');
+  const [selectedPlayerPin, setSelectedPlayerPin] = useState<any>(null);
+
+  // Google Maps Pan & Zoom State for Player
+  const [mapScale, setMapScale] = useState(1);
+  const [mapPan, setMapPan] = useState({ x: 0, y: 0 });
+  const [isDraggingPlayerMap, setIsDraggingPlayerMap] = useState(false);
+
+  const playerMapContainerRef = useRef<HTMLDivElement | null>(null);
+  const playerDragStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const playerPanStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const playerDidDragRef = useRef(false);
+
+  // Auto select first map
+  useEffect(() => {
+    if (playerMaps.length > 0 && (!selectedPlayerMapId || !playerMaps.some((m) => m.id === selectedPlayerMapId))) {
+      setSelectedPlayerMapId(playerMaps[0].id);
+    }
+  }, [playerMaps, selectedPlayerMapId]);
+
+  const activePlayerMap = playerMaps.find((m) => m.id === selectedPlayerMapId) || playerMaps[0] || null;
+  const playerMapUrl = activePlayerMap?.data_json?.map_url || '';
+  // Only show pins that are marked as revealed to players
+  const playerPins = (activePlayerMap?.data_json?.pins || []).filter((p: any) => p.revealed !== false);
 
   // New Note Modal / Form
   const [showNoteForm, setShowNoteForm] = useState(false);
@@ -123,6 +155,13 @@ export const PlayerPortal: React.FC<PlayerPortalProps> = ({ campaignId }) => {
             style={{ padding: '6px 14px', fontSize: '0.82rem' }}
           >
             <Scroll size={15} /> Quest Chronicle
+          </button>
+          <button
+            onClick={() => setActiveTab('maps')}
+            className={`btn ${activeTab === 'maps' ? 'btn-primary' : 'btn-ghost'}`}
+            style={{ padding: '6px 14px', fontSize: '0.82rem' }}
+          >
+            <MapPin size={15} /> World &amp; Battle Maps ({playerMaps.length})
           </button>
           <button
             onClick={() => setActiveTab('notes')}
@@ -396,6 +435,342 @@ export const PlayerPortal: React.FC<PlayerPortalProps> = ({ campaignId }) => {
               ))
             )}
           </div>
+        </div>
+      )}
+
+      {/* Tab 4: World & Battle Maps (Google Maps-Style Pan & Zoom for Players) */}
+      {activeTab === 'maps' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          {/* Map Selector Strip */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px',
+              overflowX: 'auto',
+              padding: '8px 12px',
+              background: 'var(--bg-surface)',
+              borderRadius: '10px',
+              border: '1px solid var(--border-medium)',
+            }}
+          >
+            <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--color-gold)', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <ImageIcon size={15} /> Revealed Maps ({playerMaps.length}):
+            </span>
+
+            {playerMaps.length === 0 ? (
+              <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                No tactical battle maps or regional charts have been revealed by the Dungeon Master yet.
+              </span>
+            ) : (
+              playerMaps.map((m) => {
+                const isSelected = activePlayerMap?.id === m.id;
+                const pinCount = (m.data_json?.pins || []).filter((p: any) => p.revealed !== false).length;
+                return (
+                  <div
+                    key={m.id}
+                    onClick={() => {
+                      setSelectedPlayerMapId(m.id);
+                      setSelectedPlayerPin(null);
+                      setMapScale(1);
+                      setMapPan({ x: 0, y: 0 });
+                    }}
+                    className="glass-panel"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      padding: '6px 14px',
+                      borderRadius: '8px',
+                      cursor: 'pointer',
+                      border: isSelected ? '1px solid var(--color-gold)' : '1px solid var(--border-subtle)',
+                      background: isSelected ? 'var(--color-amber-glow)' : 'var(--bg-card)',
+                      transition: 'all 0.15s ease',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {m.data_json?.map_url ? (
+                      <img
+                        src={m.data_json.map_url}
+                        alt={m.title}
+                        style={{ width: '24px', height: '24px', borderRadius: '4px', objectFit: 'cover' }}
+                      />
+                    ) : (
+                      <Compass size={16} style={{ color: 'var(--color-gold)' }} />
+                    )}
+                    <span style={{ fontSize: '0.84rem', fontWeight: isSelected ? 700 : 500, color: isSelected ? 'var(--text-gold)' : 'var(--text-primary)' }}>
+                      {m.title}
+                    </span>
+                    <span
+                      style={{
+                        fontSize: '0.7rem',
+                        padding: '1px 6px',
+                        borderRadius: '10px',
+                        background: 'var(--bg-card-active)',
+                        color: 'var(--text-secondary)',
+                      }}
+                    >
+                      📍 {pinCount}
+                    </span>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {/* Interactive Player Map Viewport */}
+          {playerMaps.length > 0 && activePlayerMap ? (
+            <div
+              ref={playerMapContainerRef}
+              onMouseDown={(e) => {
+                if (e.button !== 0) return;
+                setIsDraggingPlayerMap(true);
+                playerDidDragRef.current = false;
+                playerDragStartRef.current = { x: e.clientX, y: e.clientY };
+                playerPanStartRef.current = { ...mapPan };
+              }}
+              onMouseMove={(e) => {
+                if (!isDraggingPlayerMap) return;
+                const dx = e.clientX - playerDragStartRef.current.x;
+                const dy = e.clientY - playerDragStartRef.current.y;
+                if (Math.abs(dx) > 3 || Math.abs(dy) > 3) playerDidDragRef.current = true;
+                setMapPan({
+                  x: playerPanStartRef.current.x + dx,
+                  y: playerPanStartRef.current.y + dy,
+                });
+              }}
+              onMouseUp={() => setIsDraggingPlayerMap(false)}
+              onMouseLeave={() => setIsDraggingPlayerMap(false)}
+              onWheel={(e) => {
+                e.preventDefault();
+                const rect = playerMapContainerRef.current?.getBoundingClientRect();
+                if (!rect) return;
+                const mouseX = e.clientX - rect.left;
+                const mouseY = e.clientY - rect.top;
+                const zoomFactor = e.deltaY < 0 ? 1.15 : 0.87;
+                const nextScale = Math.min(Math.max(mapScale * zoomFactor, 0.4), 6.0);
+                const worldX = (mouseX - mapPan.x) / mapScale;
+                const worldY = (mouseY - mapPan.y) / mapScale;
+                setMapScale(nextScale);
+                setMapPan({
+                  x: mouseX - worldX * nextScale,
+                  y: mouseY - worldY * nextScale,
+                });
+              }}
+              onDoubleClick={(e) => {
+                const rect = playerMapContainerRef.current?.getBoundingClientRect();
+                if (!rect) return;
+                const mouseX = e.clientX - rect.left;
+                const mouseY = e.clientY - rect.top;
+                const nextScale = Math.min(mapScale * 1.5, 6.0);
+                const worldX = (mouseX - mapPan.x) / mapScale;
+                const worldY = (mouseY - mapPan.y) / mapScale;
+                setMapScale(nextScale);
+                setMapPan({
+                  x: mouseX - worldX * nextScale,
+                  y: mouseY - worldY * nextScale,
+                });
+              }}
+              style={{
+                position: 'relative',
+                width: '100%',
+                height: 'calc(100vh - 280px)',
+                minHeight: '480px',
+                background: '#090d15',
+                borderRadius: '12px',
+                overflow: 'hidden',
+                border: '1px solid var(--border-medium)',
+                boxShadow: 'inset 0 0 40px rgba(0,0,0,0.85)',
+                cursor: isDraggingPlayerMap ? 'grabbing' : 'grab',
+                userSelect: 'none',
+              }}
+            >
+              <div
+                style={{
+                  position: 'relative',
+                  width: '100%',
+                  height: '100%',
+                  transform: `translate(${mapPan.x}px, ${mapPan.y}px) scale(${mapScale})`,
+                  transformOrigin: '0 0',
+                  transition: isDraggingPlayerMap ? 'none' : 'transform 0.08s ease-out',
+                }}
+              >
+                {playerMapUrl && (
+                  <img
+                    src={playerMapUrl}
+                    alt={activePlayerMap.title}
+                    draggable={false}
+                    style={{
+                      width: '100%',
+                      height: '100%',
+                      objectFit: 'contain',
+                      pointerEvents: 'none',
+                    }}
+                  />
+                )}
+
+                {/* Revealed Pins Only */}
+                {playerPins.map((pin: any) => {
+                  const isSelected = selectedPlayerPin?.id === pin.id;
+                  return (
+                    <div
+                      key={pin.id}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedPlayerPin(pin);
+                        const loc = graphData.nodes.find((n) => n.id === pin.nodeId);
+                        if (loc) setSelectedNode(loc);
+                      }}
+                      style={{
+                        position: 'absolute',
+                        left: `${pin.x}%`,
+                        top: `${pin.y}%`,
+                        transform: 'translate(-50%, -100%)',
+                        cursor: 'pointer',
+                        zIndex: 20,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: '32px',
+                          height: '32px',
+                          borderRadius: '50% 50% 50% 0',
+                          transform: 'rotate(-45deg)',
+                          background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          boxShadow: isSelected
+                            ? '0 0 16px rgba(16, 185, 129, 0.9), 0 4px 12px rgba(0,0,0,0.6)'
+                            : '0 3px 10px rgba(0,0,0,0.7)',
+                          border: isSelected ? '2.5px solid #10b981' : '2px solid #fff',
+                        }}
+                      >
+                        <MapPin size={16} color="#fff" style={{ transform: 'rotate(45deg)' }} />
+                      </div>
+                      <div
+                        style={{
+                          background: 'rgba(15, 23, 42, 0.9)',
+                          backdropFilter: 'blur(4px)',
+                          border: `1px solid ${isSelected ? '#10b981' : 'var(--border-medium)'}`,
+                          borderRadius: '4px',
+                          padding: '2px 6px',
+                          fontSize: '0.72rem',
+                          fontWeight: 700,
+                          color: isSelected ? 'var(--color-emerald)' : '#fff',
+                          whiteSpace: 'nowrap',
+                          marginTop: '4px',
+                          boxShadow: '0 2px 6px rgba(0,0,0,0.6)',
+                        }}
+                      >
+                        {pin.label}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Floating Google Maps-Style Controls Widget */}
+              <div
+                style={{
+                  position: 'absolute',
+                  bottom: '24px',
+                  right: '24px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '6px',
+                  zIndex: 30,
+                }}
+              >
+                <button
+                  onClick={() => setMapScale((s) => Math.min(s * 1.25, 6.0))}
+                  className="btn btn-secondary glass-panel"
+                  style={{ width: '38px', height: '38px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '8px' }}
+                  title="Zoom In (+)"
+                >
+                  <ZoomIn size={18} />
+                </button>
+                <div
+                  style={{
+                    background: 'rgba(15, 23, 42, 0.85)',
+                    backdropFilter: 'blur(8px)',
+                    border: '1px solid var(--border-medium)',
+                    borderRadius: '6px',
+                    padding: '2px 4px',
+                    fontSize: '0.68rem',
+                    fontWeight: 700,
+                    color: 'var(--text-gold)',
+                    textAlign: 'center',
+                  }}
+                >
+                  {Math.round(mapScale * 100)}%
+                </div>
+                <button
+                  onClick={() => setMapScale((s) => Math.max(s * 0.8, 0.4))}
+                  className="btn btn-secondary glass-panel"
+                  style={{ width: '38px', height: '38px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '8px' }}
+                  title="Zoom Out (-)"
+                >
+                  <ZoomOut size={18} />
+                </button>
+                <button
+                  onClick={() => {
+                    setMapScale(1);
+                    setMapPan({ x: 0, y: 0 });
+                  }}
+                  className="btn btn-secondary glass-panel"
+                  style={{ width: '38px', height: '38px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '8px' }}
+                  title="Reset Pan & Zoom"
+                >
+                  <RotateCcw size={17} />
+                </button>
+              </div>
+
+              {/* Pin Detail Card for Players */}
+              {selectedPlayerPin && (
+                <div
+                  className="glass-panel animate-fade-in"
+                  style={{
+                    position: 'absolute',
+                    bottom: '20px',
+                    left: '20px',
+                    width: '320px',
+                    borderRadius: '10px',
+                    padding: '16px',
+                    zIndex: 30,
+                    boxShadow: '0 10px 30px rgba(0,0,0,0.7)',
+                    border: '1px solid #10b981',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                    <span className="badge badge-location" style={{ borderColor: '#10b981', color: '#10b981' }}>Discovered Location</span>
+                    <button
+                      onClick={() => setSelectedPlayerPin(null)}
+                      style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <h4 style={{ fontSize: '1.05rem', color: 'var(--text-primary)', margin: '4px 0' }}>{selectedPlayerPin.label}</h4>
+                  {selectedNode && selectedNode.id === selectedPlayerPin.nodeId && (
+                    <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', margin: '6px 0 0 0', lineHeight: 1.5 }}>
+                      {selectedNode.summary || selectedNode.subtitle || 'Known point of interest on the campaign map.'}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="glass-panel" style={{ padding: '40px', textAlign: 'center', borderRadius: '12px' }}>
+              <ImageIcon size={40} style={{ color: 'var(--text-muted)', margin: '0 auto 10px' }} />
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                No maps have been revealed to the party yet. When the DM shares a regional chart or battle grid, it will appear here.
+              </p>
+            </div>
+          )}
         </div>
       )}
     </div>

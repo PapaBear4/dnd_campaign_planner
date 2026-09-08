@@ -16,6 +16,12 @@ import {
 } from 'lucide-react';
 import { createEdge, createNode, deleteEdge } from '../api';
 import { EdgeItem, GraphData, NodeItem, NodeType } from '../types';
+import {
+  ALIGNMENTS,
+  CREATURE_ROLES,
+  getCreatureAlignment,
+  getCreatureRole,
+} from '../utils/alignmentAndRoles';
 
 interface GraphViewProps {
   graphData: GraphData;
@@ -298,6 +304,47 @@ export const GraphView: React.FC<GraphViewProps> = ({
       for (const n of nodes) {
         const isHovered = hovered?.id === n.id;
 
+        // Role & Alignment cues
+        const isCreature = n.node.type === 'npc' || n.node.type === 'monster';
+        const role = isCreature ? getCreatureRole(n.node) : undefined;
+        const align = isCreature ? getCreatureAlignment(n.node) : undefined;
+
+        // Role-based auras
+        if (role === 'boss' || role === 'villain') {
+          // Menacing crimson aura for bosses and villains
+          ctx.beginPath();
+          ctx.arc(n.x, n.y, n.radius + 6, 0, Math.PI * 2);
+          ctx.fillStyle = role === 'boss' ? 'rgba(220, 38, 38, 0.28)' : 'rgba(244, 63, 94, 0.22)';
+          ctx.fill();
+          ctx.lineWidth = 1.6;
+          ctx.strokeStyle = role === 'boss' ? '#dc2626' : '#f43f5e';
+          ctx.stroke();
+        } else if (role === 'companion') {
+          // Soft emerald/cyan glow for companions and sidekicks
+          ctx.beginPath();
+          ctx.arc(n.x, n.y, n.radius + 5, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(16, 185, 129, 0.22)';
+          ctx.fill();
+          ctx.lineWidth = 1.4;
+          ctx.strokeStyle = '#10b981';
+          ctx.stroke();
+        } else if (role === 'patron') {
+          // Celestial gold aura for cosmic patrons
+          ctx.beginPath();
+          ctx.arc(n.x, n.y, n.radius + 6, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(234, 179, 8, 0.25)';
+          ctx.fill();
+          ctx.lineWidth = 1.6;
+          ctx.strokeStyle = '#eab308';
+          ctx.stroke();
+        } else if (role === 'beast') {
+          // Earthy forest glow for wildlife
+          ctx.beginPath();
+          ctx.arc(n.x, n.y, n.radius + 4, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(132, 204, 22, 0.18)';
+          ctx.fill();
+        }
+
         // Outer glow on hover
         if (isHovered) {
           ctx.beginPath();
@@ -342,10 +389,14 @@ export const GraphView: React.FC<GraphViewProps> = ({
         ctx.textBaseline = 'top';
         ctx.fillText(n.node.title, n.x, n.y + n.radius + 5);
 
-        // Node Subtitle / Type with draft/canon notation
+        // Node Subtitle / Type with role icon and alignment abbreviation
         ctx.fillStyle = isCanon ? '#94a3b8' : '#e2e8f0';
         ctx.font = '9px Inter, sans-serif';
-        const subtitleText = (n.node.subtitle || n.node.type) + (!isCanon ? ' (Draft)' : '');
+        const roleMeta = role ? CREATURE_ROLES[role] : undefined;
+        const alignMeta = align ? ALIGNMENTS[align] : undefined;
+        const rolePrefix = roleMeta ? `${roleMeta.icon} ` : '';
+        const alignSuffix = alignMeta ? ` [${alignMeta.abbr}]` : '';
+        const subtitleText = rolePrefix + (n.node.subtitle || n.node.type) + alignSuffix + (!isCanon ? ' (Draft)' : '');
         ctx.fillText(subtitleText, n.x, n.y + n.radius + 18);
       }
 

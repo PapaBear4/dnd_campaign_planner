@@ -15,6 +15,24 @@ import {
 } from 'lucide-react';
 import { deleteNode, toggleNodeCanon, toggleNodeReveal, updateNode } from '../api';
 import { NodeItem, NodeType } from '../types';
+import {
+  Alignment,
+  CreatureRole,
+  CreatureSize,
+  CreatureType,
+  format5eSubtitle,
+  getCreatureAlignment,
+  getCreatureRole,
+  getCreature5eType,
+  CREATURE_SIZES,
+  CREATURE_TYPES,
+  CREATURE_ROLES,
+} from '../utils/alignmentAndRoles';
+import {
+  AlignmentBadge,
+  AlignmentMatrixSelector,
+  RolePill,
+} from './AlignmentSelector';
 
 interface NodeDrawerProps {
   node: NodeItem | null;
@@ -43,6 +61,14 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
   const [isCanon, setIsCanon] = useState<boolean>(node.is_canon ?? true);
   const [isSaving, setIsSaving] = useState(false);
 
+  // 5e Classification State
+  const [role, setRole] = useState<CreatureRole>(getCreatureRole(node));
+  const [alignment, setAlignment] = useState<Alignment>(getCreatureAlignment(node));
+  const [size, setSize] = useState<CreatureSize>(getCreature5eType(node).size);
+  const [type, setType] = useState<CreatureType>(getCreature5eType(node).type);
+  const [tag, setTag] = useState<string>(getCreature5eType(node).tag || '');
+  const [showAlignmentMatrix, setShowAlignmentMatrix] = useState(false);
+
   // When Co-DM is open, dock on the other (left) side so it doesn't collide
   const [dockSide, setDockSide] = useState<'left' | 'right'>('left');
 
@@ -59,6 +85,14 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
     setContent(node.content_markdown || '');
     setRevealed(node.revealed_to_players);
     setIsCanon(node.is_canon ?? true);
+
+    setRole(getCreatureRole(node));
+    setAlignment(getCreatureAlignment(node));
+    const tInfo = getCreature5eType(node);
+    setSize(tInfo.size);
+    setType(tInfo.type);
+    setTag(tInfo.tag || '');
+    setShowAlignmentMatrix(false);
   }, [node.id]);
 
   const handleToggleCanon = async () => {
@@ -92,15 +126,35 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
     }
   };
 
+  const handleSyncSubtitle = (
+    newSize: CreatureSize = size,
+    newType: CreatureType = type,
+    newAlign: Alignment = alignment,
+    newTag: string = tag
+  ) => {
+    const formatted = format5eSubtitle(newSize, newType, newAlign, newTag);
+    setSubtitle(formatted);
+  };
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSaving(true);
     try {
+      const dataJson = {
+        ...(node.data_json || {}),
+        role,
+        alignment,
+        creature_size: size,
+        creature_type: type,
+        creature_tag: tag || undefined,
+      };
+
       await updateNode(node.id, {
         title,
         subtitle,
         summary,
         content_markdown: content,
+        data_json: dataJson,
         revealed_to_players: revealed,
         is_canon: isCanon,
       });
@@ -235,9 +289,26 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
           </div>
 
           <div>
-            <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
-              Subtitle / Epithet
-            </label>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+              <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                Subtitle / Epithet
+              </label>
+              <button
+                type="button"
+                onClick={() => handleSyncSubtitle()}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: '0.68rem',
+                  color: 'var(--color-gold)',
+                  cursor: 'pointer',
+                  textDecoration: 'underline',
+                }}
+                title="Format subtitle using current 5e classification"
+              >
+                Sync 5e Format
+              </button>
+            </div>
             <input
               type="text"
               value={subtitle}
@@ -254,6 +325,166 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
                 outline: 'none',
               }}
             />
+          </div>
+
+          {/* 5e Classification: Role, Type & Alignment */}
+          <div
+            style={{
+              padding: '12px',
+              borderRadius: '8px',
+              background: 'rgba(255, 255, 255, 0.03)',
+              border: '1px solid var(--border-medium)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '10px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--color-gold)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                ⚔️ 5e Role &amp; Alignment Matrix
+              </span>
+              <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                <RolePill role={role} size="sm" />
+                <AlignmentBadge alignment={alignment} size="sm" />
+              </div>
+            </div>
+
+            {/* Role selection */}
+            <div>
+              <label style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
+                Tactical / Narrative Role
+              </label>
+              <select
+                value={role}
+                onChange={(e) => setRole(e.target.value as CreatureRole)}
+                style={{
+                  width: '100%',
+                  padding: '6px 8px',
+                  background: 'var(--bg-surface)',
+                  border: '1px solid var(--border-medium)',
+                  borderRadius: '6px',
+                  color: 'var(--text-primary)',
+                  fontSize: '0.8rem',
+                }}
+              >
+                {(Object.keys(CREATURE_ROLES) as CreatureRole[]).map((r) => (
+                  <option key={r} value={r}>
+                    {CREATURE_ROLES[r].icon} {CREATURE_ROLES[r].label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Size & Type */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' }}>
+              <div>
+                <label style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>
+                  Size
+                </label>
+                <select
+                  value={size}
+                  onChange={(e) => {
+                    const newS = e.target.value as CreatureSize;
+                    setSize(newS);
+                    handleSyncSubtitle(newS, type, alignment, tag);
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '5px 6px',
+                    background: 'var(--bg-surface)',
+                    border: '1px solid var(--border-medium)',
+                    borderRadius: '6px',
+                    color: 'var(--text-primary)',
+                    fontSize: '0.75rem',
+                  }}
+                >
+                  {CREATURE_SIZES.map((s) => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>
+                  5e Type
+                </label>
+                <select
+                  value={type}
+                  onChange={(e) => {
+                    const newT = e.target.value as CreatureType;
+                    setType(newT);
+                    handleSyncSubtitle(size, newT, alignment, tag);
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '5px 6px',
+                    background: 'var(--bg-surface)',
+                    border: '1px solid var(--border-medium)',
+                    borderRadius: '6px',
+                    color: 'var(--text-primary)',
+                    fontSize: '0.75rem',
+                  }}
+                >
+                  {CREATURE_TYPES.map((t) => (
+                    <option key={t} value={t}>{t}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>
+                  Tag / Subtype
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Druid"
+                  value={tag}
+                  onChange={(e) => {
+                    setTag(e.target.value);
+                    handleSyncSubtitle(size, type, alignment, e.target.value);
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '5px 6px',
+                    background: 'var(--bg-surface)',
+                    border: '1px solid var(--border-medium)',
+                    borderRadius: '6px',
+                    color: 'var(--text-primary)',
+                    fontSize: '0.75rem',
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* Alignment Matrix Dropdown / Expander */}
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                <label style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                  Moral Compass &amp; 5e Alignment
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setShowAlignmentMatrix(!showAlignmentMatrix)}
+                  className="btn btn-ghost"
+                  style={{ padding: '2px 6px', fontSize: '0.7rem', color: 'var(--color-gold)' }}
+                >
+                  {showAlignmentMatrix ? 'Hide 3x3 Grid' : 'Edit 3x3 Matrix ▾'}
+                </button>
+              </div>
+
+              {showAlignmentMatrix && (
+                <div style={{ animation: 'fadeIn 0.15s ease', marginTop: '6px' }}>
+                  <AlignmentMatrixSelector
+                    value={alignment}
+                    onChange={(newAlign) => {
+                      setAlignment(newAlign);
+                      handleSyncSubtitle(size, type, newAlign, tag);
+                    }}
+                    compact
+                  />
+                </div>
+              )}
+            </div>
           </div>
 
           <div>
