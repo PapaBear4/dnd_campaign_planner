@@ -4,16 +4,29 @@ import {
   Compass,
   Download,
   Eye,
+  Moon,
+  Palette,
   Plus,
+  Scroll,
   Search,
   Settings,
   Sparkles,
+  Sun,
   Upload,
   UserCheck,
   X,
 } from 'lucide-react';
 import { Campaign, NodeItem } from '../types';
 import { exportCampaign, importCampaign, searchNodes } from '../api';
+
+export type AppTheme = 'obsidian' | 'sunlight' | 'parchment' | 'underdark';
+
+const THEMES: { id: AppTheme; label: string; icon: string; desc: string; bg: string; border: string }[] = [
+  { id: 'obsidian', label: 'Obsidian', icon: '🌑', desc: 'Dark Fantasy', bg: '#0f1420', border: '#f59e0b' },
+  { id: 'sunlight', label: 'Sunlight', icon: '☀️', desc: 'Crisp Light Mode', bg: '#ffffff', border: '#d97706' },
+  { id: 'parchment', label: 'Parchment', icon: '📜', desc: 'Classic D&D Tome', bg: '#f7f3e8', border: '#b45309' },
+  { id: 'underdark', label: 'Underdark', icon: '🌌', desc: 'Bioluminescent Void', bg: '#0b1120', border: '#06b6d4' },
+];
 
 interface NavbarProps {
   campaigns: Campaign[];
@@ -43,6 +56,23 @@ export const Navbar: React.FC<NavbarProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<NodeItem[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+
+  const [theme, setTheme] = useState<AppTheme>(() => {
+    const saved = localStorage.getItem('dnd_app_theme') as AppTheme;
+    if (saved && ['obsidian', 'sunlight', 'parchment', 'underdark'].includes(saved)) {
+      document.documentElement.setAttribute('data-theme', saved);
+      return saved;
+    }
+    return 'obsidian';
+  });
+  const [isThemeMenuOpen, setIsThemeMenuOpen] = useState(false);
+
+  const handleSelectTheme = (newTheme: AppTheme) => {
+    setTheme(newTheme);
+    localStorage.setItem('dnd_app_theme', newTheme);
+    document.documentElement.setAttribute('data-theme', newTheme);
+    setIsThemeMenuOpen(false);
+  };
 
   const activeCampaign = campaigns.find((c) => c.id === activeCampaignId);
 
@@ -143,7 +173,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             style={{
               background: 'transparent',
               border: 'none',
-              color: '#fff',
+              color: 'var(--text-primary)',
               fontSize: '0.85rem',
               fontWeight: 600,
               outline: 'none',
@@ -151,7 +181,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             }}
           >
             {campaigns.map((c) => (
-              <option key={c.id} value={c.id} style={{ background: '#121722', color: '#fff' }}>
+              <option key={c.id} value={c.id} style={{ background: 'var(--bg-surface)', color: 'var(--text-primary)' }}>
                 {c.name}
               </option>
             ))}
@@ -180,7 +210,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               borderRadius: '8px',
               background: 'var(--bg-surface)',
               border: '1px solid var(--border-subtle)',
-              color: '#fff',
+              color: 'var(--text-primary)',
               fontSize: '0.85rem',
               outline: 'none'
             }}
@@ -233,7 +263,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
               >
                 <div>
-                  <div style={{ fontWeight: 600, fontSize: '0.85rem', color: '#fff' }}>{node.title}</div>
+                  <div style={{ fontWeight: 600, fontSize: '0.85rem', color: 'var(--text-primary)' }}>{node.title}</div>
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{node.summary?.slice(0, 70)}</div>
                 </div>
                 <span className={`badge badge-${node.type}`}>{node.type}</span>
@@ -250,9 +280,10 @@ export const Navbar: React.FC<NavbarProps> = ({
           onClick={onTogglePlayerMode}
           className="btn"
           style={{
-            background: isPlayerMode ? 'rgba(16, 185, 129, 0.2)' : 'rgba(59, 130, 246, 0.2)',
-            border: isPlayerMode ? '1px solid #10b981' : '1px solid #3b82f6',
-            color: isPlayerMode ? '#34d399' : '#60a5fa',
+            background: isPlayerMode ? 'rgba(16, 185, 129, 0.15)' : 'var(--color-arcane-blue-bg)',
+            border: isPlayerMode ? '1px solid #10b981' : '1px solid var(--color-arcane-blue-border)',
+            color: isPlayerMode ? (theme === 'parchment' || theme === 'sunlight' ? '#065f46' : '#34d399') : 'var(--color-arcane-blue-text)',
+            fontWeight: 600,
             padding: '6px 14px'
           }}
           title="Toggle between DM Master Suite and Player Portal"
@@ -290,6 +321,87 @@ export const Navbar: React.FC<NavbarProps> = ({
             </button>
           </>
         )}
+
+        {/* Theme Picker Dropdown */}
+        <div style={{ position: 'relative' }}>
+          <button
+            onClick={() => setIsThemeMenuOpen(!isThemeMenuOpen)}
+            className="btn btn-ghost"
+            title={`Current Theme: ${theme.toUpperCase()} (Click to change)`}
+            style={{ padding: '8px', display: 'flex', alignItems: 'center', gap: '4px' }}
+          >
+            {theme === 'sunlight' ? (
+              <Sun size={18} style={{ color: '#d97706' }} />
+            ) : theme === 'parchment' ? (
+              <Scroll size={18} style={{ color: '#b45309' }} />
+            ) : theme === 'underdark' ? (
+              <Palette size={18} style={{ color: '#06b6d4' }} />
+            ) : (
+              <Moon size={18} style={{ color: '#f59e0b' }} />
+            )}
+          </button>
+
+          {isThemeMenuOpen && (
+            <div
+              className="glass-panel animate-fade-in"
+              style={{
+                position: 'absolute',
+                top: '100%',
+                right: 0,
+                marginTop: '8px',
+                width: '220px',
+                borderRadius: '10px',
+                padding: '8px',
+                boxShadow: '0 8px 30px rgba(0,0,0,0.5)',
+                zIndex: 100,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '4px',
+                background: 'var(--bg-surface)',
+                border: '1px solid var(--border-medium)',
+              }}
+            >
+              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', padding: '4px 8px', letterSpacing: '0.05em' }}>
+                THEMES &amp; APPEARANCE
+              </div>
+              {THEMES.map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => handleSelectTheme(t.id)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    padding: '8px 10px',
+                    borderRadius: '6px',
+                    border: theme === t.id ? `1px solid ${t.border}` : '1px solid transparent',
+                    background: theme === t.id ? 'var(--bg-card-hover)' : 'transparent',
+                    color: 'var(--text-primary)',
+                    cursor: 'pointer',
+                    fontSize: '0.82rem',
+                    textAlign: 'left',
+                    transition: 'all 0.15s ease',
+                  }}
+                  onMouseEnter={(e) => {
+                    if (theme !== t.id) e.currentTarget.style.background = 'var(--bg-card)';
+                  }}
+                  onMouseLeave={(e) => {
+                    if (theme !== t.id) e.currentTarget.style.background = 'transparent';
+                  }}
+                >
+                  <span style={{ fontSize: '1.1rem' }}>{t.icon}</span>
+                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    <span style={{ fontWeight: 600 }}>{t.label}</span>
+                    <span style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>{t.desc}</span>
+                  </div>
+                  {theme === t.id && (
+                    <span style={{ marginLeft: 'auto', color: 'var(--color-gold)', fontSize: '0.75rem' }}>●</span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
 
         {/* Settings Modal */}
         <button onClick={onOpenSettings} className="btn btn-ghost" title="Settings &amp; Model Selection" style={{ padding: '8px' }}>

@@ -10,16 +10,18 @@ import {
   Clock,
   Eye,
   EyeOff,
+  Feather,
   Flame,
   MessageSquare,
   Mic,
   Plus,
   Shield,
+  ShieldCheck,
   Sparkles,
   Swords,
   Trash2,
 } from 'lucide-react';
-import { createEdge, createNode, deleteNode, toggleNodeReveal, updateNode } from '../api';
+import { createEdge, createNode, deleteNode, toggleNodeCanon, toggleNodeReveal, updateNode } from '../api';
 import { HierarchyItem, NodeItem, NodeType } from '../types';
 
 interface HierarchyPlannerProps {
@@ -50,6 +52,16 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
 
   const toggleExpand = (id: string) => {
     setExpandedNodes((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const handleToggleCanon = async (e: React.MouseEvent, node: NodeItem) => {
+    e.stopPropagation();
+    try {
+      await toggleNodeCanon(node.id);
+      onRefresh();
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   const handleToggleReveal = async (e: React.MouseEvent, node: NodeItem) => {
@@ -238,7 +250,7 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
 
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ fontWeight: 700, fontSize: '0.95rem', color: '#fff' }}>{node.title}</span>
+                <span style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--text-primary)' }}>{node.title}</span>
                 {node.subtitle && (
                   <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>• {node.subtitle}</span>
                 )}
@@ -254,52 +266,25 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
           {/* Right: Status Pill, Reveal Eye, Co-DM focus, Add Child, Delete */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             {/* Status Selector */}
-            <div style={{ display: 'flex', gap: '4px', background: 'var(--bg-surface)', padding: '2px 4px', borderRadius: '6px' }}>
+            <div style={{ display: 'flex', gap: '4px', background: 'var(--bg-surface)', padding: '2px 4px', borderRadius: '6px', border: '1px solid var(--border-subtle)' }}>
               <button
                 onClick={(e) => handleStatusChange(e, node, 'planned')}
                 title="Status: Planned"
-                style={{
-                  background: status === 'planned' ? 'rgba(148, 163, 184, 0.2)' : 'none',
-                  border: 'none',
-                  color: status === 'planned' ? '#e2e8f0' : 'var(--text-muted)',
-                  cursor: 'pointer',
-                  padding: '4px 6px',
-                  borderRadius: '4px',
-                  fontSize: '0.7rem',
-                  fontWeight: 600,
-                }}
+                className={`status-pill ${status === 'planned' ? 'status-planned' : 'status-inactive'}`}
               >
                 Planned
               </button>
               <button
                 onClick={(e) => handleStatusChange(e, node, 'in_progress')}
                 title="Status: In Progress"
-                style={{
-                  background: status === 'in_progress' ? 'rgba(245, 158, 11, 0.25)' : 'none',
-                  border: 'none',
-                  color: status === 'in_progress' ? '#fbbf24' : 'var(--text-muted)',
-                  cursor: 'pointer',
-                  padding: '4px 6px',
-                  borderRadius: '4px',
-                  fontSize: '0.7rem',
-                  fontWeight: 600,
-                }}
+                className={`status-pill ${status === 'in_progress' ? 'status-inprogress' : 'status-inactive'}`}
               >
                 In Progress
               </button>
               <button
                 onClick={(e) => handleStatusChange(e, node, 'completed')}
                 title="Status: Completed (Victory!)"
-                style={{
-                  background: status === 'completed' ? 'rgba(16, 185, 129, 0.25)' : 'none',
-                  border: 'none',
-                  color: status === 'completed' ? '#34d399' : 'var(--text-muted)',
-                  cursor: 'pointer',
-                  padding: '4px 6px',
-                  borderRadius: '4px',
-                  fontSize: '0.7rem',
-                  fontWeight: 600,
-                }}
+                className={`status-pill ${status === 'completed' ? 'status-completed' : 'status-inactive'}`}
               >
                 Completed
               </button>
@@ -311,11 +296,24 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
               className="btn btn-ghost"
               style={{
                 padding: '6px',
-                color: node.revealed_to_players ? '#10b981' : 'var(--text-muted)',
+                color: node.revealed_to_players ? 'var(--color-emerald)' : 'var(--text-muted)',
               }}
               title={node.revealed_to_players ? 'Revealed to Players (Click to Hide)' : 'Hidden Secret (Click to Reveal)'}
             >
               {node.revealed_to_players ? <Eye size={16} /> : <EyeOff size={16} />}
+            </button>
+
+            {/* Canon / Protected Lore Button */}
+            <button
+              onClick={(e) => handleToggleCanon(e, node)}
+              className="btn btn-ghost"
+              style={{
+                padding: '6px',
+                color: (node.is_canon ?? true) ? 'var(--color-gold)' : 'var(--text-muted)',
+              }}
+              title={(node.is_canon ?? true) ? 'Canon Lore 🔒 (Protected from AI deletion) - Click to Mark as Draft' : 'Working Draft 📝 - Click to Promote to Canon'}
+            >
+              {(node.is_canon ?? true) ? <ShieldCheck size={16} /> : <Feather size={16} />}
             </button>
 
             {/* Focus in Co-DM */}
@@ -345,13 +343,14 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
                   display: 'flex',
                   alignItems: 'center',
                   gap: '4px',
-                  color: '#93c5fd',
-                  borderColor: 'rgba(96, 165, 250, 0.4)',
-                  background: 'rgba(59, 130, 246, 0.1)',
+                  color: 'var(--color-arcane-blue-text)',
+                  borderColor: 'var(--color-arcane-blue-border)',
+                  background: 'var(--color-arcane-blue-bg)',
+                  fontWeight: 600,
                 }}
                 title="Upload session transcript to adapt graph & timeline"
               >
-                <Mic size={13} /> Adapt Session
+                <Mic size={13} style={{ color: 'var(--color-arcane-blue-text)' }} /> Adapt Session
               </button>
             )}
 
@@ -413,12 +412,14 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
                 display: 'flex',
                 alignItems: 'center',
                 gap: '8px',
-                color: '#93c5fd',
-                borderColor: 'rgba(96, 165, 250, 0.4)',
+                color: 'var(--color-arcane-blue-text)',
+                borderColor: 'var(--color-arcane-blue-border)',
+                background: 'var(--color-arcane-blue-bg)',
+                fontWeight: 600,
               }}
               title="Upload session transcript to adapt graph & timeline"
             >
-              <Mic size={16} style={{ color: '#60a5fa' }} />
+              <Mic size={16} style={{ color: 'var(--color-arcane-blue-text)' }} />
               Ingest Session Transcript
             </button>
           )}
@@ -515,7 +516,7 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
                     background: 'var(--bg-surface)',
                     border: '1px solid var(--border-subtle)',
                     borderRadius: '8px',
-                    color: '#fff',
+                    color: 'var(--text-primary)',
                     outline: 'none',
                   }}
                 />
@@ -536,7 +537,7 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
                     background: 'var(--bg-surface)',
                     border: '1px solid var(--border-subtle)',
                     borderRadius: '8px',
-                    color: '#fff',
+                    color: 'var(--text-primary)',
                     outline: 'none',
                   }}
                 />

@@ -30,11 +30,21 @@ def get_db():
 def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with get_db() as conn:
+        cursor = conn.cursor()
+        # Migrations for existing databases: ensure is_canon column exists before index creation
+        try:
+            cursor.execute("ALTER TABLE nodes ADD COLUMN is_canon INTEGER NOT NULL DEFAULT 1;")
+        except Exception:
+            pass
+        try:
+            cursor.execute("ALTER TABLE edges ADD COLUMN is_canon INTEGER NOT NULL DEFAULT 1;")
+        except Exception:
+            pass
+
         with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
             conn.executescript(f.read())
         
         # Check if default campaign exists
-        cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) as count FROM campaigns")
         if cursor.fetchone()["count"] == 0:
             from datetime import datetime, timezone

@@ -4,14 +4,16 @@ import {
   Check,
   Eye,
   EyeOff,
+  Feather,
   FileText,
   Save,
+  ShieldCheck,
   Sparkles,
   Tag,
   Trash2,
   X,
 } from 'lucide-react';
-import { deleteNode, toggleNodeReveal, updateNode } from '../api';
+import { deleteNode, toggleNodeCanon, toggleNodeReveal, updateNode } from '../api';
 import { NodeItem, NodeType } from '../types';
 
 interface NodeDrawerProps {
@@ -19,6 +21,8 @@ interface NodeDrawerProps {
   onClose: () => void;
   onRefresh: () => void;
   onFocusCoDM: (node: NodeItem) => void;
+  isAgentOpen?: boolean;
+  coDmWidth?: number;
 }
 
 export const NodeDrawer: React.FC<NodeDrawerProps> = ({
@@ -26,6 +30,8 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
   onClose,
   onRefresh,
   onFocusCoDM,
+  isAgentOpen = false,
+  coDmWidth = 420,
 }) => {
   if (!node) return null;
 
@@ -34,7 +40,17 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
   const [summary, setSummary] = useState(node.summary || '');
   const [content, setContent] = useState(node.content_markdown || '');
   const [revealed, setRevealed] = useState(node.revealed_to_players);
+  const [isCanon, setIsCanon] = useState<boolean>(node.is_canon ?? true);
   const [isSaving, setIsSaving] = useState(false);
+
+  // When Co-DM is open, dock on the other (left) side so it doesn't collide
+  const [dockSide, setDockSide] = useState<'left' | 'right'>('left');
+
+  useEffect(() => {
+    if (isAgentOpen) {
+      setDockSide('left');
+    }
+  }, [isAgentOpen]);
 
   useEffect(() => {
     setTitle(node.title);
@@ -42,24 +58,16 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
     setSummary(node.summary || '');
     setContent(node.content_markdown || '');
     setRevealed(node.revealed_to_players);
+    setIsCanon(node.is_canon ?? true);
   }, [node.id]);
 
-  const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSaving(true);
+  const handleToggleCanon = async () => {
     try {
-      await updateNode(node.id, {
-        title,
-        subtitle,
-        summary,
-        content_markdown: content,
-        revealed_to_players: revealed,
-      });
-      setIsSaving(false);
+      const updated = await toggleNodeCanon(node.id);
+      setIsCanon(updated.is_canon ?? true);
       onRefresh();
     } catch (err) {
       console.error(err);
-      setIsSaving(false);
     }
   };
 
@@ -74,38 +82,68 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
   };
 
   const handleDelete = async () => {
-    if (window.confirm(`Delete "${node.title}" from campaign?`)) {
+    if (!window.confirm(`Are you sure you want to delete "${node.title}"?`)) return;
+    try {
       await deleteNode(node.id);
       onClose();
       onRefresh();
+    } catch (err) {
+      console.error(err);
     }
   };
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSaving(true);
+    try {
+      await updateNode(node.id, {
+        title,
+        subtitle,
+        summary,
+        content_markdown: content,
+        revealed_to_players: revealed,
+        is_canon: isCanon,
+      });
+      setIsSaving(false);
+      onRefresh();
+    } catch (err) {
+      console.error(err);
+      setIsSaving(false);
+      alert('Failed to save node changes');
+    }
+  };
+
+  const isLeft = dockSide === 'left';
 
   return (
     <div
       style={{
         position: 'fixed',
-        inset: 0,
-        background: 'rgba(5, 8, 14, 0.65)',
-        backdropFilter: 'blur(4px)',
+        top: '64px',
+        bottom: 0,
+        left: 0,
+        right: isAgentOpen && isLeft ? `${coDmWidth}px` : 0,
+        background: 'rgba(5, 8, 14, 0.4)',
+        backdropFilter: 'blur(3px)',
         display: 'flex',
-        justifyContent: 'flex-end',
-        zIndex: 250,
+        justifyContent: isLeft ? 'flex-start' : 'flex-end',
+        zIndex: 150,
       }}
       onClick={onClose}
     >
       <div
         className="glass-panel animate-fade-in"
         style={{
-          width: '540px',
-          maxWidth: '100vw',
+          width: '520px',
+          maxWidth: '100%',
           height: '100%',
           overflowY: 'auto',
           padding: '24px',
           display: 'flex',
           flexDirection: 'column',
-          boxShadow: '-10px 0 40px rgba(0,0,0,0.8)',
-          borderLeft: '1px solid var(--border-medium)',
+          boxShadow: isLeft ? '10px 0 35px rgba(0,0,0,0.5)' : '-10px 0 35px rgba(0,0,0,0.5)',
+          borderRight: isLeft ? '1px solid var(--border-medium)' : 'none',
+          borderLeft: !isLeft ? '1px solid var(--border-medium)' : 'none',
         }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -113,10 +151,62 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <span className={`badge badge-${node.type}`}>{node.type}</span>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Node Inspector</span>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600 }}>Entity Details</span>
           </div>
-          <button onClick={onClose} className="btn btn-ghost" style={{ padding: '6px' }}>
-            <X size={18} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <button
+              type="button"
+              onClick={() => setDockSide(isLeft ? 'right' : 'left')}
+              className="btn btn-ghost"
+              style={{ fontSize: '0.72rem', padding: '3px 8px', color: 'var(--text-secondary)' }}
+              title={`Dock to ${isLeft ? 'right' : 'left'} side`}
+            >
+              {isLeft ? 'Dock Right ⇥' : '⇤ Dock Left'}
+            </button>
+            <button onClick={onClose} className="btn btn-ghost" style={{ padding: '6px' }}>
+              <X size={18} />
+            </button>
+          </div>
+        </div>
+
+        {/* Canon Status Card */}
+        <div
+          style={{
+            marginBottom: '14px',
+            padding: '10px 14px',
+            borderRadius: '8px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '10px',
+            background: isCanon ? 'rgba(245, 158, 11, 0.12)' : 'rgba(148, 163, 184, 0.1)',
+            border: `1px solid ${isCanon ? 'rgba(245, 158, 11, 0.4)' : 'var(--border-subtle)'}`,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            {isCanon ? (
+              <ShieldCheck size={20} style={{ color: 'var(--color-gold)', flexShrink: 0 }} />
+            ) : (
+              <Feather size={20} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+            )}
+            <div>
+              <div style={{ fontSize: '0.82rem', fontWeight: 700, color: isCanon ? 'var(--color-gold)' : 'var(--text-secondary)' }}>
+                {isCanon ? '🔒 Canon Lore (Protected)' : '📝 Working Draft (Provisional)'}
+              </div>
+              <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                {isCanon
+                  ? 'Co-DM cannot delete or merge away this node without explicit DM approval.'
+                  : 'Provisional draft; editable and prunable by Co-DM during brainstorming.'}
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleToggleCanon}
+            className={`btn ${isCanon ? 'btn-ghost' : 'btn-secondary'}`}
+            style={{ fontSize: '0.74rem', padding: '4px 10px', flexShrink: 0 }}
+          >
+            {isCanon ? 'Demote to Draft' : 'Promote to Canon'}
           </button>
         </div>
 
@@ -134,9 +224,9 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
                 width: '100%',
                 padding: '8px 12px',
                 background: 'var(--bg-surface)',
-                border: '1px solid var(--border-subtle)',
+                border: '1px solid var(--border-medium)',
                 borderRadius: '6px',
-                color: '#fff',
+                color: 'var(--text-primary)',
                 fontSize: '1.05rem',
                 fontWeight: 700,
                 outline: 'none',
@@ -157,9 +247,9 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
                 width: '100%',
                 padding: '8px 12px',
                 background: 'var(--bg-surface)',
-                border: '1px solid var(--border-subtle)',
+                border: '1px solid var(--border-medium)',
                 borderRadius: '6px',
-                color: '#fff',
+                color: 'var(--text-primary)',
                 fontSize: '0.85rem',
                 outline: 'none',
               }}
@@ -179,9 +269,9 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
                 width: '100%',
                 padding: '8px 12px',
                 background: 'var(--bg-surface)',
-                border: '1px solid var(--border-subtle)',
+                border: '1px solid var(--border-medium)',
                 borderRadius: '6px',
-                color: '#fff',
+                color: 'var(--text-primary)',
                 fontSize: '0.85rem',
                 outline: 'none',
               }}
@@ -202,9 +292,9 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
                 flex: 1,
                 padding: '10px 12px',
                 background: 'var(--bg-surface)',
-                border: '1px solid var(--border-subtle)',
+                border: '1px solid var(--border-medium)',
                 borderRadius: '6px',
-                color: '#fff',
+                color: 'var(--text-primary)',
                 fontFamily: 'var(--font-mono)',
                 fontSize: '0.82rem',
                 lineHeight: 1.6,
@@ -222,7 +312,7 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
                 className="btn btn-secondary"
                 style={{ padding: '6px 12px', fontSize: '0.78rem' }}
               >
-                {revealed ? <Eye size={14} style={{ color: '#10b981' }} /> : <EyeOff size={14} />}
+                {revealed ? <Eye size={14} style={{ color: 'var(--color-emerald)' }} /> : <EyeOff size={14} />}
                 {revealed ? 'Revealed to Players' : 'Hidden Secret'}
               </button>
               <button

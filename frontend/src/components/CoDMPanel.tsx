@@ -2,20 +2,120 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Bot,
+  CheckCircle,
+  ChevronDown,
+  ChevronRight,
   Compass,
   FileText,
   Lightbulb,
   Maximize2,
+  MessageSquare,
   Minimize2,
   Plus,
   Send,
   Sparkles,
+  Trash2,
   User,
   Wand2,
+  Wrench,
   X,
 } from 'lucide-react';
-import { agentApplyExtracted, agentBoxedText, agentChat, agentCoach, agentExtractEntities, agentWeaveHook, createNode } from '../api';
-import { AgentChatMessage, NodeItem } from '../types';
+import {
+  agentApplyExtracted,
+  agentBoxedText,
+  agentChat,
+  agentCoach,
+  agentExtractEntities,
+  agentWeaveHook,
+  createChatThread,
+  createNode,
+  deleteChatThread,
+  getChatThreads,
+  getThreadMessages,
+} from '../api';
+import { AgentActionTaken, AgentChatMessage, ChatThread, NodeItem } from '../types';
+
+const ActionReceipt: React.FC<{ actions: AgentActionTaken[] }> = ({ actions }) => {
+  const [expanded, setExpanded] = useState(false);
+  if (!actions || actions.length === 0) return null;
+
+  return (
+    <div
+      style={{
+        marginTop: '8px',
+        padding: '8px 10px',
+        background: 'var(--bg-card)',
+        borderRadius: '6px',
+        border: '1px solid var(--border-medium)',
+        fontSize: '0.74rem',
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setExpanded(!expanded)}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px',
+          width: '100%',
+          background: 'none',
+          border: 'none',
+          color: 'var(--color-gold)',
+          cursor: 'pointer',
+          padding: 0,
+          fontWeight: 600,
+          textAlign: 'left',
+        }}
+      >
+        <Wrench size={12} />
+        <span>
+          {actions.length} Arcane Operation{actions.length > 1 ? 's' : ''} Executed
+        </span>
+        <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center' }}>
+          {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        </span>
+      </button>
+
+      {expanded && (
+        <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          {actions.map((act, i) => {
+            const isError = act.result?.error || act.result?.success === false;
+            return (
+              <div
+                key={i}
+                style={{
+                  padding: '6px 8px',
+                  background: 'var(--bg-surface)',
+                  borderRadius: '4px',
+                  border: '1px solid var(--border-subtle)',
+                  borderLeft: `3px solid ${isError ? 'var(--color-crimson)' : 'var(--color-emerald)'}`,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600, color: isError ? 'var(--color-crimson)' : 'var(--color-emerald)' }}>
+                  <CheckCircle size={11} />
+                  <span>{act.tool}</span>
+                </div>
+                {act.args && Object.keys(act.args).length > 0 && (
+                  <div style={{ color: 'var(--text-secondary)', marginTop: '2px', fontSize: '0.7rem' }}>
+                    {Object.entries(act.args)
+                      .slice(0, 4)
+                      .map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`)
+                      .join(' | ')}
+                  </div>
+                )}
+                {act.result?.message && (
+                  <div style={{ color: 'var(--text-secondary)', marginTop: '2px', fontStyle: 'italic' }}>
+                    {act.result.message}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
 
 interface CoDMPanelProps {
   isOpen: boolean;
@@ -81,17 +181,134 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Auto-scroll chat independently
-  useEffect(() => {
-    if (toolMode === 'chat') {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [messages, toolMode, loading]);
-
   // Active Tool Modal states
   const [toolMode, setToolMode] = useState<
     'chat' | 'boxed_text' | 'coach' | 'weave_hook' | 'extract_doc'
   >('chat');
+
+  // Threads state for persistent conversations
+  const [threads, setThreads] = useState<ChatThread[]>([]);
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(() => {
+    return localStorage.getItem(`dnd_active_thread_${campaignId}`) || null;
+  });
+  const [isThreadMenuOpen, setIsThreadMenuOpen] = useState(false);
+  const [loadingThreads, setLoadingThreads] = useState(false);
+
+  // Load threads on mount or campaign change
+  const loadThreads = async (preferredThreadId?: string) => {
+    if (!campaignId) return;
+    setLoadingThreads(true);
+    try {
+      const threadList = await getChatThreads(campaignId);
+      setThreads(threadList);
+
+      let targetId = preferredThreadId || activeThreadId || localStorage.getItem(`dnd_active_thread_${campaignId}`);
+      let targetThread = threadList.find((t) => t.id === targetId);
+
+      if (!targetThread && threadList.length > 0) {
+        targetThread = threadList[0];
+      }
+
+      if (targetThread) {
+        setActiveThreadId(targetThread.id);
+        localStorage.setItem(`dnd_active_thread_${campaignId}`, targetThread.id);
+        const threadMsgs = await getThreadMessages(targetThread.id);
+        if (threadMsgs && threadMsgs.length > 0) {
+          setMessages(threadMsgs);
+        } else {
+          setMessages([
+            {
+              role: 'assistant',
+              content:
+                'Greetings, Dungeon Master. I am the **Arcane Weaver**, your Co-DM and world architect. How may I assist your campaign prep today? You can brainstorm campaign arcs, generate evocative boxed text, weave player backstory hooks, or ask for pacing & fail-forward coaching.',
+            },
+          ]);
+        }
+      } else {
+        const newT = await createChatThread(campaignId, 'New Prep Session');
+        setThreads([newT]);
+        setActiveThreadId(newT.id);
+        localStorage.setItem(`dnd_active_thread_${campaignId}`, newT.id);
+      }
+    } catch (err) {
+      console.error('Failed to load chat threads:', err);
+    } finally {
+      setLoadingThreads(false);
+    }
+  };
+
+  useEffect(() => {
+    loadThreads();
+  }, [campaignId]);
+
+  const handleNewThread = async () => {
+    try {
+      const newT = await createChatThread(campaignId, 'New Prep Session');
+      setThreads((prev) => [newT, ...prev]);
+      setActiveThreadId(newT.id);
+      localStorage.setItem(`dnd_active_thread_${campaignId}`, newT.id);
+      setMessages([
+        {
+          role: 'assistant',
+          content:
+            'Greetings, Dungeon Master. Starting a fresh prep session thread. What would you like to build or brainstorm today?',
+        },
+      ]);
+      setIsThreadMenuOpen(false);
+    } catch (err: any) {
+      alert('Failed to start new chat: ' + err.message);
+    }
+  };
+
+  const handleSelectThread = async (t: ChatThread) => {
+    setActiveThreadId(t.id);
+    localStorage.setItem(`dnd_active_thread_${campaignId}`, t.id);
+    setIsThreadMenuOpen(false);
+    try {
+      const msgs = await getThreadMessages(t.id);
+      if (msgs && msgs.length > 0) {
+        setMessages(msgs);
+      } else {
+        setMessages([
+          {
+            role: 'assistant',
+            content: 'Greetings, Dungeon Master. How may I assist your campaign prep today?',
+          },
+        ]);
+      }
+    } catch (err: any) {
+      console.error('Failed to load thread messages:', err);
+    }
+  };
+
+  const handleDeleteThread = async (e: React.MouseEvent, threadId: string) => {
+    e.stopPropagation();
+    if (!confirm('Are you sure you want to delete this conversation thread?')) return;
+    try {
+      await deleteChatThread(threadId);
+      const remaining = threads.filter((t) => t.id !== threadId);
+      setThreads(remaining);
+      if (activeThreadId === threadId) {
+        if (remaining.length > 0) {
+          handleSelectThread(remaining[0]);
+        } else {
+          handleNewThread();
+        }
+      }
+    } catch (err: any) {
+      alert('Failed to delete thread: ' + err.message);
+    }
+  };
+
+  // Auto-scroll chat independently (within its container only, never scrolling page or main view)
+  useEffect(() => {
+    if (toolMode === 'chat' && chatScrollRef.current) {
+      chatScrollRef.current.scrollTo({
+        top: chatScrollRef.current.scrollHeight,
+        behavior: 'smooth',
+      });
+    }
+  }, [messages, toolMode, loading]);
 
   // Boxed Text form
   const [boxedLoc, setBoxedLoc] = useState(focusedNode?.title || '');
@@ -122,8 +339,30 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
     setLoading(true);
 
     try {
-      const res = await agentChat(newMsgs, focusedNode?.id, campaignId);
-      setMessages([...newMsgs, { role: 'assistant', content: res.reply }]);
+      const res = await agentChat(newMsgs, focusedNode?.id, campaignId, activeThreadId || undefined);
+      if (res.thread_id && res.thread_id !== activeThreadId) {
+        setActiveThreadId(res.thread_id);
+        localStorage.setItem(`dnd_active_thread_${campaignId}`, res.thread_id);
+      }
+      setMessages([
+        ...newMsgs,
+        {
+          role: 'assistant',
+          content: res.reply,
+          actions_taken: res.actions_taken,
+        },
+      ]);
+      // Refresh thread list in background to update title and message count
+      getChatThreads(campaignId).then((tl) => setThreads(tl)).catch(() => {});
+
+      if (res.actions_taken && res.actions_taken.length > 0) {
+        const hasMutations = res.actions_taken.some((a: any) =>
+          ['create_node', 'update_node', 'update_node_status', 'delete_node', 'bulk_delete_nodes', 'merge_nodes', 'deduplicate_campaign', 'create_edge', 'delete_edge', 'set_node_canon'].includes(a.tool)
+        );
+        if (hasMutations && onNodeCreated) {
+          onNodeCreated();
+        }
+      }
     } catch (err: any) {
       setMessages([
         ...newMsgs,
@@ -268,25 +507,36 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
       {/* Header */}
       <div
         style={{
-          padding: '14px 18px',
+          padding: '12px 16px',
           borderBottom: '1px solid var(--border-subtle)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          background: 'rgba(15, 20, 32, 0.95)',
+          background: 'var(--bg-surface)',
           flexShrink: 0,
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <Sparkles size={18} style={{ color: 'var(--color-gold)' }} />
           <div>
-            <h3 style={{ fontSize: '1rem' }}>The Arcane Weaver</h3>
-            <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+            <h3 style={{ fontSize: '0.95rem' }}>The Arcane Weaver</h3>
+            <span style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>
               Co-DM &amp; Campaign Architect
             </span>
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+          {/* New Chat Button */}
+          <button
+            onClick={handleNewThread}
+            className="btn btn-secondary"
+            style={{ padding: '4px 8px', fontSize: '0.72rem', gap: '4px' }}
+            title="Start a new chat thread"
+          >
+            <Plus size={13} />
+            <span>New Chat</span>
+          </button>
+
           <button
             onClick={() => {
               const nextW = panelWidth > 520 ? 420 : 660;
@@ -304,6 +554,167 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Active Thread Bar & History Selector */}
+      {toolMode === 'chat' && (
+        <div
+          style={{
+            padding: '6px 12px',
+            borderBottom: '1px solid var(--border-subtle)',
+            background: 'var(--bg-card)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            fontSize: '0.75rem',
+            position: 'relative',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0, flex: 1 }}>
+            <MessageSquare size={13} style={{ color: 'var(--color-gold)', flexShrink: 0 }} />
+            <button
+              onClick={() => setIsThreadMenuOpen(!isThreadMenuOpen)}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--text-primary)',
+                fontWeight: 600,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                padding: 0,
+                fontSize: '0.75rem',
+                maxWidth: '240px',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+              title="Click to switch conversation thread"
+            >
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {threads.find((t) => t.id === activeThreadId)?.title || 'Active Session'}
+              </span>
+              <ChevronDown size={13} style={{ flexShrink: 0, color: 'var(--text-muted)' }} />
+            </button>
+          </div>
+
+          <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', flexShrink: 0 }}>
+            {messages.length} msg{messages.length === 1 ? '' : 's'}
+          </div>
+
+          {/* Thread List Dropdown */}
+          {isThreadMenuOpen && (
+            <div
+              className="glass-panel animate-fade-in"
+              style={{
+                position: 'absolute',
+                top: '100%',
+                left: '8px',
+                right: '8px',
+                marginTop: '4px',
+                background: 'var(--bg-surface)',
+                border: '1px solid var(--border-medium)',
+                borderRadius: '8px',
+                boxShadow: '0 10px 30px rgba(0,0,0,0.6)',
+                zIndex: 90,
+                maxHeight: '260px',
+                overflowY: 'auto',
+                padding: '6px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '4px',
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '4px 8px',
+                  borderBottom: '1px solid var(--border-subtle)',
+                  fontSize: '0.7rem',
+                  fontWeight: 700,
+                  color: 'var(--text-muted)',
+                }}
+              >
+                <span>CONVERSATION HISTORY</span>
+                <button
+                  onClick={handleNewThread}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: 'var(--color-gold)',
+                    cursor: 'pointer',
+                    fontSize: '0.7rem',
+                    fontWeight: 600,
+                  }}
+                >
+                  + New
+                </button>
+              </div>
+
+              {threads.length === 0 ? (
+                <div style={{ padding: '8px', color: 'var(--text-muted)', textAlign: 'center', fontSize: '0.75rem' }}>
+                  No saved conversations yet
+                </div>
+              ) : (
+                threads.map((t) => (
+                  <div
+                    key={t.id}
+                    onClick={() => handleSelectThread(t)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '7px 10px',
+                      borderRadius: '6px',
+                      cursor: 'pointer',
+                      background: t.id === activeThreadId ? 'var(--bg-card-active)' : 'transparent',
+                      border: t.id === activeThreadId ? '1px solid var(--border-glow)' : '1px solid transparent',
+                      transition: 'background 0.15s ease',
+                    }}
+                    onMouseEnter={(e) => {
+                      if (t.id !== activeThreadId) e.currentTarget.style.background = 'var(--bg-card)';
+                    }}
+                    onMouseLeave={(e) => {
+                      if (t.id !== activeThreadId) e.currentTarget.style.background = 'transparent';
+                    }}
+                  >
+                    <div style={{ minWidth: 0, flex: 1, paddingRight: '8px' }}>
+                      <div
+                        style={{
+                          fontWeight: t.id === activeThreadId ? 600 : 400,
+                          color: t.id === activeThreadId ? 'var(--color-gold)' : 'var(--text-primary)',
+                          fontSize: '0.78rem',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {t.title}
+                      </div>
+                      <div style={{ fontSize: '0.67rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                        {new Date(t.updated_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} • {t.message_count || 0} messages
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={(e) => handleDeleteThread(e, t.id)}
+                      className="btn btn-ghost"
+                      style={{ padding: '4px', opacity: 0.6 }}
+                      title="Delete thread"
+                      onMouseEnter={(e) => (e.currentTarget.style.opacity = '1')}
+                      onMouseLeave={(e) => (e.currentTarget.style.opacity = '0.6')}
+                    >
+                      <Trash2 size={12} style={{ color: '#ef4444' }} />
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Quick Action Pills Toolbar */}
       <div
@@ -371,7 +782,7 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
             value={boxedLoc}
             onChange={(e) => setBoxedLoc(e.target.value)}
             placeholder="e.g. The Crypt of the Bleeding Wyrm"
-            style={{ width: '100%', padding: '8px', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '6px', color: '#fff', marginBottom: '10px' }}
+            style={{ width: '100%', padding: '8px', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '6px', color: 'var(--text-primary)', marginBottom: '10px' }}
           />
 
           <label style={{ fontSize: '0.78rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
@@ -382,7 +793,7 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
             value={boxedMood}
             onChange={(e) => setBoxedMood(e.target.value)}
             placeholder="e.g. eerie silence, damp cold, ancient dread"
-            style={{ width: '100%', padding: '8px', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '6px', color: '#fff', marginBottom: '10px' }}
+            style={{ width: '100%', padding: '8px', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '6px', color: 'var(--text-primary)', marginBottom: '10px' }}
           />
 
           <label style={{ fontSize: '0.78rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
@@ -393,7 +804,7 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
             value={boxedSensory}
             onChange={(e) => setBoxedSensory(e.target.value)}
             placeholder="e.g. scent of wet moss and copper, dripping water"
-            style={{ width: '100%', padding: '8px', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '6px', color: '#fff', marginBottom: '16px' }}
+            style={{ width: '100%', padding: '8px', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '6px', color: 'var(--text-primary)', marginBottom: '16px' }}
           />
 
           <button onClick={handleGenerateBoxedText} disabled={loading} className="btn btn-primary" style={{ width: '100%' }}>
@@ -416,7 +827,7 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
           <select
             value={coachType}
             onChange={(e) => setCoachType(e.target.value)}
-            style={{ width: '100%', padding: '8px', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '6px', color: '#fff', marginBottom: '12px' }}
+            style={{ width: '100%', padding: '8px', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '6px', color: 'var(--text-primary)', marginBottom: '12px' }}
           >
             <option value="fail_forward">Fail-Forward (Players failed critical check)</option>
             <option value="pacing">Pacing &amp; Urgency (Table is stalling / dragging)</option>
@@ -432,7 +843,7 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
             value={coachSituation}
             onChange={(e) => setCoachSituation(e.target.value)}
             placeholder="Describe what's happening at the table..."
-            style={{ width: '100%', padding: '8px', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '6px', color: '#fff', marginBottom: '16px' }}
+            style={{ width: '100%', padding: '8px', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '6px', color: 'var(--text-primary)', marginBottom: '16px' }}
           />
 
           <button onClick={handleGetCoachAdvice} disabled={loading} className="btn btn-primary" style={{ width: '100%' }}>
@@ -457,7 +868,7 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
             value={pcName}
             onChange={(e) => setPcName(e.target.value)}
             placeholder="e.g. Sarah the Warlock"
-            style={{ width: '100%', padding: '8px', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '6px', color: '#fff', marginBottom: '10px' }}
+            style={{ width: '100%', padding: '8px', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '6px', color: 'var(--text-primary)', marginBottom: '10px' }}
           />
 
           <label style={{ fontSize: '0.78rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
@@ -468,7 +879,7 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
             value={pcBackstory}
             onChange={(e) => setPcBackstory(e.target.value)}
             placeholder="e.g. Haunted by dreams of a green serpent, seeking her missing twin brother..."
-            style={{ width: '100%', padding: '8px', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '6px', color: '#fff', marginBottom: '16px' }}
+            style={{ width: '100%', padding: '8px', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '6px', color: 'var(--text-primary)', marginBottom: '16px' }}
           />
 
           <button onClick={handleWeaveHook} disabled={loading} className="btn btn-primary" style={{ width: '100%' }}>
@@ -490,7 +901,7 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
             value={extractText}
             onChange={(e) => setExtractText(e.target.value)}
             placeholder="Paste book excerpt, boxed descriptions, or monster encounters here..."
-            style={{ width: '100%', padding: '8px', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '6px', color: '#fff', marginBottom: '12px' }}
+            style={{ width: '100%', padding: '8px', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '6px', color: 'var(--text-primary)', marginBottom: '12px' }}
           />
 
           <button onClick={handleExtractDocument} disabled={loading} className="btn btn-primary" style={{ width: '100%', marginBottom: '14px' }}>
@@ -570,10 +981,15 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
                     padding: '10px 14px',
                     fontSize: '0.84rem',
                     lineHeight: 1.6,
-                    color: '#e2e8f0',
+                    color: 'var(--text-primary)',
                   }}
                 >
                   <div style={{ whiteSpace: 'pre-wrap' }}>{m.content}</div>
+
+                  {/* Operation Receipt if assistant executed live tools */}
+                  {m.actions_taken && m.actions_taken.length > 0 && (
+                    <ActionReceipt actions={m.actions_taken} />
+                  )}
 
                   {/* If assistant suggests a node title, offer Quick Add button */}
                   {m.role === 'assistant' && m.content.includes('###') && (
@@ -611,7 +1027,7 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
               borderTop: '1px solid var(--border-subtle)',
               display: 'flex',
               gap: '8px',
-              background: 'rgba(15, 20, 32, 0.95)',
+              background: 'var(--bg-surface)',
               flexShrink: 0,
             }}
           >
@@ -625,9 +1041,9 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
                 flex: 1,
                 padding: '10px 14px',
                 background: 'var(--bg-surface)',
-                border: '1px solid var(--border-subtle)',
+                border: '1px solid var(--border-medium)',
                 borderRadius: '8px',
-                color: '#fff',
+                color: 'var(--text-primary)',
                 fontSize: '0.85rem',
                 outline: 'none',
               }}

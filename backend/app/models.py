@@ -66,6 +66,7 @@ class NodeBase(BaseModel):
     content_markdown: Optional[str] = ""
     data_json: Optional[Dict[str, Any]] = Field(default_factory=dict)
     revealed_to_players: Optional[bool] = False
+    is_canon: Optional[bool] = True
     tags: Optional[List[str]] = Field(default_factory=list)
     sort_order: Optional[int] = 0
 
@@ -80,6 +81,7 @@ class NodeUpdate(BaseModel):
     content_markdown: Optional[str] = None
     data_json: Optional[Dict[str, Any]] = None
     revealed_to_players: Optional[bool] = None
+    is_canon: Optional[bool] = None
     tags: Optional[List[str]] = None
     sort_order: Optional[int] = None
 
@@ -97,6 +99,7 @@ class EdgeBase(BaseModel):
     label: Optional[str] = ""
     metadata_json: Optional[Dict[str, Any]] = Field(default_factory=dict)
     revealed_to_players: Optional[bool] = False
+    is_canon: Optional[bool] = True
 
 class EdgeCreate(EdgeBase):
     campaign_id: Optional[str] = None
@@ -106,6 +109,7 @@ class EdgeUpdate(BaseModel):
     label: Optional[str] = None
     metadata_json: Optional[Dict[str, Any]] = None
     revealed_to_players: Optional[bool] = None
+    is_canon: Optional[bool] = None
 
 class EdgeResponse(EdgeBase):
     id: str
@@ -173,11 +177,26 @@ class ModelQueryRequest(BaseModel):
 class AgentChatMessage(BaseModel):
     role: Literal["user", "assistant", "system"]
     content: str
+    actions_taken: Optional[List[Dict[str, Any]]] = None
 
 class AgentChatRequest(BaseModel):
     messages: List[AgentChatMessage]
     context_node_id: Optional[str] = None
     campaign_id: Optional[str] = None
+    thread_id: Optional[str] = None
+
+class ChatThreadCreate(BaseModel):
+    campaign_id: str
+    title: Optional[str] = "New Prep Session"
+
+class ChatThreadResponse(BaseModel):
+    id: str
+    campaign_id: str
+    title: str
+    created_at: str
+    updated_at: str
+    message_count: Optional[int] = 0
+    last_message: Optional[str] = None
 
 class BoxedTextRequest(BaseModel):
     location_title: str

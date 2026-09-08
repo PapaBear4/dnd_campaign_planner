@@ -103,7 +103,7 @@ export function App() {
     setIsAgentOpen(true);
   };
 
-  const monsters = graphData.nodes.filter((n) => n.type === 'monster');
+  const bestiaryCreatures = graphData.nodes.filter((n) => n.type === 'monster' || n.type === 'npc');
   const locations = graphData.nodes.filter((n) => n.type === 'location');
   const maps = graphData.nodes.filter((n) => n.type === 'map' || n.data_json?.map_url);
   const sessions = graphData.nodes.filter((n) => n.type === 'session');
@@ -124,7 +124,7 @@ export function App() {
   };
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg-app)' }}>
+    <div style={{ height: '100vh', maxHeight: '100vh', overflow: 'hidden', display: 'flex', flexDirection: 'column', background: 'var(--bg-app)' }}>
       {/* Top Navigation */}
       <Navbar
         campaigns={campaigns}
@@ -140,15 +140,15 @@ export function App() {
       />
 
       {/* Master Split-Pane: Main Workspace + Resizable Docked Co-DM Studio */}
-      <div style={{ display: 'flex', flex: 1, overflow: 'hidden', height: 'calc(100vh - 64px)' }}>
+      <div style={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden', height: 'calc(100vh - 64px)' }}>
         {/* Main Content Area */}
-        <main style={{ flex: 1, overflowY: 'auto', minWidth: 0, position: 'relative' }}>
+        <main style={{ flex: 1, height: '100%', minHeight: 0, overflowY: 'auto', minWidth: 0, position: 'relative' }}>
           {isPlayerMode ? (
             /* Player Portal View */
             <PlayerPortal campaignId={activeCampaignId} />
           ) : (
             /* DM Master Suite */
-            <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: '100%' }}>
               {/* DM Secondary Tab Bar */}
               <div
                 style={{
@@ -158,6 +158,7 @@ export function App() {
                   display: 'flex',
                   gap: '8px',
                   overflowX: 'auto',
+                  flexShrink: 0,
                 }}
               >
                 <button
@@ -216,7 +217,7 @@ export function App() {
                     whiteSpace: 'nowrap',
                   }}
                 >
-                  <Swords size={16} /> 5e Monsters &amp; Encounter Lab ({monsters.length})
+                  <Swords size={16} /> NPCs &amp; Bestiary ({bestiaryCreatures.length})
                 </button>
 
                 <button
@@ -235,7 +236,7 @@ export function App() {
               </div>
 
               {/* Active Workspace View */}
-              <div style={{ flex: 1 }}>
+              <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
                 {activeTab === 'hierarchy' && (
                   <HierarchyPlanner
                     hierarchy={hierarchy}
@@ -270,7 +271,7 @@ export function App() {
 
                 {activeTab === 'statblock' && (
                   <StatBlockLab
-                    monsters={monsters}
+                    monsters={bestiaryCreatures}
                     campaignId={activeCampaignId}
                     onRefresh={loadData}
                     onFocusCoDM={handleFocusCoDM}
@@ -312,6 +313,8 @@ export function App() {
         onClose={() => setSelectedNode(null)}
         onRefresh={loadData}
         onFocusCoDM={handleFocusCoDM}
+        isAgentOpen={isAgentOpen}
+        coDmWidth={coDmWidth}
       />
 
       {/* Settings Modal (Gemini API Key, Models, LAN info) */}

@@ -74,7 +74,7 @@ export const DuplicateUploadModal: React.FC<DuplicateUploadModalProps> = ({
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <AlertTriangle style={{ color: 'var(--color-gold)' }} size={22} />
-            <h3 style={{ fontSize: '1.15rem', color: '#fff', margin: 0 }}>Document Already Uploaded</h3>
+            <h3 style={{ fontSize: '1.15rem', color: 'var(--text-primary)', margin: 0 }}>Document Already Uploaded</h3>
           </div>
           <button
             onClick={onClose}
@@ -88,7 +88,7 @@ export const DuplicateUploadModal: React.FC<DuplicateUploadModalProps> = ({
         {/* Modal Body */}
         <div style={{ padding: '22px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
           <p style={{ fontSize: '0.86rem', color: 'var(--text-secondary)', lineHeight: '1.5', margin: 0 }}>
-            A document named <strong style={{ color: '#fff' }}>&quot;{file.name}&quot;</strong> has already been uploaded to your Campaign Library.
+            A document named <strong style={{ color: 'var(--text-primary)' }}>&quot;{file.name}&quot;</strong> has already been uploaded to your Campaign Library.
           </p>
 
           {/* Existing Document Info Card */}
@@ -96,16 +96,16 @@ export const DuplicateUploadModal: React.FC<DuplicateUploadModalProps> = ({
             style={{
               padding: '14px 16px',
               borderRadius: '10px',
-              background: 'rgba(15, 23, 42, 0.8)',
+              background: 'var(--bg-surface)',
               border: '1px solid var(--border-medium)',
               display: 'flex',
               alignItems: 'center',
               gap: '12px',
             }}
           >
-            <FileText size={32} style={{ color: '#60a5fa' }} />
+            <FileText size={32} style={{ color: 'var(--color-arcane-blue)' }} />
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 600, fontSize: '0.9rem', color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <div style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {existingDoc.original_name}
               </div>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '3px' }}>
@@ -204,7 +204,7 @@ export const DuplicateUploadModal: React.FC<DuplicateUploadModalProps> = ({
             borderTop: '1px solid var(--border-subtle)',
             display: 'flex',
             justifyContent: 'flex-end',
-            background: 'rgba(10, 15, 25, 0.5)',
+            background: 'var(--bg-surface)',
           }}
         >
           <button onClick={onClose} className="btn btn-ghost" style={{ fontSize: '0.82rem' }}>

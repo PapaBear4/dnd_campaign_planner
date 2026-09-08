@@ -4,6 +4,8 @@ import {
   Plus,
   Save,
   Shield,
+  ShieldCheck,
+  Feather,
   Sparkles,
   Swords,
   Trash2,
@@ -11,7 +13,7 @@ import {
   Wand2,
   Zap,
 } from 'lucide-react';
-import { createNode, updateNode } from '../api';
+import { createNode, updateNode, toggleNodeCanon } from '../api';
 import { NodeItem } from '../types';
 
 interface StatBlockLabProps {
@@ -67,13 +69,21 @@ export const StatBlockLab: React.FC<StatBlockLabProps> = ({
     monsters[0]?.id || ''
   );
 
+  // Bestiary Filter state
+  const [filterType, setFilterType] = useState<'all' | 'monster' | 'npc'>('all');
+
   // Encounter Calculator state
   const [partySize, setPartySize] = useState(4);
   const [partyLevel, setPartyLevel] = useState(2);
   const [encounterRoster, setEncounterRoster] = useState<{ monsterId: string; count: number }[]>([]);
 
-  // Selected Monster state
-  const monster = monsters.find((m) => m.id === selectedMonsterId) || monsters[0];
+  // Filtered creatures
+  const displayedCreatures = monsters.filter(
+    (m) => filterType === 'all' || m.type === filterType
+  );
+
+  // Selected Monster/NPC state
+  const monster = monsters.find((m) => m.id === selectedMonsterId) || displayedCreatures[0] || monsters[0];
 
   // Editable fields for selected monster
   const [mTitle, setMTitle] = useState(monster?.title || '');
@@ -126,21 +136,24 @@ export const StatBlockLab: React.FC<StatBlockLabProps> = ({
     }
   };
 
-  const handleCreateNewMonster = async () => {
+  const handleCreateNewCreature = async (creatureType: 'monster' | 'npc' = 'monster') => {
     try {
+      const isNpc = creatureType === 'npc';
       const created = await createNode({
         campaign_id: campaignId,
-        type: 'monster',
-        title: 'New Homebrew Creature',
-        subtitle: 'Medium Beast, Unaligned',
-        content_markdown: '### Actions\n- **Multiattack**: Makes two claw attacks.\n- **Claw**: +4 to hit, 1d6+2 slashing damage.',
+        type: creatureType,
+        title: isNpc ? 'New Named NPC' : 'New Homebrew Creature',
+        subtitle: isNpc ? 'Medium Humanoid, Any Alignment' : 'Medium Beast, Unaligned',
+        content_markdown: isNpc
+          ? '### Role & Personality\n- **Traits**: Calm, observant.\n- **Ideal**: Protect the realm.\n### Actions\n- **Rapier**: +4 to hit, 1d8+2 piercing damage.'
+          : '### Actions\n- **Multiattack**: Makes two claw attacks.\n- **Claw**: +4 to hit, 1d6+2 slashing damage.',
         data_json: {
           cr: '1',
           xp: 200,
           ac: 12,
           hp: 18,
           speed: '30 ft.',
-          abilities: { str: 14, dex: 12, con: 12, int: 3, wis: 12, cha: 6 },
+          abilities: { str: 12, dex: 12, con: 12, int: 10, wis: 12, cha: 10 },
         },
         revealed_to_players: false,
       });
@@ -178,19 +191,24 @@ export const StatBlockLab: React.FC<StatBlockLabProps> = ({
   const adjustedXp = Math.round(totalRawXp * multiplier);
 
   let difficultyRating = 'Trivial';
-  let diffColor = '#94a3b8';
+  let diffColor = 'var(--diff-trivial-text)';
+  let diffKey = 'trivial';
   if (adjustedXp >= partyDeadly) {
     difficultyRating = 'DEADLY';
-    diffColor = '#ef4444';
+    diffColor = 'var(--diff-deadly-text)';
+    diffKey = 'deadly';
   } else if (adjustedXp >= partyHard) {
     difficultyRating = 'Hard';
-    diffColor = '#f97316';
+    diffColor = 'var(--diff-hard-text)';
+    diffKey = 'hard';
   } else if (adjustedXp >= partyMedium) {
     difficultyRating = 'Medium';
-    diffColor = '#eab308';
+    diffColor = 'var(--diff-medium-text)';
+    diffKey = 'medium';
   } else if (adjustedXp >= partyEasy) {
     difficultyRating = 'Easy';
-    diffColor = '#10b981';
+    diffColor = 'var(--diff-easy-text)';
+    diffKey = 'easy';
   }
 
   const addToEncounter = (mId: string) => {
@@ -215,48 +233,130 @@ export const StatBlockLab: React.FC<StatBlockLabProps> = ({
     <div style={{ padding: '24px', maxWidth: '1300px', margin: '0 auto', display: 'grid', gridTemplateColumns: '280px 1fr 340px', gap: '20px' }}>
       {/* Col 1: Monster Library */}
       <div className="glass-panel" style={{ borderRadius: '12px', padding: '16px', display: 'flex', flexDirection: 'column', height: 'calc(100vh - 120px)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
-          <h3 style={{ fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Swords size={18} style={{ color: 'var(--color-crimson)' }} /> Monster Bestiary
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+          <h3 style={{ fontSize: '1.02rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Swords size={18} style={{ color: 'var(--color-crimson)' }} /> NPCs &amp; Bestiary
           </h3>
-          <button onClick={handleCreateNewMonster} className="btn btn-primary" style={{ padding: '4px 8px', fontSize: '0.75rem' }}>
-            <Plus size={13} /> New
-          </button>
+          <div style={{ display: 'flex', gap: '4px' }}>
+            <button
+              onClick={() => handleCreateNewCreature('monster')}
+              className="btn btn-primary"
+              style={{ padding: '3px 7px', fontSize: '0.72rem' }}
+              title="Add New Monster Stat Block"
+            >
+              <Plus size={12} /> Monster
+            </button>
+            <button
+              onClick={() => handleCreateNewCreature('npc')}
+              className="btn btn-secondary"
+              style={{ padding: '3px 7px', fontSize: '0.72rem' }}
+              title="Add New NPC Stat Block"
+            >
+              <Plus size={12} /> NPC
+            </button>
+          </div>
+        </div>
+
+        {/* Filter Tabs */}
+        <div style={{ display: 'flex', gap: '4px', marginBottom: '10px' }}>
+          {(['all', 'monster', 'npc'] as const).map((ft) => {
+            const count = ft === 'all' ? monsters.length : monsters.filter((m) => m.type === ft).length;
+            const isSelected = filterType === ft;
+            return (
+              <button
+                key={ft}
+                onClick={() => setFilterType(ft)}
+                className="btn"
+                style={{
+                  flex: 1,
+                  padding: '3px 6px',
+                  fontSize: '0.7rem',
+                  background: isSelected ? 'var(--color-amber-glow)' : 'var(--bg-surface)',
+                  borderColor: isSelected ? 'var(--color-gold)' : 'var(--border-subtle)',
+                  color: isSelected ? 'var(--text-gold)' : 'var(--text-secondary)',
+                  fontWeight: isSelected ? 700 : 500,
+                  textTransform: 'capitalize',
+                }}
+              >
+                {ft === 'all' ? `All (${count})` : ft === 'monster' ? `Monsters (${count})` : `NPCs (${count})`}
+              </button>
+            );
+          })}
         </div>
 
         <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-          {monsters.map((m) => (
-            <div
-              key={m.id}
-              onClick={() => setSelectedMonsterId(m.id)}
-              style={{
-                padding: '10px 12px',
-                borderRadius: '8px',
-                cursor: 'pointer',
-                background: selectedMonsterId === m.id ? 'var(--bg-card-active)' : 'var(--bg-surface)',
-                border: `1px solid ${selectedMonsterId === m.id ? 'var(--color-gold)' : 'var(--border-subtle)'}`,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-              }}
-            >
-              <div>
-                <div style={{ fontWeight: 600, fontSize: '0.86rem', color: '#fff' }}>{m.title}</div>
-                <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>CR {m.data_json?.cr || '1'} • {m.subtitle || 'Monster'}</div>
-              </div>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  addToEncounter(m.id);
-                }}
-                className="btn btn-secondary"
-                style={{ padding: '3px 7px', fontSize: '0.7rem' }}
-                title="Add to Encounter Roster"
-              >
-                + Fight
-              </button>
+          {displayedCreatures.length === 0 ? (
+            <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', textAlign: 'center', padding: '20px' }}>
+              No {filterType === 'all' ? 'creatures' : filterType === 'npc' ? 'NPCs' : 'monsters'} found.
             </div>
-          ))}
+          ) : (
+            displayedCreatures.map((m) => (
+              <div
+                key={m.id}
+                onClick={() => setSelectedMonsterId(m.id)}
+                style={{
+                  padding: '10px 12px',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  background: selectedMonsterId === m.id ? 'var(--bg-card-active)' : 'var(--bg-surface)',
+                  border: `1px solid ${selectedMonsterId === m.id ? 'var(--color-gold)' : 'var(--border-subtle)'}`,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                }}
+              >
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <button
+                      type="button"
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        try {
+                          await toggleNodeCanon(m.id);
+                          onRefresh();
+                        } catch (err) {
+                          console.error(err);
+                        }
+                      }}
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        padding: 0,
+                        color: m.is_canon !== false ? 'var(--color-gold)' : 'var(--text-muted)',
+                        display: 'flex',
+                        alignItems: 'center',
+                      }}
+                      title={m.is_canon !== false ? 'Canon Lore (Protected from Agent Deletion)' : 'Working Draft (Provisional)'}
+                    >
+                      {m.is_canon !== false ? <ShieldCheck size={14} /> : <Feather size={14} />}
+                    </button>
+                    <span style={{ fontWeight: 600, fontSize: '0.86rem', color: 'var(--text-primary)' }}>{m.title}</span>
+                    <span
+                      className={`badge badge-${m.type}`}
+                      style={{ fontSize: '0.62rem', padding: '1px 4px', textTransform: 'uppercase' }}
+                    >
+                      {m.type === 'npc' ? 'NPC' : 'Monster'}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                    CR {m.data_json?.cr || '1'} • {m.subtitle || (m.type === 'npc' ? 'NPC' : 'Creature')} {m.is_canon === false ? '• Draft' : ''}
+                  </div>
+                </div>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    addToEncounter(m.id);
+                  }}
+                  className="btn btn-secondary"
+                  style={{ padding: '3px 7px', fontSize: '0.7rem' }}
+                  title="Add to Encounter Roster"
+                >
+                  + Fight
+                </button>
+              </div>
+            ))
+          )}
         </div>
       </div>
 
@@ -273,6 +373,31 @@ export const StatBlockLab: React.FC<StatBlockLabProps> = ({
                   <Sparkles size={15} /> Modify with Co-DM
                 </button>
               </div>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await toggleNodeCanon(monster.id);
+                    onRefresh();
+                  } catch (err) {
+                    console.error(err);
+                  }
+                }}
+                className="btn btn-secondary"
+                style={{
+                  padding: '5px 10px',
+                  fontSize: '0.78rem',
+                  borderColor: monster.is_canon !== false ? 'var(--color-gold)' : 'var(--border-subtle)',
+                  color: monster.is_canon !== false ? 'var(--text-gold)' : 'var(--text-secondary)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                }}
+                title={monster.is_canon !== false ? 'Canon Lore: AI cannot delete without DM approval' : 'Working Draft: AI can edit/prune freely'}
+              >
+                {monster.is_canon !== false ? <ShieldCheck size={14} /> : <Feather size={14} />}
+                {monster.is_canon !== false ? 'Canon Lore (Protected)' : 'Working Draft'}
+              </button>
             </div>
 
             {/* Authentic 5e Monster Card */}
@@ -442,7 +567,7 @@ export const StatBlockLab: React.FC<StatBlockLabProps> = ({
               max={10}
               value={partySize}
               onChange={(e) => setPartySize(Number(e.target.value))}
-              style={{ width: '100%', padding: '6px 8px', background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: '6px', color: '#fff' }}
+              style={{ width: '100%', padding: '6px 8px', background: 'var(--bg-surface)', border: '1px solid var(--border-medium)', borderRadius: '6px', color: 'var(--text-primary)' }}
             />
           </div>
           <div>
@@ -453,41 +578,41 @@ export const StatBlockLab: React.FC<StatBlockLabProps> = ({
               max={10}
               value={partyLevel}
               onChange={(e) => setPartyLevel(Number(e.target.value))}
-              style={{ width: '100%', padding: '6px 8px', background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: '6px', color: '#fff' }}
+              style={{ width: '100%', padding: '6px 8px', background: 'var(--bg-surface)', border: '1px solid var(--border-medium)', borderRadius: '6px', color: 'var(--text-primary)' }}
             />
           </div>
         </div>
 
         {/* Difficulty Meter */}
         <div style={{ background: 'var(--bg-surface)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-subtle)', marginBottom: '14px', textAlign: 'center' }}>
-          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600 }}>
             Calculated Difficulty
           </div>
-          <div style={{ fontSize: '1.4rem', fontWeight: 800, color: diffColor, margin: '4px 0' }}>
+          <div className="diff-meter-banner" style={{ fontSize: '1.5rem', color: diffColor, margin: '6px 0' }}>
             {difficultyRating}
           </div>
           <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-            Adjusted XP: <strong>{adjustedXp}</strong> (Raw: {totalRawXp} × {multiplier})
+            Adjusted XP: <strong style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>{adjustedXp}</strong> (Raw: <span style={{ fontFamily: 'var(--font-mono)' }}>{totalRawXp}</span> × {multiplier})
           </div>
         </div>
 
         {/* XP Thresholds */}
-        <div style={{ fontSize: '0.75rem', display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '4px', textAlign: 'center', marginBottom: '14px' }}>
-          <div style={{ background: 'rgba(16, 185, 129, 0.1)', padding: '6px', borderRadius: '4px', border: '1px solid rgba(16, 185, 129, 0.2)' }}>
-            <div style={{ color: '#34d399', fontWeight: 600 }}>Easy</div>
-            <div>{partyEasy}</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '6px', textAlign: 'center', marginBottom: '14px' }}>
+          <div className={`diff-badge-card diff-easy ${diffKey === 'easy' ? 'diff-active' : ''}`}>
+            <div className="diff-badge-title">Easy</div>
+            <div className="diff-badge-val">{partyEasy}</div>
           </div>
-          <div style={{ background: 'rgba(234, 179, 8, 0.1)', padding: '6px', borderRadius: '4px', border: '1px solid rgba(234, 179, 8, 0.2)' }}>
-            <div style={{ color: '#facc15', fontWeight: 600 }}>Med</div>
-            <div>{partyMedium}</div>
+          <div className={`diff-badge-card diff-medium ${diffKey === 'medium' ? 'diff-active' : ''}`}>
+            <div className="diff-badge-title">Med</div>
+            <div className="diff-badge-val">{partyMedium}</div>
           </div>
-          <div style={{ background: 'rgba(249, 115, 22, 0.1)', padding: '6px', borderRadius: '4px', border: '1px solid rgba(249, 115, 22, 0.2)' }}>
-            <div style={{ color: '#fb923c', fontWeight: 600 }}>Hard</div>
-            <div>{partyHard}</div>
+          <div className={`diff-badge-card diff-hard ${diffKey === 'hard' ? 'diff-active' : ''}`}>
+            <div className="diff-badge-title">Hard</div>
+            <div className="diff-badge-val">{partyHard}</div>
           </div>
-          <div style={{ background: 'rgba(239, 68, 68, 0.1)', padding: '6px', borderRadius: '4px', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
-            <div style={{ color: '#f87171', fontWeight: 600 }}>Deadly</div>
-            <div>{partyDeadly}</div>
+          <div className={`diff-badge-card diff-deadly ${diffKey === 'deadly' ? 'diff-active' : ''}`}>
+            <div className="diff-badge-title">Deadly</div>
+            <div className="diff-badge-val">{partyDeadly}</div>
           </div>
         </div>
 

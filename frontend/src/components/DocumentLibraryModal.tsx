@@ -163,13 +163,13 @@ export const DocumentLibraryModal: React.FC<DocumentLibraryModalProps> = ({
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            background: 'rgba(15, 20, 32, 0.8)',
+            background: 'var(--bg-surface)',
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <FolderOpen size={22} style={{ color: '#60a5fa' }} />
+            <FolderOpen size={22} style={{ color: 'var(--color-arcane-blue)' }} />
             <div>
-              <h3 style={{ fontSize: '1.2rem', color: '#fff', margin: 0 }}>Campaign Document Library</h3>
+              <h3 style={{ fontSize: '1.2rem', color: 'var(--text-primary)', margin: 0 }}>Campaign Document Library</h3>
               <p style={{ fontSize: '0.76rem', color: 'var(--text-secondary)', margin: 0 }}>
                 Manage uploaded adventure PDFs, monster sheets, transcripts, and session debriefs.
               </p>
@@ -190,7 +190,7 @@ export const DocumentLibraryModal: React.FC<DocumentLibraryModalProps> = ({
             justifyContent: 'space-between',
             gap: '14px',
             flexWrap: 'wrap',
-            background: 'rgba(10, 15, 25, 0.4)',
+            background: 'var(--bg-card)',
           }}
         >
           {/* Category Filter Pills */}
@@ -202,6 +202,7 @@ export const DocumentLibraryModal: React.FC<DocumentLibraryModalProps> = ({
               { id: 'pc', label: '🛡️ Characters' },
               { id: 'transcript', label: '🎙️ Transcripts & Summaries' },
               { id: 'map', label: '🗺️ Maps' },
+              { id: 'lore', label: '📜 World Lore & Setting' },
             ].map((cat) => (
               <button
                 key={cat.id}
@@ -235,8 +236,8 @@ export const DocumentLibraryModal: React.FC<DocumentLibraryModalProps> = ({
                   padding: '6px 12px 6px 30px',
                   borderRadius: '8px',
                   background: 'var(--bg-surface)',
-                  border: '1px solid var(--border-subtle)',
-                  color: '#fff',
+                  border: '1px solid var(--border-medium)',
+                  color: 'var(--text-primary)',
                   fontSize: '0.8rem',
                   width: '180px',
                 }}
@@ -258,7 +259,7 @@ export const DocumentLibraryModal: React.FC<DocumentLibraryModalProps> = ({
           ) : docs.length === 0 ? (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '240px', color: 'var(--text-muted)', textAlign: 'center', gap: '10px' }}>
               <FolderOpen size={40} style={{ color: 'var(--border-medium)' }} />
-              <p style={{ fontSize: '0.9rem', color: '#fff' }}>No uploaded documents found</p>
+              <p style={{ fontSize: '0.9rem', color: 'var(--text-primary)' }}>No uploaded documents found</p>
               <p style={{ fontSize: '0.78rem', maxWidth: '340px' }}>
                 {categoryFilter !== 'all'
                   ? `No files found in the "${categoryFilter}" category. Try switching filters or uploading a file.`
@@ -285,8 +286,8 @@ export const DocumentLibraryModal: React.FC<DocumentLibraryModalProps> = ({
                     transition: 'all 0.15s ease',
                   }}
                   onMouseEnter={(e) => {
-                    e.currentTarget.style.borderColor = '#60a5fa';
-                    e.currentTarget.style.background = 'rgba(59, 130, 246, 0.05)';
+                    e.currentTarget.style.borderColor = 'var(--color-arcane-blue)';
+                    e.currentTarget.style.background = 'var(--color-arcane-blue-bg)';
                   }}
                   onMouseLeave={(e) => {
                     e.currentTarget.style.borderColor = 'var(--border-subtle)';
@@ -299,7 +300,8 @@ export const DocumentLibraryModal: React.FC<DocumentLibraryModalProps> = ({
                       style={{
                         padding: '10px',
                         borderRadius: '8px',
-                        background: 'rgba(255, 255, 255, 0.04)',
+                        background: 'var(--bg-card)',
+                        border: '1px solid var(--border-subtle)',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
@@ -309,7 +311,7 @@ export const DocumentLibraryModal: React.FC<DocumentLibraryModalProps> = ({
                     </div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '2px' }}>
-                        <span style={{ fontWeight: 600, fontSize: '0.88rem', color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <span style={{ fontWeight: 600, fontSize: '0.88rem', color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {doc.original_name}
                         </span>
                         <span
@@ -317,8 +319,9 @@ export const DocumentLibraryModal: React.FC<DocumentLibraryModalProps> = ({
                             fontSize: '0.68rem',
                             padding: '1px 6px',
                             borderRadius: '4px',
-                            background: 'rgba(255, 255, 255, 0.08)',
-                            color: 'var(--text-secondary)',
+                            background: 'var(--color-amber-glow)',
+                            color: 'var(--text-gold)',
+                            border: '1px solid var(--border-subtle)',
                           }}
                         >
                           {getCategoryLabel(doc.category)}
@@ -382,7 +385,7 @@ export const DocumentLibraryModal: React.FC<DocumentLibraryModalProps> = ({
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            background: 'rgba(15, 20, 32, 0.8)',
+            background: 'var(--bg-surface)',
           }}
         >
           <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>

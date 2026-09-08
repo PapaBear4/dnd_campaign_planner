@@ -53,7 +53,7 @@ interface IngestionHubProps {
   campaignId: string;
   onRefresh: () => void;
   onNavigateTab: (tab: string) => void;
-  initialCategory?: 'book' | 'monster' | 'character' | 'session';
+  initialCategory?: 'book' | 'monster' | 'character' | 'session' | 'lore';
   initialSessionNodeId?: string;
   sessions?: NodeItem[];
 }
@@ -99,7 +99,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
   initialSessionNodeId,
   sessions = [],
 }) => {
-  const [activeCategory, setActiveCategory] = useState<'book' | 'monster' | 'character' | 'session'>(initialCategory);
+  const [activeCategory, setActiveCategory] = useState<'book' | 'monster' | 'character' | 'session' | 'lore'>(initialCategory);
 
   // Synchronize if initialCategory or initialSessionNodeId changes from parent
   useEffect(() => {
@@ -144,7 +144,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
   const [instruction, setInstruction] = useState<string>(
     'Chapter 1: Decompose this chapter into the overarching Campaign Arc, primary Quests, key Sessions, and initial Encounters. Extract all named NPCs and factions.'
   );
-  const [decompMode, setDecompMode] = useState<'campaign_structure' | 'monsters' | 'characters' | 'general'>('campaign_structure');
+  const [decompMode, setDecompMode] = useState<'campaign_structure' | 'monsters' | 'characters' | 'world_lore' | 'general'>('campaign_structure');
 
   const [isDecomposing, setIsDecomposing] = useState<boolean>(false);
   const [overviewSummary, setOverviewSummary] = useState<string>('');
@@ -227,6 +227,29 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
       label: 'Extract PC Sheets & Backstories',
       prompt: 'Extract player characters including Name, Class, Level, Race, Core Stats, Backstory, Personality Traits, Ideals, Bonds, and Flaws for campaign integration.',
       mode: 'characters' as const,
+    },
+  ];
+
+  const lorePresets = [
+    {
+      label: 'Pantheons, Deities & Holy Orders',
+      prompt: 'Extract all deities, divine domains, holy orders, cults, and religious sites. Create faction nodes for each order and location nodes for temples and shrines.',
+      mode: 'world_lore' as const,
+    },
+    {
+      label: 'History, Wars & Cataclysms',
+      prompt: 'Extract major historical eras, wars, cataclysms, and legendary figures as lore nodes. Create timeline edges linking cause and effect across eras.',
+      mode: 'world_lore' as const,
+    },
+    {
+      label: 'Myths, Prophecies & Rumors',
+      prompt: 'Extract all prophecies, folk myths, tavern rumors, lost texts, and cryptic portents as clue nodes linked to relevant factions and locations.',
+      mode: 'world_lore' as const,
+    },
+    {
+      label: 'Artifacts & Ancient Traditions',
+      prompt: 'Extract legendary artifacts, lost magical traditions, and ancient orders that created them. Link artifacts to their creators and current custodians.',
+      mode: 'world_lore' as const,
     },
   ];
 
@@ -325,6 +348,8 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
       setActiveCategory('monster');
     } else if (doc.category === 'pc') {
       setActiveCategory('character');
+    } else if (doc.category === 'lore') {
+      setActiveCategory('lore');
     }
     setShowLibraryModal(false);
   };
@@ -351,7 +376,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const category = activeCategory === 'book' ? 'pdf' : activeCategory === 'monster' ? 'statblock' : 'pc';
+    const category = activeCategory === 'book' ? 'pdf' : activeCategory === 'monster' ? 'statblock' : activeCategory === 'lore' ? 'lore' : 'pc';
 
     try {
       const dup = await checkDuplicateUpload(file.name, campaignId, category);
@@ -381,7 +406,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
         filename: uploadedFilename || undefined,
         text_content: pastedText || undefined,
         instruction: instruction.trim(),
-        decomposition_mode: activeCategory === 'monster' ? 'monsters' : activeCategory === 'character' ? 'characters' : decompMode,
+        decomposition_mode: activeCategory === 'monster' ? 'monsters' : activeCategory === 'character' ? 'characters' : activeCategory === 'lore' ? 'world_lore' : decompMode,
         start_page: startPage,
         end_page: endPage,
         campaign_id: campaignId,
@@ -431,7 +456,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
         filename: uploadedFilename || undefined,
         text_content: pastedText || undefined,
         instruction: feedbackText,
-        decomposition_mode: activeCategory === 'monster' ? 'monsters' : activeCategory === 'character' ? 'characters' : decompMode,
+        decomposition_mode: activeCategory === 'monster' ? 'monsters' : activeCategory === 'character' ? 'characters' : activeCategory === 'lore' ? 'world_lore' : decompMode,
         start_page: startPage,
         end_page: endPage,
         campaign_id: campaignId,
@@ -702,10 +727,10 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
             setShowLibraryModal(true);
           }}
           className="btn btn-secondary"
-          style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#93c5fd', borderColor: 'rgba(96, 165, 250, 0.4)' }}
+          style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--color-arcane-blue-text)', borderColor: 'var(--color-arcane-blue-border)' }}
           title="View and manage all uploaded adventure books, stat sheets, and session logs"
         >
-          <FolderOpen size={16} style={{ color: '#60a5fa' }} />
+          <FolderOpen size={16} style={{ color: 'var(--color-arcane-blue)' }} />
           📂 Document Library ({libraryDocsCount})
         </button>
       </div>
@@ -766,12 +791,33 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
             display: 'flex',
             alignItems: 'center',
             gap: '8px',
-            borderColor: activeCategory === 'session' ? '#60a5fa' : 'rgba(96, 165, 250, 0.4)',
-            color: activeCategory === 'session' ? '#fff' : '#93c5fd',
-            background: activeCategory === 'session' ? 'rgba(59, 130, 246, 0.25)' : 'rgba(59, 130, 246, 0.05)',
+            borderColor: activeCategory === 'session' ? 'var(--color-arcane-blue-text)' : 'var(--color-arcane-blue-border)',
+            color: 'var(--color-arcane-blue-text)',
+            background: activeCategory === 'session' ? 'var(--color-arcane-blue-bg)' : 'transparent',
+            fontWeight: 600,
           }}
         >
-          <Mic size={16} style={{ color: '#60a5fa' }} /> 🎙️ Session Transcripts &amp; Summaries
+          <Mic size={16} style={{ color: 'var(--color-arcane-blue-text)' }} /> 🎙️ Session Transcripts &amp; Summaries
+        </button>
+
+        <button
+          onClick={() => {
+            setActiveCategory('lore');
+            setDecompMode('world_lore');
+            setInstruction(lorePresets[0].prompt);
+          }}
+          className={`btn ${activeCategory === 'lore' ? 'btn-primary' : 'btn-ghost'}`}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            borderColor: activeCategory === 'lore' ? 'var(--color-gold)' : 'var(--border-subtle)',
+            color: activeCategory === 'lore' ? 'var(--text-gold)' : 'var(--text-primary)',
+            background: activeCategory === 'lore' ? 'var(--color-amber-glow)' : 'transparent',
+            fontWeight: 600,
+          }}
+        >
+          <Scroll size={16} style={{ color: 'var(--color-gold)' }} /> 📜 World Lore &amp; Setting
         </button>
       </div>
 
@@ -781,20 +827,20 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
       {activeCategory === 'session' ? (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.25fr', gap: '24px', alignItems: 'start' }}>
           {/* Left Column: Target Session, Transcript Input & Steering Guidance */}
+          {/* Target Session Selector */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
-            {/* Target Session Selector */}
             <div
               className="glass-panel"
               style={{
                 padding: '16px',
                 borderRadius: '10px',
                 border: '1px solid var(--border-medium)',
-                background: 'rgba(15, 20, 32, 0.7)',
+                background: 'var(--bg-card)',
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-                <Calendar size={16} style={{ color: '#60a5fa' }} />
-                <label style={{ fontSize: '0.88rem', fontWeight: 600 }}>Target Session in Timeline:</label>
+                <Calendar size={16} style={{ color: 'var(--color-arcane-blue)' }} />
+                <label style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-primary)' }}>Target Session in Timeline:</label>
               </div>
               <p style={{ fontSize: '0.76rem', color: 'var(--text-secondary)', marginBottom: '10px' }}>
                 Choose which planned session this transcript reflects. The Co-DM will compare events against planned encounters.
@@ -807,8 +853,8 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                   padding: '9px 12px',
                   borderRadius: '8px',
                   background: 'var(--bg-surface)',
-                  border: '1px solid var(--border-subtle)',
-                  color: '#fff',
+                  border: '1px solid var(--border-medium)',
+                  color: 'var(--text-primary)',
                   fontSize: '0.85rem',
                 }}
               >
@@ -830,12 +876,12 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
               style={{
                 padding: '18px',
                 borderRadius: '12px',
-                border: '2px dashed rgba(96, 165, 250, 0.4)',
-                background: 'rgba(15, 20, 32, 0.6)',
+                border: '2px dashed var(--border-medium)',
+                background: 'var(--bg-card)',
                 textAlign: 'center',
               }}
             >
-              <Mic size={32} style={{ color: '#60a5fa', margin: '0 auto 8px' }} />
+              <Mic size={32} style={{ color: 'var(--color-arcane-blue)', margin: '0 auto 8px' }} />
               <h4 style={{ fontSize: '1rem', marginBottom: '4px' }}>Upload Session Audio/VTT Transcript or Text Log</h4>
               <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '14px' }}>
                 Supports VTT, SRT, TXT, MD, PDF, or chat exports from Discord, Roll20, or Foundry.
@@ -857,7 +903,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                   type="button"
                   onClick={handleLoadSampleTranscript}
                   className="btn btn-secondary"
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', color: '#93c5fd' }}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', color: 'var(--color-arcane-blue-text)' }}
                   title="Load full Sunless Citadel Session 1 dialogue transcript"
                 >
                   <Sparkles size={14} /> Load Dialogue Transcript
@@ -867,7 +913,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                   type="button"
                   onClick={handleLoadSampleSummary}
                   className="btn btn-secondary"
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', color: '#c084fc' }}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', color: 'var(--text-primary)' }}
                   title="Load bulleted Sunless Citadel Session 1 debrief summary"
                 >
                   <FileText size={14} /> Load Bulleted Summary
@@ -879,7 +925,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                   type="button"
                   onClick={() => setShowLibraryModal(true)}
                   className="btn btn-ghost"
-                  style={{ fontSize: '0.74rem', color: '#93c5fd', textDecoration: 'underline', padding: '2px 8px' }}
+                  style={{ fontSize: '0.74rem', color: 'var(--color-arcane-blue-text)', textDecoration: 'underline', padding: '2px 8px' }}
                 >
                   📂 Or choose from Document Library ({libraryDocsCount} files)
                 </button>
@@ -891,13 +937,13 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                     marginTop: '12px',
                     padding: '6px 12px',
                     borderRadius: '6px',
-                    background: 'rgba(59, 130, 246, 0.1)',
-                    border: '1px solid rgba(59, 130, 246, 0.3)',
+                    background: 'var(--status-completed-bg)',
+                    border: '1px solid var(--status-completed-border)',
                     display: 'inline-flex',
                     alignItems: 'center',
                     gap: '8px',
                     fontSize: '0.8rem',
-                    color: '#93c5fd',
+                    color: 'var(--status-completed-text)',
                   }}
                 >
                   <CheckCircle size={15} /> Loaded: <strong>{originalName}</strong>
@@ -930,8 +976,8 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                   padding: '10px 12px',
                   borderRadius: '8px',
                   background: 'var(--bg-surface)',
-                  border: '1px solid var(--border-subtle)',
-                  color: '#fff',
+                  border: '1px solid var(--border-medium)',
+                  color: 'var(--text-primary)',
                   fontSize: '0.82rem',
                   resize: 'vertical',
                   fontFamily: 'monospace',
@@ -946,12 +992,12 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                 padding: '16px',
                 borderRadius: '10px',
                 border: '1px solid var(--border-medium)',
-                background: 'rgba(15, 20, 32, 0.8)',
+                background: 'var(--bg-card)',
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-                <Sparkles size={16} style={{ color: '#60a5fa' }} />
-                <label style={{ fontSize: '0.85rem', fontWeight: 600 }}>Co-DM Adaptation Guidance:</label>
+                <Sparkles size={16} style={{ color: 'var(--color-arcane-blue)' }} />
+                <label style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>Co-DM Adaptation Guidance:</label>
               </div>
 
               {/* Preset chips */}
@@ -965,9 +1011,10 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                       padding: '3px 8px',
                       fontSize: '0.72rem',
                       borderRadius: '12px',
-                      background: sessionInstruction === p.prompt ? 'rgba(59, 130, 246, 0.2)' : 'rgba(255,255,255,0.05)',
-                      border: `1px solid ${sessionInstruction === p.prompt ? '#60a5fa' : 'var(--border-subtle)'}`,
-                      color: sessionInstruction === p.prompt ? '#93c5fd' : 'var(--text-secondary)',
+                      background: sessionInstruction === p.prompt ? 'var(--color-arcane-blue-bg)' : 'var(--bg-surface)',
+                      border: `1px solid ${sessionInstruction === p.prompt ? 'var(--color-arcane-blue)' : 'var(--border-medium)'}`,
+                      color: sessionInstruction === p.prompt ? 'var(--color-arcane-blue-text)' : 'var(--text-primary)',
+                      fontWeight: sessionInstruction === p.prompt ? 700 : 500,
                     }}
                   >
                     {p.label}
@@ -985,8 +1032,8 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                   padding: '10px',
                   borderRadius: '8px',
                   background: 'var(--bg-surface)',
-                  border: '1px solid var(--border-subtle)',
-                  color: '#fff',
+                  border: '1px solid var(--border-medium)',
+                  color: 'var(--text-primary)',
                   fontSize: '0.82rem',
                   resize: 'vertical',
                   marginBottom: '14px',
@@ -1036,14 +1083,14 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                 border: '1px solid var(--border-medium)',
                 display: 'flex',
                 flexDirection: 'column',
-                background: 'rgba(15, 20, 32, 0.85)',
+                background: 'var(--bg-card)',
               }}
             >
               {/* Action Bar */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
                 <div>
                   <h3 style={{ fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <Layers size={18} style={{ color: '#60a5fa' }} />
+                    <Layers size={18} style={{ color: 'var(--color-arcane-blue)' }} />
                     Session Fallout &amp; Campaign Adaptation
                   </h3>
                   <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
@@ -1084,9 +1131,9 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                   style={{
                     padding: '12px 16px',
                     borderRadius: '8px',
-                    background: 'rgba(16, 185, 129, 0.15)',
-                    border: '1px solid #10b981',
-                    color: '#34d399',
+                    background: 'var(--status-completed-bg)',
+                    border: '1px solid var(--status-completed-border)',
+                    color: 'var(--status-completed-text)',
                     fontSize: '0.85rem',
                     marginBottom: '14px',
                     display: 'flex',
@@ -1119,9 +1166,9 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                 <div
                   style={{
                     marginBottom: '16px',
-                    background: 'rgba(9, 13, 21, 0.7)',
+                    background: 'var(--bg-surface)',
                     borderRadius: '10px',
-                    border: '1px solid rgba(96, 165, 250, 0.25)',
+                    border: '1px solid var(--border-subtle)',
                     padding: '14px',
                     display: 'flex',
                     flexDirection: 'column',
@@ -1129,7 +1176,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#93c5fd', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--color-arcane-blue-text)', display: 'flex', alignItems: 'center', gap: '6px' }}>
                       <MessageSquare size={15} /> Co-DM Steering &amp; Refinement Conversation:
                     </span>
                     <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
@@ -1158,24 +1205,24 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                           lineHeight: '1.4',
                           background:
                             msg.role === 'user'
-                              ? 'rgba(59, 130, 246, 0.15)'
-                              : 'rgba(16, 185, 129, 0.08)',
+                              ? 'var(--color-arcane-blue-bg)'
+                              : 'var(--status-completed-bg)',
                           border: `1px solid ${
                             msg.role === 'user'
-                              ? 'rgba(59, 130, 246, 0.3)'
-                              : 'rgba(16, 185, 129, 0.25)'
+                              ? 'var(--color-arcane-blue-border)'
+                              : 'var(--status-completed-border)'
                           }`,
                           alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
                           maxWidth: '92%',
                         }}
                       >
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>
-                          <span style={{ fontWeight: 700, color: msg.role === 'user' ? '#60a5fa' : '#34d399' }}>
+                          <span style={{ fontWeight: 700, color: msg.role === 'user' ? 'var(--color-arcane-blue-text)' : 'var(--status-completed-text)' }}>
                             {msg.role === 'user' ? 'Dungeon Master' : 'Co-DM Assistant'}
                           </span>
                           <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>{msg.timestamp}</span>
                         </div>
-                        <div style={{ color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>
+                        <div style={{ color: 'var(--text-primary)', whiteSpace: 'pre-wrap' }}>
                           {msg.content}
                         </div>
                       </div>
@@ -1195,9 +1242,9 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                           padding: '2px 8px',
                           fontSize: '0.7rem',
                           borderRadius: '10px',
-                          background: 'rgba(255,255,255,0.04)',
-                          border: '1px solid var(--border-subtle)',
-                          color: 'var(--text-muted)',
+                          background: 'var(--bg-card)',
+                          border: '1px solid var(--border-medium)',
+                          color: 'var(--text-primary)',
                         }}
                       >
                         + {sug}
@@ -1221,7 +1268,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                         borderRadius: '8px',
                         background: 'var(--bg-surface)',
                         border: '1px solid var(--border-medium)',
-                        color: '#fff',
+                        color: 'var(--text-primary)',
                         fontSize: '0.82rem',
                       }}
                     />
@@ -1252,9 +1299,9 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                     gap: '12px',
                   }}
                 >
-                  <FileText size={42} style={{ color: 'rgba(96, 165, 250, 0.4)' }} />
-                  <h4 style={{ fontSize: '1.05rem', color: '#fff' }}>No Session Adaptation Run Yet</h4>
-                  <p style={{ fontSize: '0.8rem', maxWidth: '420px', lineHeight: '1.5' }}>
+                  <FileText size={42} style={{ color: 'var(--border-medium)' }} />
+                  <h4 style={{ fontSize: '1.05rem', color: 'var(--text-primary)' }}>No Session Adaptation Run Yet</h4>
+                  <p style={{ fontSize: '0.8rem', maxWidth: '420px', lineHeight: '1.5', color: 'var(--text-secondary)' }}>
                     1. Select your target session and paste your transcript (or click <strong>Load Sample Session Transcript</strong>).<br />
                     2. Click <strong>Adapt Graph &amp; Timeline with Co-DM</strong>.<br />
                     3. The Co-DM will analyze actual combat and dialogue, mark resolved encounters as completed, adjust NPC attitudes, spawn emergent loot nodes, and plan Session N+1!
@@ -1268,11 +1315,11 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                       style={{
                         padding: '12px 14px',
                         borderRadius: '8px',
-                        background: 'rgba(15, 23, 42, 0.7)',
+                        background: 'var(--bg-surface)',
                         border: '1px solid var(--border-subtle)',
                       }}
                     >
-                      <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#60a5fa', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
+                      <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--color-arcane-blue-text)', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
                         <Clock size={15} /> Timeline Status Updates ({sessionAdaptationResult.status_updates.length}):
                       </span>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -1288,8 +1335,8 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                                 gap: '10px',
                                 padding: '6px 10px',
                                 borderRadius: '6px',
-                                background: isChecked ? 'rgba(59, 130, 246, 0.08)' : 'rgba(255, 255, 255, 0.02)',
-                                border: `1px solid ${isChecked ? 'rgba(59, 130, 246, 0.3)' : 'transparent'}`,
+                                background: isChecked ? 'var(--color-arcane-blue-bg)' : 'transparent',
+                                border: `1px solid ${isChecked ? 'var(--color-arcane-blue-border)' : 'transparent'}`,
                                 cursor: 'pointer',
                               }}
                             >
@@ -1300,9 +1347,9 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                                 style={{ cursor: 'pointer' }}
                               />
                               <div style={{ flex: 1, fontSize: '0.8rem' }}>
-                                <span style={{ fontWeight: 600, color: '#fff' }}>{u.title}</span>{' '}
+                                <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{u.title}</span>{' '}
                                 <span className={`badge badge-${u.node_type}`}>{u.node_type}</span>{' '}
-                                <span style={{ color: '#34d399', fontWeight: 600 }}>➔ {u.new_status.toUpperCase()}</span>
+                                <span style={{ color: 'var(--status-completed-text)', fontWeight: 600 }}>➔ {u.new_status.toUpperCase()}</span>
                                 <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>
                                   {u.reason}
                                 </div>
@@ -1320,7 +1367,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                       style={{
                         padding: '12px 14px',
                         borderRadius: '8px',
-                        background: 'rgba(15, 23, 42, 0.7)',
+                        background: 'var(--bg-surface)',
                         border: '1px solid var(--border-subtle)',
                       }}
                     >
@@ -1334,14 +1381,14 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                             style={{
                               padding: '8px 10px',
                               borderRadius: '6px',
-                              background: 'rgba(245, 158, 11, 0.05)',
-                              border: '1px solid rgba(245, 158, 11, 0.2)',
+                              background: 'var(--color-amber-glow)',
+                              border: '1px solid var(--border-medium)',
                               fontSize: '0.78rem',
                             }}
                           >
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                              <span style={{ fontWeight: 700, color: '#fff' }}>{npc.name}</span>
-                              <span style={{ fontSize: '0.7rem', padding: '1px 6px', borderRadius: '4px', background: 'rgba(245, 158, 11, 0.2)', color: 'var(--color-gold)' }}>
+                              <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{npc.name}</span>
+                              <span style={{ fontSize: '0.7rem', padding: '1px 6px', borderRadius: '4px', background: 'var(--color-amber-glow)', color: 'var(--text-gold)', border: '1px solid var(--border-subtle)' }}>
                                 {npc.disposition}
                               </span>
                             </div>
@@ -1365,11 +1412,11 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                       style={{
                         padding: '12px 14px',
                         borderRadius: '8px',
-                        background: 'rgba(15, 23, 42, 0.7)',
+                        background: 'var(--bg-surface)',
                         border: '1px solid var(--border-subtle)',
                       }}
                     >
-                      <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#a78bfa', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
+                      <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--color-purple)', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
                         <Sparkles size={15} /> Emergent Discoveries &amp; Loot ({sessionAdaptationResult.emergent_nodes.length}):
                       </span>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -1385,8 +1432,8 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                                 gap: '10px',
                                 padding: '6px 10px',
                                 borderRadius: '6px',
-                                background: isChecked ? 'rgba(167, 139, 250, 0.08)' : 'rgba(255, 255, 255, 0.02)',
-                                border: `1px solid ${isChecked ? 'rgba(167, 139, 250, 0.3)' : 'transparent'}`,
+                                background: isChecked ? 'rgba(168, 85, 247, 0.12)' : 'transparent',
+                                border: `1px solid ${isChecked ? 'var(--color-purple)' : 'transparent'}`,
                                 cursor: 'pointer',
                               }}
                             >
@@ -1398,7 +1445,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                               />
                               <div style={{ flex: 1, fontSize: '0.8rem' }}>
                                 <span className={`badge badge-${n.type || 'item'}`}>{n.type}</span>{' '}
-                                <span style={{ fontWeight: 600, color: '#fff' }}>{n.title}</span>
+                                <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{n.title}</span>
                                 <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>
                                   {n.summary || n.content_markdown?.slice(0, 100)}
                                 </div>
@@ -1416,15 +1463,15 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                       style={{
                         padding: '14px',
                         borderRadius: '8px',
-                        background: 'rgba(30, 41, 59, 0.7)',
-                        border: '1px solid rgba(96, 165, 250, 0.3)',
+                        background: 'var(--bg-surface)',
+                        border: '1px solid var(--border-medium)',
                       }}
                     >
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-                        <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#60a5fa', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-arcane-blue-text)', display: 'flex', alignItems: 'center', gap: '6px' }}>
                           <Calendar size={16} /> Timeline Next Session Prep (Session N+1 Proposal):
                         </span>
-                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.78rem', color: '#fff', cursor: 'pointer' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.78rem', color: 'var(--text-primary)', cursor: 'pointer' }}>
                           <input
                             type="checkbox"
                             checked={applyNextSessionPrep}
@@ -1433,7 +1480,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                           Create Session in Timeline
                         </label>
                       </div>
-                      <h4 style={{ fontSize: '0.95rem', color: '#fff', marginBottom: '4px' }}>
+                      <h4 style={{ fontSize: '0.95rem', color: 'var(--text-primary)', marginBottom: '4px' }}>
                         {sessionAdaptationResult.next_session_prep.title}
                       </h4>
                       <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>
@@ -1448,9 +1495,9 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                                 fontSize: '0.72rem',
                                 padding: '2px 8px',
                                 borderRadius: '6px',
-                                background: 'rgba(96, 165, 250, 0.15)',
-                                color: '#93c5fd',
-                                border: '1px solid rgba(96, 165, 250, 0.3)',
+                                background: 'var(--color-arcane-blue-bg)',
+                                color: 'var(--color-arcane-blue-text)',
+                                border: '1px solid var(--color-arcane-blue-border)',
                               }}
                             >
                               ⚔️ {enc}
@@ -1459,7 +1506,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                         </div>
                       )}
                       {sessionAdaptationResult.next_session_prep.dm_secrets && (
-                        <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', background: 'rgba(0,0,0,0.3)', padding: '6px 10px', borderRadius: '6px' }}>
+                        <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', background: 'var(--bg-card-hover)', border: '1px solid var(--border-subtle)', padding: '6px 10px', borderRadius: '6px' }}>
                           🔒 <strong>DM Secrets:</strong> {sessionAdaptationResult.next_session_prep.dm_secrets}
                         </div>
                       )}
@@ -1472,15 +1519,15 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                       style={{
                         padding: '14px',
                         borderRadius: '8px',
-                        background: 'rgba(16, 185, 129, 0.05)',
-                        border: '1px solid rgba(16, 185, 129, 0.25)',
+                        background: 'var(--status-completed-bg)',
+                        border: '1px solid var(--status-completed-border)',
                       }}
                     >
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-                        <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#34d399', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--status-completed-text)', display: 'flex', alignItems: 'center', gap: '6px' }}>
                           <Scroll size={16} /> Player Portal Journal Recap:
                         </span>
-                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.78rem', color: '#fff', cursor: 'pointer' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.78rem', color: 'var(--text-primary)', cursor: 'pointer' }}>
                           <input
                             type="checkbox"
                             checked={applyPlayerRecap}
@@ -1540,13 +1587,13 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                 padding: '20px',
                 borderRadius: '12px',
                 border: '2px dashed var(--border-medium)',
-                background: 'rgba(15, 20, 32, 0.6)',
+                background: 'var(--bg-card)',
                 textAlign: 'center',
               }}
             >
               <Upload size={32} style={{ color: 'var(--color-gold)', margin: '0 auto 8px' }} />
               <h4 style={{ fontSize: '1rem', marginBottom: '4px' }}>
-                Upload {activeCategory === 'book' ? 'Adventure PDF or Chapter' : activeCategory === 'monster' ? 'Monster Stat Sheet / PDF' : 'Character Sheet (PDF, Image, Text)'}
+                Upload {activeCategory === 'book' ? 'Adventure PDF or Chapter' : activeCategory === 'monster' ? 'Monster Stat Sheet / PDF' : activeCategory === 'lore' ? 'World Lore Document (PDF, TXT)' : 'Character Sheet (PDF, Image, Text)'}
               </h4>
               <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '14px' }}>
                 Supports PDF, PNG, JPG, or TXT documents.
@@ -1568,7 +1615,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                   type="button"
                   onClick={() => setShowLibraryModal(true)}
                   className="btn btn-ghost"
-                  style={{ fontSize: '0.74rem', color: '#93c5fd', textDecoration: 'underline', padding: '2px 8px' }}
+                  style={{ fontSize: '0.74rem', color: 'var(--color-arcane-blue-text)', textDecoration: 'underline', padding: '2px 8px' }}
                 >
                   📂 Or choose from Document Library ({libraryDocsCount} files)
                 </button>
@@ -1580,13 +1627,13 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                     marginTop: '12px',
                     padding: '8px 12px',
                     borderRadius: '6px',
-                    background: 'rgba(16, 185, 129, 0.1)',
-                    border: '1px solid rgba(16, 185, 129, 0.3)',
+                    background: 'var(--status-completed-bg)',
+                    border: '1px solid var(--status-completed-border)',
                     display: 'inline-flex',
                     alignItems: 'center',
                     gap: '8px',
                     fontSize: '0.8rem',
-                    color: '#34d399',
+                    color: 'var(--status-completed-text)',
                   }}
                 >
                   <CheckCircle size={15} /> Uploaded: <strong>{originalName}</strong>
@@ -1602,6 +1649,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                 style={{
                   padding: '14px 18px',
                   borderRadius: '10px',
+                  background: 'var(--bg-card)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'space-between',
@@ -1626,8 +1674,8 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                       padding: '4px 8px',
                       borderRadius: '6px',
                       background: 'var(--bg-surface)',
-                      border: '1px solid var(--border-subtle)',
-                      color: '#fff',
+                      border: '1px solid var(--border-medium)',
+                      color: 'var(--text-primary)',
                       textAlign: 'center',
                     }}
                   />
@@ -1643,8 +1691,8 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                       padding: '4px 8px',
                       borderRadius: '6px',
                       background: 'var(--bg-surface)',
-                      border: '1px solid var(--border-subtle)',
-                      color: '#fff',
+                      border: '1px solid var(--border-medium)',
+                      color: 'var(--text-primary)',
                       textAlign: 'center',
                     }}
                   />
@@ -1677,8 +1725,8 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                   padding: '10px 12px',
                   borderRadius: '8px',
                   background: 'var(--bg-surface)',
-                  border: '1px solid var(--border-subtle)',
-                  color: '#fff',
+                  border: '1px solid var(--border-medium)',
+                  color: 'var(--text-primary)',
                   fontSize: '0.82rem',
                   resize: 'vertical',
                 }}
@@ -1692,17 +1740,17 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                 padding: '16px',
                 borderRadius: '10px',
                 border: '1px solid var(--border-medium)',
-                background: 'rgba(15, 20, 32, 0.8)',
+                background: 'var(--bg-card)',
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
                 <Sparkles size={16} style={{ color: 'var(--color-gold)' }} />
-                <label style={{ fontSize: '0.85rem', fontWeight: 600 }}>Initial Instruction to Co-DM:</label>
+                <label style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>Initial Instruction to Co-DM:</label>
               </div>
 
               {/* Quick Suggestion Chips */}
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '10px' }}>
-                {(activeCategory === 'book' ? bookPresets : activeCategory === 'monster' ? monsterPresets : characterPresets).map((p, idx) => (
+                {(activeCategory === 'book' ? bookPresets : activeCategory === 'monster' ? monsterPresets : activeCategory === 'lore' ? lorePresets : characterPresets).map((p, idx) => (
                   <button
                     key={idx}
                     onClick={() => {
@@ -1714,9 +1762,10 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                       padding: '3px 8px',
                       fontSize: '0.72rem',
                       borderRadius: '12px',
-                      background: instruction === p.prompt ? 'rgba(245, 158, 11, 0.2)' : 'rgba(255,255,255,0.05)',
-                      border: `1px solid ${instruction === p.prompt ? 'var(--color-gold)' : 'var(--border-subtle)'}`,
-                      color: instruction === p.prompt ? 'var(--color-gold)' : 'var(--text-secondary)',
+                      background: instruction === p.prompt ? 'var(--color-amber-glow)' : 'var(--bg-surface)',
+                      border: `1px solid ${instruction === p.prompt ? 'var(--color-gold)' : 'var(--border-medium)'}`,
+                      color: instruction === p.prompt ? 'var(--text-gold)' : 'var(--text-primary)',
+                      fontWeight: instruction === p.prompt ? 700 : 500,
                     }}
                   >
                     {p.label}
@@ -1734,8 +1783,8 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                   padding: '10px',
                   borderRadius: '8px',
                   background: 'var(--bg-surface)',
-                  border: '1px solid var(--border-subtle)',
-                  color: '#fff',
+                  border: '1px solid var(--border-medium)',
+                  color: 'var(--text-primary)',
                   fontSize: '0.82rem',
                   resize: 'vertical',
                   marginBottom: '14px',
@@ -1784,7 +1833,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                 border: '1px solid var(--border-medium)',
                 display: 'flex',
                 flexDirection: 'column',
-                background: 'rgba(15, 20, 32, 0.85)',
+                background: 'var(--bg-card)',
               }}
             >
               {/* Action Bar */}
@@ -1822,9 +1871,9 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                   style={{
                     padding: '12px 16px',
                     borderRadius: '8px',
-                    background: 'rgba(16, 185, 129, 0.15)',
-                    border: '1px solid #10b981',
-                    color: '#34d399',
+                    background: 'var(--status-completed-bg)',
+                    border: '1px solid var(--status-completed-border)',
+                    color: 'var(--status-completed-text)',
                     fontSize: '0.85rem',
                     marginBottom: '14px',
                     display: 'flex',
@@ -1857,7 +1906,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                 <div
                   style={{
                     marginBottom: '16px',
-                    background: 'rgba(9, 13, 21, 0.7)',
+                    background: 'var(--bg-surface)',
                     borderRadius: '10px',
                     border: '1px solid var(--border-subtle)',
                     padding: '14px',
@@ -1896,19 +1945,19 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                           lineHeight: '1.4',
                           background:
                             msg.role === 'user'
-                              ? 'rgba(59, 130, 246, 0.15)'
-                              : 'rgba(245, 158, 11, 0.08)',
+                              ? 'var(--color-arcane-blue-bg)'
+                              : 'var(--color-amber-glow)',
                           border: `1px solid ${
                             msg.role === 'user'
-                              ? 'rgba(59, 130, 246, 0.3)'
-                              : 'rgba(245, 158, 11, 0.25)'
+                              ? 'var(--color-arcane-blue-border)'
+                              : 'var(--border-medium)'
                           }`,
                           alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
                           maxWidth: '92%',
                         }}
                       >
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>
-                          <span style={{ fontWeight: 700, color: msg.role === 'user' ? '#60a5fa' : 'var(--color-gold)' }}>
+                          <span style={{ fontWeight: 700, color: msg.role === 'user' ? 'var(--color-arcane-blue-text)' : 'var(--color-gold)' }}>
                             {msg.role === 'user' ? 'Dungeon Master' : 'Co-DM Architect'}
                           </span>
                           <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>{msg.timestamp}</span>
@@ -1917,17 +1966,18 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                               style={{
                                 marginLeft: 'auto',
                                 fontSize: '0.68rem',
-                                background: 'rgba(245, 158, 11, 0.2)',
-                                color: 'var(--color-gold)',
+                                background: 'var(--color-amber-glow)',
+                                color: 'var(--text-gold)',
                                 padding: '1px 5px',
                                 borderRadius: '4px',
+                                border: '1px solid var(--border-subtle)',
                               }}
                             >
                               Draft: {msg.nodeCount} nodes
                             </span>
                           )}
                         </div>
-                        <div style={{ color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>
+                        <div style={{ color: 'var(--text-primary)', whiteSpace: 'pre-wrap' }}>
                           {msg.content}
                         </div>
                       </div>
@@ -1947,9 +1997,9 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                           padding: '2px 8px',
                           fontSize: '0.7rem',
                           borderRadius: '10px',
-                          background: 'rgba(255,255,255,0.04)',
-                          border: '1px solid var(--border-subtle)',
-                          color: 'var(--text-muted)',
+                          background: 'var(--bg-card)',
+                          border: '1px solid var(--border-medium)',
+                          color: 'var(--text-primary)',
                         }}
                       >
                         + {sug}
@@ -1973,7 +2023,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                         borderRadius: '8px',
                         background: 'var(--bg-surface)',
                         border: '1px solid var(--border-medium)',
-                        color: '#fff',
+                        color: 'var(--text-primary)',
                         fontSize: '0.82rem',
                       }}
                     />
@@ -2006,8 +2056,8 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                     }}
                   >
                     <FileText size={36} style={{ color: 'var(--border-medium)' }} />
-                    <p style={{ fontSize: '0.85rem' }}>No decomposition results yet.</p>
-                    <p style={{ fontSize: '0.75rem', maxWidth: '320px' }}>
+                    <p style={{ fontSize: '0.85rem', color: 'var(--text-primary)' }}>No decomposition results yet.</p>
+                    <p style={{ fontSize: '0.75rem', maxWidth: '320px', color: 'var(--text-secondary)' }}>
                       Upload an adventure chapter or stat sheet, choose your instructions, and click <strong>Decompose with Co-DM</strong>.
                     </p>
                   </div>
@@ -2022,8 +2072,8 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                         style={{
                           padding: '10px 14px',
                           borderRadius: '8px',
-                          border: `1px solid ${isChecked ? 'rgba(245, 158, 11, 0.4)' : 'var(--border-subtle)'}`,
-                          background: isChecked ? 'rgba(245, 158, 11, 0.04)' : 'var(--bg-surface)',
+                          border: `1px solid ${isChecked ? 'var(--color-gold)' : 'var(--border-subtle)'}`,
+                          background: isChecked ? 'var(--color-amber-glow)' : 'var(--bg-surface)',
                           display: 'flex',
                           alignItems: 'flex-start',
                           gap: '10px',
@@ -2040,7 +2090,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                         <div style={{ flex: 1 }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '2px' }}>
                             <span className={`badge badge-${n.type || 'quest'}`}>{n.type}</span>
-                            <span style={{ fontSize: '0.88rem', fontWeight: 600, color: '#fff' }}>{n.title}</span>
+                            <span style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-primary)' }}>{n.title}</span>
                             {n.subtitle && (
                               <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                                 • {n.subtitle}
@@ -2071,7 +2121,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                           fontSize: '0.7rem',
                           padding: '2px 8px',
                           borderRadius: '6px',
-                          background: 'rgba(255,255,255,0.05)',
+                          background: 'var(--bg-surface)',
                           border: '1px solid var(--border-subtle)',
                           color: 'var(--text-secondary)',
                         }}

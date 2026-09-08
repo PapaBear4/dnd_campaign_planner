@@ -1,27 +1,74 @@
-from fastapi import APIRouter, HTTPException
-from typing import Any, Dict, List
+from fastapi import APIRouter, HTTPException, Query
+from typing import Any, Dict, List, Optional
 from app.models import (
     AgentChatRequest,
     BoxedTextRequest,
+    ChatThreadCreate,
+    ChatThreadResponse,
     CoachAdviceRequest,
     DocumentExtractRequest,
     EdgeCreate,
     NodeCreate,
     WeaveHookRequest,
 )
-from app.services import ai_agent_service, graph_service
+from app.services import ai_agent_service, chat_history_service, graph_service
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
+
+@router.get("/threads")
+def list_threads(campaign_id: str = Query("default-campaign")):
+    return chat_history_service.list_threads(campaign_id)
+
+@router.post("/threads")
+def create_thread(data: ChatThreadCreate):
+    return chat_history_service.create_thread(data.campaign_id, data.title or "New Prep Session")
+
+@router.get("/threads/{thread_id}/messages")
+def get_thread_messages(thread_id: str):
+    return chat_history_service.get_thread_messages(thread_id)
+
+@router.delete("/threads/{thread_id}")
+def delete_thread(thread_id: str):
+    chat_history_service.delete_thread(thread_id)
+    return {"success": True, "message": "Thread deleted"}
 
 @router.post("/chat")
 def chat(request: AgentChatRequest):
     cid = request.campaign_id or graph_service.get_setting("active_campaign_id", "default-campaign")
+    
+    # Resolve or create thread
+    thread = chat_history_service.get_or_create_thread(cid, request.thread_id)
+    thread_id = thread["id"]
+    
+    # Save the latest user message
+    if request.messages and request.messages[-1].role == "user":
+        chat_history_service.save_message(
+            thread_id=thread_id,
+            campaign_id=cid,
+            role="user",
+            content=request.messages[-1].content
+        )
+        
     messages = [m.model_dump() for m in request.messages]
-    return ai_agent_service.chat_with_agent(
+    res = ai_agent_service.chat_with_agent(
         messages=messages,
         campaign_id=cid,
         context_node_id=request.context_node_id
     )
+    
+    # Persist assistant reply with actions_taken
+    if res.get("reply"):
+        chat_history_service.save_message(
+            thread_id=thread_id,
+            campaign_id=cid,
+            role="assistant",
+            content=res["reply"],
+            actions_taken=res.get("actions_taken", [])
+        )
+    
+    res["thread_id"] = thread_id
+    return res
+
 
 @router.post("/boxed-text")
 def generate_boxed_text(request: BoxedTextRequest):

@@ -57,6 +57,7 @@ const TYPE_COLORS: Record<NodeType, string> = {
   item: '#f97316',
   clue: '#8b5cf6',
   map: '#6366f1',
+  lore: '#d97706',
 };
 
 function runPhysicsStep(
@@ -128,10 +129,30 @@ export const GraphView: React.FC<GraphViewProps> = ({
   onSelectNode,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  // Resize canvas according to container dimensions
+  useEffect(() => {
+    const container = containerRef.current;
+    const canvas = canvasRef.current;
+    if (!container || !canvas) return;
+
+    const handleResize = () => {
+      if (container.clientWidth > 0 && container.clientHeight > 0) {
+        canvas.width = container.clientWidth;
+        canvas.height = container.clientHeight;
+      }
+    };
+
+    handleResize();
+    const ro = new ResizeObserver(handleResize);
+    ro.observe(container);
+    return () => ro.disconnect();
+  }, []);
 
   // Filter state
   const [selectedTypes, setSelectedTypes] = useState<Set<string>>(
-    new Set(['npc', 'location', 'monster', 'faction', 'item', 'clue', 'quest', 'pc'])
+    new Set(['npc', 'location', 'monster', 'faction', 'item', 'clue', 'quest', 'pc', 'lore'])
   );
 
   // Connect tool state
@@ -290,8 +311,28 @@ export const GraphView: React.FC<GraphViewProps> = ({
         ctx.arc(n.x, n.y, n.radius, 0, Math.PI * 2);
         ctx.fillStyle = n.color;
         ctx.fill();
-        ctx.lineWidth = 2;
-        ctx.strokeStyle = n.node.revealed_to_players ? '#10b981' : '#1e293b';
+
+        const isCanon = n.node.is_canon !== false;
+        if (!isCanon) {
+          ctx.setLineDash([4, 3]);
+        } else {
+          ctx.setLineDash([]);
+        }
+
+        ctx.lineWidth = isCanon ? 2.5 : 1.8;
+        ctx.strokeStyle = n.node.revealed_to_players
+          ? '#10b981'
+          : (isCanon ? '#f59e0b' : '#64748b');
+        ctx.stroke();
+        ctx.setLineDash([]); // reset dash
+
+        // Canon status badge dot on top right
+        ctx.beginPath();
+        ctx.arc(n.x + n.radius * 0.72, n.y - n.radius * 0.72, 3.5, 0, Math.PI * 2);
+        ctx.fillStyle = isCanon ? '#f59e0b' : '#94a3b8';
+        ctx.fill();
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = '#0f172a';
         ctx.stroke();
 
         // Node Title
@@ -301,10 +342,11 @@ export const GraphView: React.FC<GraphViewProps> = ({
         ctx.textBaseline = 'top';
         ctx.fillText(n.node.title, n.x, n.y + n.radius + 5);
 
-        // Node Subtitle / Type
-        ctx.fillStyle = '#94a3b8';
+        // Node Subtitle / Type with draft/canon notation
+        ctx.fillStyle = isCanon ? '#94a3b8' : '#e2e8f0';
         ctx.font = '9px Inter, sans-serif';
-        ctx.fillText(n.node.subtitle || n.node.type, n.x, n.y + n.radius + 18);
+        const subtitleText = (n.node.subtitle || n.node.type) + (!isCanon ? ' (Draft)' : '');
+        ctx.fillText(subtitleText, n.x, n.y + n.radius + 18);
       }
 
       ctx.restore();
@@ -425,77 +467,84 @@ export const GraphView: React.FC<GraphViewProps> = ({
   };
 
   return (
-    <div style={{ position: 'relative', width: '100%', height: 'calc(100vh - 65px)', overflow: 'hidden' }}>
+    <div ref={containerRef} style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden' }}>
       {/* Top Floating Control Bar */}
       <div
         className="glass-panel"
         style={{
           position: 'absolute',
-          top: '16px',
-          left: '20px',
+          top: '12px',
+          left: '16px',
           zIndex: 10,
-          borderRadius: '10px',
-          padding: '8px 14px',
+          borderRadius: '8px',
+          padding: '5px 10px',
           display: 'flex',
           alignItems: 'center',
-          gap: '12px',
-          boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
+          gap: '8px',
+          boxShadow: '0 4px 16px rgba(0,0,0,0.35)',
+          whiteSpace: 'nowrap',
+          maxWidth: 'calc(100% - 32px)',
+          overflowX: 'auto',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <Share2 size={16} style={{ color: 'var(--color-gold)' }} />
-          <span style={{ fontWeight: 700, fontSize: '0.88rem' }}>Campaign Entity Web</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexShrink: 0 }}>
+          <Share2 size={14} style={{ color: 'var(--color-gold)' }} />
+          <span style={{ fontWeight: 700, fontSize: '0.8rem', color: 'var(--text-primary)' }}>Entity Web</span>
         </div>
 
-        <div style={{ height: '18px', width: '1px', background: 'var(--border-subtle)' }} />
+        <div style={{ height: '14px', width: '1px', background: 'var(--border-medium)', flexShrink: 0 }} />
 
-        {/* Filter Pills */}
-        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
-          {(['location', 'npc', 'monster', 'faction', 'item', 'clue', 'quest', 'pc'] as NodeType[]).map((t) => (
-            <button
-              key={t}
-              onClick={() => toggleTypeFilter(t)}
-              style={{
-                background: selectedTypes.has(t) ? TYPE_COLORS[t] + '33' : 'rgba(255,255,255,0.05)',
-                border: `1px solid ${selectedTypes.has(t) ? TYPE_COLORS[t] : 'transparent'}`,
-                color: selectedTypes.has(t) ? TYPE_COLORS[t] : 'var(--text-muted)',
-                borderRadius: '6px',
-                padding: '3px 8px',
-                fontSize: '0.72rem',
-                fontWeight: 600,
-                cursor: 'pointer',
-                textTransform: 'capitalize',
-              }}
-            >
-              {t}
-            </button>
-          ))}
+        {/* Filter Pills - Single Line Tightened */}
+        <div style={{ display: 'flex', gap: '3px', flexWrap: 'nowrap', alignItems: 'center', flexShrink: 0 }}>
+          {(['location', 'npc', 'monster', 'faction', 'item', 'clue', 'quest', 'pc', 'lore'] as NodeType[]).map((t) => {
+            const isSelected = selectedTypes.has(t);
+            return (
+              <button
+                key={t}
+                onClick={() => toggleTypeFilter(t)}
+                style={{
+                  background: isSelected ? TYPE_COLORS[t] + '26' : 'var(--bg-surface)',
+                  border: `1px solid ${isSelected ? TYPE_COLORS[t] : 'var(--border-subtle)'}`,
+                  color: isSelected ? TYPE_COLORS[t] : 'var(--text-secondary)',
+                  borderRadius: '4px',
+                  padding: '2px 6px',
+                  fontSize: '0.68rem',
+                  fontWeight: isSelected ? 700 : 500,
+                  cursor: 'pointer',
+                  textTransform: 'capitalize',
+                  lineHeight: 1.2,
+                  whiteSpace: 'nowrap',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                {t}
+              </button>
+            );
+          })}
         </div>
 
-        <div style={{ height: '18px', width: '1px', background: 'var(--border-subtle)' }} />
+        <div style={{ height: '14px', width: '1px', background: 'var(--border-medium)', flexShrink: 0 }} />
 
         {/* Action Buttons */}
-        <button onClick={() => setShowAddNodeModal(true)} className="btn btn-primary" style={{ padding: '4px 10px', fontSize: '0.78rem' }}>
-          <Plus size={13} /> Add Entity
+        <button onClick={() => setShowAddNodeModal(true)} className="btn btn-primary" style={{ padding: '3px 8px', fontSize: '0.72rem', flexShrink: 0 }}>
+          <Plus size={12} /> Add
         </button>
-        <button onClick={() => setShowConnectModal(true)} className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: '0.78rem' }}>
-          <Link size={13} /> Connect
+        <button onClick={() => setShowConnectModal(true)} className="btn btn-secondary" style={{ padding: '3px 8px', fontSize: '0.72rem', flexShrink: 0 }}>
+          <Link size={12} /> Connect
         </button>
-        <button onClick={handleResetView} className="btn btn-ghost" title="Reset View" style={{ padding: '6px' }}>
-          <RotateCcw size={15} />
+        <button onClick={handleResetView} className="btn btn-ghost" title="Reset View" style={{ padding: '4px', flexShrink: 0 }}>
+          <RotateCcw size={14} />
         </button>
       </div>
 
       {/* Main Canvas */}
       <canvas
         ref={canvasRef}
-        width={window.innerWidth}
-        height={window.innerHeight - 65}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onWheel={handleWheel}
-        style={{ cursor: isDraggingRef.current ? 'grabbing' : 'grab', background: '#090d16' }}
+        style={{ display: 'block', width: '100%', height: '100%', cursor: isDraggingRef.current ? 'grabbing' : 'grab', background: '#090d16' }}
       />
 
       {/* Legend at bottom left */}
@@ -515,12 +564,15 @@ export const GraphView: React.FC<GraphViewProps> = ({
         }}
       >
         <span>
-          <strong style={{ color: '#10b981' }}>Green Border:</strong> Revealed to Players
+          <strong style={{ color: '#10b981' }}>Green Border:</strong> Revealed
         </span>
         <span>
-          <strong style={{ color: '#64748b' }}>Dark Border:</strong> DM Secret
+          <strong style={{ color: '#f59e0b' }}>Gold Accent:</strong> 🔒 Canon Lore
         </span>
-        <span>• Click node to edit details • Drag to reposition</span>
+        <span>
+          <strong style={{ color: '#94a3b8' }}>Dashed:</strong> 📝 Draft
+        </span>
+        <span>• Click node to edit • Drag to reposition</span>
       </div>
 
       {/* Connect Nodes Modal */}
@@ -548,7 +600,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
                 <select
                   value={sourceNodeId}
                   onChange={(e) => setSourceNodeId(e.target.value)}
-                  style={{ width: '100%', padding: '8px', background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: '6px', color: '#fff' }}
+                  style={{ width: '100%', padding: '8px', background: 'var(--bg-surface)', border: '1px solid var(--border-medium)', borderRadius: '6px', color: 'var(--text-primary)' }}
                 >
                   <option value="">Select source...</option>
                   {graphData.nodes.map((n) => (
@@ -566,7 +618,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
                 <select
                   value={relationType}
                   onChange={(e) => setRelationType(e.target.value)}
-                  style={{ width: '100%', padding: '8px', background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: '6px', color: '#fff' }}
+                  style={{ width: '100%', padding: '8px', background: 'var(--bg-surface)', border: '1px solid var(--border-medium)', borderRadius: '6px', color: 'var(--text-primary)' }}
                 >
                   <option value="located_at">located_at</option>
                   <option value="frequents">frequents</option>
@@ -587,7 +639,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
                 <select
                   value={targetNodeId}
                   onChange={(e) => setTargetNodeId(e.target.value)}
-                  style={{ width: '100%', padding: '8px', background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: '6px', color: '#fff' }}
+                  style={{ width: '100%', padding: '8px', background: 'var(--bg-surface)', border: '1px solid var(--border-medium)', borderRadius: '6px', color: 'var(--text-primary)' }}
                 >
                   <option value="">Select target...</option>
                   {graphData.nodes.map((n) => (
@@ -626,7 +678,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
             padding: '20px',
           }}
         >
-          <div className="glass-panel animate-fade-in" style={{ width: '100%', maxWidth: '460px', padding: '24px', borderRadius: '14px' }}>
+          <div className="glass-panel animate-fade-in" style={{ width: '100%', maxWidth: '460px', padding: '24px', borderRadius: '14px', background: 'var(--bg-card)' }}>
             <h3 style={{ fontSize: '1.15rem', marginBottom: '16px' }}>Add Entity to Graph</h3>
             <form onSubmit={handleCreateNewNode}>
               <div style={{ marginBottom: '14px' }}>
@@ -636,7 +688,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
                 <select
                   value={newNodeType}
                   onChange={(e) => setNewNodeType(e.target.value as NodeType)}
-                  style={{ width: '100%', padding: '8px', background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: '6px', color: '#fff' }}
+                  style={{ width: '100%', padding: '8px', background: 'var(--bg-surface)', border: '1px solid var(--border-medium)', borderRadius: '6px', color: 'var(--text-primary)' }}
                 >
                   <option value="npc">NPC</option>
                   <option value="location">Location</option>
@@ -658,7 +710,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
                   placeholder="e.g. Captain Vane, Whispering Cavern"
                   value={newNodeTitle}
                   onChange={(e) => setNewNodeTitle(e.target.value)}
-                  style={{ width: '100%', padding: '8px', background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: '6px', color: '#fff' }}
+                  style={{ width: '100%', padding: '8px', background: 'var(--bg-surface)', border: '1px solid var(--border-medium)', borderRadius: '6px', color: 'var(--text-primary)' }}
                 />
               </div>
 
@@ -671,7 +723,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
                   placeholder="Appearance, role, secret motives..."
                   value={newNodeSummary}
                   onChange={(e) => setNewNodeSummary(e.target.value)}
-                  style={{ width: '100%', padding: '8px', background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: '6px', color: '#fff' }}
+                  style={{ width: '100%', padding: '8px', background: 'var(--bg-surface)', border: '1px solid var(--border-medium)', borderRadius: '6px', color: 'var(--text-primary)' }}
                 />
               </div>
 

@@ -52,6 +52,7 @@ export interface NodeItem {
   content_markdown?: string;
   data_json?: Record<string, any>;
   revealed_to_players: boolean;
+  is_canon?: boolean;
   tags?: string[];
   sort_order: number;
   created_at: string;
@@ -67,6 +68,7 @@ export interface EdgeItem {
   label?: string;
   metadata_json?: Record<string, any>;
   revealed_to_players: boolean;
+  is_canon?: boolean;
   created_at: string;
 }
 
@@ -111,8 +113,27 @@ export interface ModelsQueryResponse {
   source: string;
 }
 
+export interface AgentActionTaken {
+  tool: string;
+  args: Record<string, any>;
+  result: any;
+}
+
 export interface AgentChatMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
+  actions_taken?: AgentActionTaken[];
 }
+
+export interface ChatThread {
+  id: string;
+  campaign_id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  message_count: number;
+  last_message?: string | null;
+}
+
+
 

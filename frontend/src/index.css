@@ -1,5 +1,5 @@
-/* ArcaneWeaver Design System & Dark-Fantasy Palette */
-:root {
+/* ArcaneWeaver Design System & Themes */
+:root, [data-theme="obsidian"], [data-theme="dark"] {
   --bg-app: #080b11;
   --bg-surface: #0f1420;
   --bg-card: #151c2c;
@@ -24,9 +24,40 @@
   --color-crimson-dark: #b91c1c;
 
   --color-arcane-blue: #3b82f6;
+  --color-arcane-blue-text: #93c5fd;
+  --color-arcane-blue-bg: rgba(59, 130, 246, 0.15);
+  --color-arcane-blue-border: rgba(96, 165, 250, 0.4);
   --color-arcane-cyan: #06b6d4;
   --color-emerald: #10b981;
   --color-purple: #a855f7;
+
+  /* Status Colors */
+  --status-planned-bg: rgba(148, 163, 184, 0.15);
+  --status-planned-border: rgba(148, 163, 184, 0.3);
+  --status-planned-text: #cbd5e1;
+  --status-inprogress-bg: rgba(245, 158, 11, 0.2);
+  --status-inprogress-border: rgba(245, 158, 11, 0.5);
+  --status-inprogress-text: #fbbf24;
+  --status-completed-bg: rgba(16, 185, 129, 0.2);
+  --status-completed-border: rgba(16, 185, 129, 0.5);
+  --status-completed-text: #34d399;
+
+  /* Combat Difficulty Colors */
+  --diff-trivial-bg: rgba(148, 163, 184, 0.15);
+  --diff-trivial-border: rgba(148, 163, 184, 0.35);
+  --diff-trivial-text: #94a3b8;
+  --diff-easy-bg: rgba(16, 185, 129, 0.15);
+  --diff-easy-border: rgba(16, 185, 129, 0.4);
+  --diff-easy-text: #34d399;
+  --diff-medium-bg: rgba(234, 179, 8, 0.15);
+  --diff-medium-border: rgba(234, 179, 8, 0.4);
+  --diff-medium-text: #facc15;
+  --diff-hard-bg: rgba(249, 115, 22, 0.15);
+  --diff-hard-border: rgba(249, 115, 22, 0.4);
+  --diff-hard-text: #fb923c;
+  --diff-deadly-bg: rgba(239, 68, 68, 0.15);
+  --diff-deadly-border: rgba(239, 68, 68, 0.4);
+  --diff-deadly-text: #f87171;
 
   /* Stat block parchment styling */
   --parchment-bg: #f7f3e8;
@@ -48,8 +79,214 @@
   --font-mono: 'Fira Code', monospace;
 }
 
+/* Light / Sunlight Mode */
+[data-theme="light"], [data-theme="sunlight"] {
+  --bg-app: #f4f6f9;
+  --bg-surface: #ffffff;
+  --bg-card: #f8fafc;
+  --bg-card-hover: #f1f5f9;
+  --bg-card-active: #e2e8f0;
+  --bg-glass: rgba(255, 255, 255, 0.94);
+
+  --border-subtle: #e2e8f0;
+  --border-medium: #cbd5e1;
+  --border-glow: rgba(217, 119, 6, 0.35);
+
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+  --text-gold: #b45309;
+
+  --color-gold: #d97706;
+  --color-gold-hover: #b45309;
+  --color-amber-glow: rgba(217, 119, 6, 0.2);
+
+  --color-crimson: #dc2626;
+  --color-crimson-dark: #991b1b;
+
+  --color-arcane-blue: #2563eb;
+  --color-arcane-blue-text: #1d4ed8;
+  --color-arcane-blue-bg: rgba(37, 99, 235, 0.1);
+  --color-arcane-blue-border: rgba(37, 99, 235, 0.35);
+  --color-arcane-cyan: #0891b2;
+  --color-emerald: #059669;
+  --color-purple: #9333ea;
+
+  /* Status Colors */
+  --status-planned-bg: #e2e8f0;
+  --status-planned-border: #cbd5e1;
+  --status-planned-text: #334155;
+  --status-inprogress-bg: #fef3c7;
+  --status-inprogress-border: #f59e0b;
+  --status-inprogress-text: #92400e;
+  --status-completed-bg: #d1fae5;
+  --status-completed-border: #10b981;
+  --status-completed-text: #065f46;
+
+  /* Combat Difficulty Colors */
+  --diff-trivial-bg: #f1f5f9;
+  --diff-trivial-border: #cbd5e1;
+  --diff-trivial-text: #334155;
+  --diff-easy-bg: #d1fae5;
+  --diff-easy-border: #10b981;
+  --diff-easy-text: #065f46;
+  --diff-medium-bg: #fef3c7;
+  --diff-medium-border: #f59e0b;
+  --diff-medium-text: #92400e;
+  --diff-hard-bg: #ffedd5;
+  --diff-hard-border: #f97316;
+  --diff-hard-text: #9a3412;
+  --diff-deadly-bg: #fee2e2;
+  --diff-deadly-border: #ef4444;
+  --diff-deadly-text: #991b1b;
+
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 4px 20px rgba(0, 0, 0, 0.12);
+  --shadow-glow: 0 0 25px rgba(217, 119, 6, 0.15);
+}
+
+/* Classic D&D Parchment Mode */
+[data-theme="parchment"] {
+  --bg-app: #ede4d0;
+  --bg-surface: #f6f0df;
+  --bg-card: #faf6ea;
+  --bg-card-hover: #ede3cc;
+  --bg-card-active: #e2d7ba;
+  --bg-glass: rgba(246, 240, 223, 0.96);
+
+  --border-subtle: #d3c4a8;
+  --border-medium: #b59f7d;
+  --border-glow: rgba(146, 64, 14, 0.5);
+
+  --text-primary: #1c0e06;   /* Rich deep dark ink */
+  --text-secondary: #3d2617; /* Dark readable sepia */
+  --text-muted: #573c2a;     /* Solid warm brown */
+  --text-gold: #9a3412;
+
+  --color-gold: #b45309;
+  --color-gold-hover: #92400e;
+  --color-amber-glow: rgba(180, 83, 9, 0.3);
+
+  --color-crimson: #991b1b;
+  --color-crimson-dark: #7f1d1d;
+
+  --color-arcane-blue: #1e40af;
+  --color-arcane-blue-text: #172554;
+  --color-arcane-blue-bg: rgba(30, 58, 138, 0.1);
+  --color-arcane-blue-border: rgba(30, 58, 138, 0.4);
+  --color-arcane-cyan: #0e7490;
+  --color-emerald: #065f46;
+  --color-purple: #6b21a8;
+
+  /* Status Colors: Rich high-contrast dark tones for parchment */
+  --status-planned-bg: #e8dcbe;
+  --status-planned-border: #b59f7d;
+  --status-planned-text: #3d2617;
+  --status-inprogress-bg: #fed7aa;
+  --status-inprogress-border: #c2410c;
+  --status-inprogress-text: #7c2d12;
+  --status-completed-bg: #d1fae5;
+  --status-completed-border: #047857;
+  --status-completed-text: #064e3b;
+
+  /* Combat Difficulty Colors: Rich medieval wax-seal tones */
+  --diff-trivial-bg: #e8dcbe;
+  --diff-trivial-border: #b59f7d;
+  --diff-trivial-text: #3d2617;
+  --diff-easy-bg: #dcfce7;
+  --diff-easy-border: #059669;
+  --diff-easy-text: #064e3b;
+  --diff-medium-bg: #fef08a;
+  --diff-medium-border: #ca8a04;
+  --diff-medium-text: #713f12;
+  --diff-hard-bg: #fed7aa;
+  --diff-hard-border: #ea580c;
+  --diff-hard-text: #7c2d12;
+  --diff-deadly-bg: #fecaca;
+  --diff-deadly-border: #dc2626;
+  --diff-deadly-text: #7f1d1d;
+
+  --shadow-sm: 0 2px 8px rgba(45, 24, 16, 0.12);
+  --shadow-md: 0 4px 20px rgba(45, 24, 16, 0.2);
+  --shadow-glow: 0 0 25px rgba(180, 83, 9, 0.3);
+}
+
+/* Underdark Bioluminescent Mode */
+[data-theme="underdark"] {
+  --bg-app: #030712;
+  --bg-surface: #0b1120;
+  --bg-card: #0f172a;
+  --bg-card-hover: #1e293b;
+  --bg-card-active: #283548;
+  --bg-glass: rgba(11, 17, 32, 0.88);
+
+  --border-subtle: #1e293b;
+  --border-medium: #334155;
+  --border-glow: rgba(6, 182, 212, 0.45);
+
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --text-gold: #38bdf8;
+
+  --color-gold: #06b6d4;
+  --color-gold-hover: #0891b2;
+  --color-amber-glow: rgba(6, 182, 212, 0.3);
+
+  --color-crimson: #f43f5e;
+  --color-crimson-dark: #be123c;
+
+  --color-arcane-blue: #0284c7;
+  --color-arcane-blue-text: #38bdf8;
+  --color-arcane-blue-bg: rgba(6, 182, 212, 0.15);
+  --color-arcane-blue-border: rgba(6, 182, 212, 0.4);
+  --color-arcane-cyan: #22d3ee;
+  --color-emerald: #10b981;
+  --color-purple: #c084fc;
+
+  /* Status Colors */
+  --status-planned-bg: rgba(148, 163, 184, 0.15);
+  --status-planned-border: rgba(148, 163, 184, 0.3);
+  --status-planned-text: #cbd5e1;
+  --status-inprogress-bg: rgba(6, 182, 212, 0.2);
+  --status-inprogress-border: rgba(6, 182, 212, 0.5);
+  --status-inprogress-text: #38bdf8;
+  --status-completed-bg: rgba(16, 185, 129, 0.2);
+  --status-completed-border: rgba(16, 185, 129, 0.5);
+  --status-completed-text: #34d399;
+
+  /* Combat Difficulty Colors */
+  --diff-trivial-bg: rgba(148, 163, 184, 0.15);
+  --diff-trivial-border: rgba(148, 163, 184, 0.4);
+  --diff-trivial-text: #cbd5e1;
+  --diff-easy-bg: rgba(16, 185, 129, 0.2);
+  --diff-easy-border: rgba(16, 185, 129, 0.5);
+  --diff-easy-text: #34d399;
+  --diff-medium-bg: rgba(234, 179, 8, 0.2);
+  --diff-medium-border: rgba(234, 179, 8, 0.5);
+  --diff-medium-text: #fde047;
+  --diff-hard-bg: rgba(249, 115, 22, 0.2);
+  --diff-hard-border: rgba(249, 115, 22, 0.5);
+  --diff-hard-text: #fdba74;
+  --diff-deadly-bg: rgba(244, 63, 94, 0.2);
+  --diff-deadly-border: rgba(244, 63, 94, 0.5);
+  --diff-deadly-text: #fb7185;
+
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.6);
+  --shadow-md: 0 4px 25px rgba(6, 182, 212, 0.15);
+  --shadow-glow: 0 0 25px rgba(6, 182, 212, 0.3);
+}
+
 * {
   box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  height: 100%;
+  max-height: 100%;
+  overflow: hidden;
   margin: 0;
   padding: 0;
 }
@@ -60,8 +297,6 @@ body {
   font-family: var(--font-body);
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
-  min-height: 100vh;
-  overflow-x: hidden;
 }
 
 /* Custom Scrollbars */
@@ -83,8 +318,9 @@ body {
 h1, h2, h3, h4, h5 {
   font-family: var(--font-heading);
   letter-spacing: 0.03em;
-  color: #fff;
+  color: var(--text-primary);
 }
+
 
 /* Glassmorphic Utilities */
 .glass-panel {
@@ -175,6 +411,165 @@ h1, h2, h3, h4, h5 {
 .badge-item { background: rgba(249, 115, 22, 0.2); color: #fb923c; border: 1px solid rgba(249, 115, 22, 0.3); }
 .badge-clue { background: rgba(139, 92, 246, 0.2); color: #a78bfa; border: 1px solid rgba(139, 92, 246, 0.3); }
 .badge-lore { background: rgba(217, 119, 6, 0.25); color: #f59e0b; border: 1px solid rgba(217, 119, 6, 0.4); }
+
+/* Badges high-contrast adaptation for Parchment & Sunlight */
+[data-theme="parchment"] .badge-arc, [data-theme="light"] .badge-arc, [data-theme="sunlight"] .badge-arc {
+  background: rgba(180, 83, 9, 0.18); color: #78350f; border-color: rgba(180, 83, 9, 0.45); font-weight: 700;
+}
+[data-theme="parchment"] .badge-quest, [data-theme="light"] .badge-quest, [data-theme="sunlight"] .badge-quest {
+  background: rgba(30, 64, 175, 0.15); color: #1e3a8a; border-color: rgba(30, 64, 175, 0.4); font-weight: 700;
+}
+[data-theme="parchment"] .badge-session, [data-theme="light"] .badge-session, [data-theme="sunlight"] .badge-session {
+  background: rgba(3, 105, 161, 0.15); color: #0c4a6e; border-color: rgba(3, 105, 161, 0.4); font-weight: 700;
+}
+[data-theme="parchment"] .badge-encounter, [data-theme="light"] .badge-encounter, [data-theme="sunlight"] .badge-encounter {
+  background: rgba(185, 28, 28, 0.15); color: #7f1d1d; border-color: rgba(185, 28, 28, 0.4); font-weight: 700;
+}
+[data-theme="parchment"] .badge-location, [data-theme="light"] .badge-location, [data-theme="sunlight"] .badge-location {
+  background: rgba(4, 120, 87, 0.15); color: #064e3b; border-color: rgba(4, 120, 87, 0.4); font-weight: 700;
+}
+[data-theme="parchment"] .badge-npc, [data-theme="light"] .badge-npc, [data-theme="sunlight"] .badge-npc {
+  background: rgba(109, 40, 217, 0.15); color: #4c1d95; border-color: rgba(109, 40, 217, 0.4); font-weight: 700;
+}
+[data-theme="parchment"] .badge-monster, [data-theme="light"] .badge-monster, [data-theme="sunlight"] .badge-monster {
+  background: rgba(153, 27, 27, 0.18); color: #58180d; border-color: rgba(153, 27, 27, 0.45); font-weight: 700;
+}
+[data-theme="parchment"] .badge-faction, [data-theme="light"] .badge-faction, [data-theme="sunlight"] .badge-faction {
+  background: rgba(161, 98, 7, 0.15); color: #713f12; border-color: rgba(161, 98, 7, 0.4); font-weight: 700;
+}
+[data-theme="parchment"] .badge-item, [data-theme="light"] .badge-item, [data-theme="sunlight"] .badge-item {
+  background: rgba(194, 65, 12, 0.15); color: #7c2d12; border-color: rgba(194, 65, 12, 0.4); font-weight: 700;
+}
+[data-theme="parchment"] .badge-clue, [data-theme="light"] .badge-clue, [data-theme="sunlight"] .badge-clue {
+  background: rgba(109, 40, 217, 0.15); color: #4c1d95; border-color: rgba(109, 40, 217, 0.4); font-weight: 700;
+}
+[data-theme="parchment"] .badge-lore, [data-theme="light"] .badge-lore, [data-theme="sunlight"] .badge-lore {
+  background: rgba(180, 83, 9, 0.18); color: #78350f; border-color: rgba(180, 83, 9, 0.45); font-weight: 700;
+}
+
+/* Global Form Inputs Default Styling */
+input, textarea, select {
+  color: var(--text-primary);
+  font-family: var(--font-body);
+}
+
+input::placeholder, textarea::placeholder {
+  color: var(--text-muted);
+  opacity: 0.85;
+}
+
+/* Status Button Pills */
+.status-pill {
+  border: none;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 0.7rem;
+  font-weight: 700;
+  transition: all 0.15s ease;
+  font-family: var(--font-body);
+}
+
+.status-pill.status-planned {
+  background: var(--status-planned-bg);
+  border: 1px solid var(--status-planned-border);
+  color: var(--status-planned-text);
+}
+
+.status-pill.status-inprogress {
+  background: var(--status-inprogress-bg);
+  border: 1px solid var(--status-inprogress-border);
+  color: var(--status-inprogress-text);
+}
+
+.status-pill.status-completed {
+  background: var(--status-completed-bg);
+  border: 1px solid var(--status-completed-border);
+  color: var(--status-completed-text);
+}
+
+.status-pill.status-inactive {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+}
+.status-pill.status-inactive:hover {
+  background: var(--bg-card-hover);
+  color: var(--text-primary);
+}
+
+/* Combat Assessment & Difficulty Badges */
+.diff-meter-banner {
+  font-family: var(--font-heading);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-weight: 900;
+  transition: all 0.2s ease;
+}
+
+.diff-badge-card {
+  padding: 8px 4px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justifyContent: center;
+  gap: 3px;
+  transition: all 0.2s ease;
+}
+
+.diff-badge-title {
+  font-family: var(--font-heading);
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.diff-badge-val {
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.diff-badge-card.diff-easy {
+  background: var(--diff-easy-bg);
+  border: 1px solid var(--diff-easy-border);
+}
+.diff-badge-card.diff-easy .diff-badge-title {
+  color: var(--diff-easy-text);
+}
+
+.diff-badge-card.diff-medium {
+  background: var(--diff-medium-bg);
+  border: 1px solid var(--diff-medium-border);
+}
+.diff-badge-card.diff-medium .diff-badge-title {
+  color: var(--diff-medium-text);
+}
+
+.diff-badge-card.diff-hard {
+  background: var(--diff-hard-bg);
+  border: 1px solid var(--diff-hard-border);
+}
+.diff-badge-card.diff-hard .diff-badge-title {
+  color: var(--diff-hard-text);
+}
+
+.diff-badge-card.diff-deadly {
+  background: var(--diff-deadly-bg);
+  border: 1px solid var(--diff-deadly-border);
+}
+.diff-badge-card.diff-deadly .diff-badge-title {
+  color: var(--diff-deadly-text);
+}
+
+.diff-badge-card.diff-active {
+  box-shadow: 0 0 14px var(--shadow-glow);
+  transform: translateY(-2px);
+  border-width: 2px;
+}
 
 /* Dedicated Independent Scroller for Co-DM Studio */
 .codm-chat-scroller {

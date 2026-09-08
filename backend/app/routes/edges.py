@@ -47,3 +47,14 @@ def delete_edge(edge_id: str):
     if not success:
         raise HTTPException(status_code=404, detail="Edge not found")
     return {"status": "deleted", "id": edge_id}
+
+@router.post("/{edge_id}/toggle-canon", response_model=EdgeResponse)
+def toggle_edge_canon(edge_id: str, is_canon: Optional[bool] = None):
+    edge = graph_service.get_edge(edge_id)
+    if not edge:
+        raise HTTPException(status_code=404, detail="Edge not found")
+    
+    new_state = (not edge.is_canon) if is_canon is None else is_canon
+    updated = graph_service.update_edge(edge_id, EdgeUpdate(is_canon=new_state))
+    return updated
+

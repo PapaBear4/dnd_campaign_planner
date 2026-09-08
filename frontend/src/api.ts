@@ -1,6 +1,7 @@
 import {
   AppSettings,
   Campaign,
+  ChatThread,
   EdgeItem,
   GraphData,
   HierarchyItem,
@@ -103,6 +104,12 @@ export async function toggleNodeReveal(nodeId: string): Promise<NodeItem> {
   return handleResponse<NodeItem>(res);
 }
 
+export async function toggleNodeCanon(nodeId: string, isCanon?: boolean): Promise<NodeItem> {
+  const query = isCanon !== undefined ? `?is_canon=${isCanon}` : '';
+  const res = await fetch(`${BASE_URL}/api/nodes/${nodeId}/toggle-canon${query}`, { method: 'POST' });
+  return handleResponse<NodeItem>(res);
+}
+
 // --- Edges ---
 export async function createEdge(data: Partial<EdgeItem>): Promise<EdgeItem> {
   const res = await fetch(`${BASE_URL}/api/edges`, {
@@ -113,9 +120,29 @@ export async function createEdge(data: Partial<EdgeItem>): Promise<EdgeItem> {
   return handleResponse<EdgeItem>(res);
 }
 
+export async function updateEdge(edgeId: string, data: Partial<EdgeItem>): Promise<EdgeItem> {
+  const res = await fetch(`${BASE_URL}/api/edges/${edgeId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return handleResponse<EdgeItem>(res);
+}
+
 export async function deleteEdge(edgeId: string): Promise<any> {
   const res = await fetch(`${BASE_URL}/api/edges/${edgeId}`, { method: 'DELETE' });
   return handleResponse<any>(res);
+}
+
+export async function toggleEdgeReveal(edgeId: string): Promise<EdgeItem> {
+  const res = await fetch(`${BASE_URL}/api/edges/${edgeId}/toggle-reveal`, { method: 'POST' });
+  return handleResponse<EdgeItem>(res);
+}
+
+export async function toggleEdgeCanon(edgeId: string, isCanon?: boolean): Promise<EdgeItem> {
+  const query = isCanon !== undefined ? `?is_canon=${isCanon}` : '';
+  const res = await fetch(`${BASE_URL}/api/edges/${edgeId}/toggle-canon${query}`, { method: 'POST' });
+  return handleResponse<EdgeItem>(res);
 }
 
 // --- Player Portal ---
@@ -178,12 +205,48 @@ export async function queryAvailableModels(apiKey?: string): Promise<ModelsQuery
   return handleResponse<ModelsQueryResponse>(res);
 }
 
-// --- AI Co-DM Agent ---
-export async function agentChat(messages: { role: string; content: string }[], contextNodeId?: string, campaignId?: string): Promise<any> {
+// --- AI Co-DM Agent & Threads ---
+export async function getChatThreads(campaignId: string): Promise<ChatThread[]> {
+  const res = await fetch(`${BASE_URL}/api/agent/threads?campaign_id=${encodeURIComponent(campaignId)}`);
+  return handleResponse<ChatThread[]>(res);
+}
+
+export async function createChatThread(campaignId: string, title?: string): Promise<ChatThread> {
+  const res = await fetch(`${BASE_URL}/api/agent/threads`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ campaign_id: campaignId, title: title || 'New Prep Session' }),
+  });
+  return handleResponse<ChatThread>(res);
+}
+
+export async function getThreadMessages(threadId: string): Promise<any[]> {
+  const res = await fetch(`${BASE_URL}/api/agent/threads/${threadId}/messages`);
+  return handleResponse<any[]>(res);
+}
+
+export async function deleteChatThread(threadId: string): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/agent/threads/${threadId}`, {
+    method: 'DELETE',
+  });
+  return handleResponse<any>(res);
+}
+
+export async function agentChat(
+  messages: { role: string; content: string }[],
+  contextNodeId?: string,
+  campaignId?: string,
+  threadId?: string
+): Promise<any> {
   const res = await fetch(`${BASE_URL}/api/agent/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages, context_node_id: contextNodeId, campaign_id: campaignId }),
+    body: JSON.stringify({
+      messages,
+      context_node_id: contextNodeId,
+      campaign_id: campaignId,
+      thread_id: threadId,
+    }),
   });
   return handleResponse<any>(res);
 }
@@ -310,7 +373,7 @@ export async function agentDecomposeAdventure(data: {
   filename?: string;
   text_content?: string;
   instruction?: string;
-  decomposition_mode?: 'campaign_structure' | 'monsters' | 'characters' | 'general';
+  decomposition_mode?: 'campaign_structure' | 'monsters' | 'characters' | 'world_lore' | 'general';
   start_page?: number;
   end_page?: number;
   campaign_id?: string;

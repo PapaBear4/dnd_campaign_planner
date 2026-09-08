@@ -166,7 +166,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
           {/* Gemini API Key */}
           <div style={{ marginBottom: '20px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-              <label style={{ fontSize: '0.875rem', fontWeight: 600, color: '#f1f5f9' }}>
+              <label style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-primary)' }}>
                 Gemini API Key
               </label>
               <button
@@ -192,9 +192,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                   padding: '10px 14px',
                   paddingLeft: '38px',
                   background: 'var(--bg-surface)',
-                  border: '1px solid var(--border-subtle)',
+                  border: '1px solid var(--border-medium)',
                   borderRadius: '8px',
-                  color: '#fff',
+                  color: 'var(--text-primary)',
                   fontSize: '0.9rem',
                   outline: 'none'
                 }}
@@ -211,13 +211,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                 </span>
               )}
               {!isFetchingModels && modelQuerySource === 'api' && (
-                <span style={{ color: '#10b981', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ color: 'var(--color-emerald)', display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <Check size={14} />
                   Connected! Queried server: {availableModels.length} models available for your key.
                 </span>
               )}
               {!isFetchingModels && modelQueryError && (
-                <span style={{ color: '#f87171', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ color: 'var(--color-crimson)', display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <AlertCircle size={14} />
                   {modelQueryError}
                 </span>
@@ -225,11 +225,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
               {!isFetchingModels && !modelQueryError && modelQuerySource !== 'api' && (
                 <span style={{ color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '6px' }}>
                   {settings?.gemini_api_key_configured ? (
-                    <span style={{ color: '#10b981', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <span style={{ color: 'var(--color-emerald)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                       <Check size={14} /> Key saved. Enter new key or click Query Models to refresh.
                     </span>
                   ) : (
-                    <span style={{ color: '#fbbf24', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <span style={{ color: 'var(--color-gold)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                       <ShieldAlert size={14} /> Offline guidance mode is active until key is entered.
                     </span>
                   )}
@@ -241,12 +241,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
           {/* Model Selection */}
           <div style={{ marginBottom: '20px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-              <label style={{ fontSize: '0.875rem', fontWeight: 600, color: '#f1f5f9', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <label style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <Cpu size={15} style={{ color: 'var(--color-arcane-cyan)' }} />
                 Gemini AI Model
               </label>
               {modelQuerySource === 'api' && (
-                <span style={{ fontSize: '0.72rem', background: 'rgba(16, 185, 129, 0.2)', color: '#34d399', padding: '2px 6px', borderRadius: '4px', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
+                <span style={{ fontSize: '0.72rem', background: 'var(--status-completed-bg)', color: 'var(--status-completed-text)', padding: '2px 6px', borderRadius: '4px', border: '1px solid var(--status-completed-border)' }}>
                   Live API List
                 </span>
               )}
@@ -259,9 +259,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                 width: '100%',
                 padding: '10px 14px',
                 background: 'var(--bg-surface)',
-                border: '1px solid var(--border-subtle)',
+                border: '1px solid var(--border-medium)',
                 borderRadius: '8px',
-                color: '#fff',
+                color: 'var(--text-primary)',
                 fontSize: '0.9rem',
                 outline: 'none'
               }}
@@ -285,9 +285,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                   marginTop: '8px',
                   padding: '10px 14px',
                   background: 'var(--bg-surface)',
-                  border: '1px solid var(--border-subtle)',
+                  border: '1px solid var(--border-medium)',
                   borderRadius: '8px',
-                  color: '#fff',
+                  color: 'var(--text-primary)',
                   fontSize: '0.9rem',
                   outline: 'none'
                 }}
@@ -297,26 +297,27 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
 
           {/* Local LAN Sharing Info */}
           <div style={{
-            background: 'rgba(30, 41, 59, 0.5)',
-            border: '1px solid var(--border-subtle)',
+            background: 'var(--bg-surface)',
+            border: '1px solid var(--border-medium)',
             borderRadius: '10px',
             padding: '14px',
             marginBottom: '24px'
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
               <Server size={16} style={{ color: 'var(--color-arcane-cyan)' }} />
-              <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#e2e8f0' }}>Local Network (LAN) Player Access</span>
+              <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>Local Network (LAN) Player Access</span>
             </div>
             <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
               The server listens on all interfaces (<code>0.0.0.0</code>). Players on your Wi-Fi can open:
             </p>
             <div style={{
-              background: '#0a0e17',
+              background: 'var(--bg-card)',
+              border: '1px solid var(--border-subtle)',
               padding: '6px 10px',
               borderRadius: '6px',
               fontFamily: 'var(--font-mono)',
               fontSize: '0.8rem',
-              color: 'var(--color-gold)',
+              color: 'var(--text-gold)',
               marginTop: '6px'
             }}>
               http://&lt;your-local-ip&gt;:3000/player
@@ -325,7 +326,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
 
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '12px' }}>
             {savedSuccess && (
-              <span style={{ color: '#10b981', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <span style={{ color: 'var(--color-emerald)', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
                 <Check size={16} /> Settings saved!
               </span>
             )}

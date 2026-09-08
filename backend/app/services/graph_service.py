@@ -48,6 +48,7 @@ def _node_from_row(row) -> NodeResponse:
         content_markdown=row["content_markdown"] or "",
         data_json=data_json,
         revealed_to_players=bool(row["revealed_to_players"]),
+        is_canon=bool(row["is_canon"]) if "is_canon" in row.keys() else True,
         tags=tags,
         sort_order=row["sort_order"] or 0,
         created_at=row["created_at"],
@@ -71,6 +72,7 @@ def _edge_from_row(row) -> EdgeResponse:
         label=row["label"] or "",
         metadata_json=metadata_json,
         revealed_to_players=bool(row["revealed_to_players"]),
+        is_canon=bool(row["is_canon"]) if "is_canon" in row.keys() else True,
         created_at=row["created_at"],
     )
 
@@ -161,6 +163,7 @@ def create_node(data: NodeCreate, default_campaign_id: str) -> NodeResponse:
     data_json_str = json.dumps(data.data_json or {})
     tags_str = json.dumps(data.tags or [])
     revealed = 1 if data.revealed_to_players else 0
+    canon = 1 if (data.is_canon is None or data.is_canon) else 0
 
     with get_db() as conn:
         cursor = conn.cursor()
@@ -168,8 +171,8 @@ def create_node(data: NodeCreate, default_campaign_id: str) -> NodeResponse:
             """
             INSERT INTO nodes (
                 id, campaign_id, type, title, subtitle, summary, content_markdown,
-                data_json, revealed_to_players, tags, sort_order, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                data_json, revealed_to_players, is_canon, tags, sort_order, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 nid,
@@ -181,6 +184,7 @@ def create_node(data: NodeCreate, default_campaign_id: str) -> NodeResponse:
                 data.content_markdown or "",
                 data_json_str,
                 revealed,
+                canon,
                 tags_str,
                 data.sort_order or 0,
                 now,
@@ -249,6 +253,9 @@ def update_node(node_id: str, data: NodeUpdate) -> Optional[NodeResponse]:
     if data.revealed_to_players is not None:
         updates.append("revealed_to_players = ?")
         params.append(1 if data.revealed_to_players else 0)
+    if data.is_canon is not None:
+        updates.append("is_canon = ?")
+        params.append(1 if data.is_canon else 0)
     if data.tags is not None:
         updates.append("tags = ?")
         params.append(json.dumps(data.tags))
@@ -281,6 +288,7 @@ def create_edge(data: EdgeCreate, default_campaign_id: str) -> EdgeResponse:
     now = _utc_now()
     metadata_json_str = json.dumps(data.metadata_json or {})
     revealed = 1 if data.revealed_to_players else 0
+    canon = 1 if (data.is_canon is None or data.is_canon) else 0
 
     with get_db() as conn:
         cursor = conn.cursor()
@@ -288,8 +296,8 @@ def create_edge(data: EdgeCreate, default_campaign_id: str) -> EdgeResponse:
             """
             INSERT INTO edges (
                 id, campaign_id, source_id, target_id, relation_type,
-                label, metadata_json, revealed_to_players, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                label, metadata_json, revealed_to_players, is_canon, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 eid,
@@ -300,6 +308,7 @@ def create_edge(data: EdgeCreate, default_campaign_id: str) -> EdgeResponse:
                 data.label or "",
                 metadata_json_str,
                 revealed,
+                canon,
                 now,
             ),
         )
@@ -359,6 +368,9 @@ def update_edge(edge_id: str, data: EdgeUpdate) -> Optional[EdgeResponse]:
     if data.revealed_to_players is not None:
         updates.append("revealed_to_players = ?")
         params.append(1 if data.revealed_to_players else 0)
+    if data.is_canon is not None:
+        updates.append("is_canon = ?")
+        params.append(1 if data.is_canon else 0)
 
     if not updates:
         return get_edge(edge_id)
@@ -368,6 +380,20 @@ def update_edge(edge_id: str, data: EdgeUpdate) -> Optional[EdgeResponse]:
         cursor = conn.cursor()
         cursor.execute(f"UPDATE edges SET {', '.join(updates)} WHERE id = ?", params)
     return get_edge(edge_id)
+
+def toggle_node_canon(node_id: str, is_canon: Optional[bool] = None) -> Optional[NodeResponse]:
+    node = get_node(node_id)
+    if not node:
+        return None
+    target_canon = (not node.is_canon) if is_canon is None else is_canon
+    return update_node(node_id, NodeUpdate(is_canon=target_canon))
+
+def toggle_edge_canon(edge_id: str, is_canon: Optional[bool] = None) -> Optional[EdgeResponse]:
+    edge = get_edge(edge_id)
+    if not edge:
+        return None
+    target_canon = (not edge.is_canon) if is_canon is None else is_canon
+    return update_edge(edge_id, EdgeUpdate(is_canon=target_canon))
 
 def delete_edge(edge_id: str) -> bool:
     with get_db() as conn:
@@ -594,3 +620,313 @@ def set_setting(key: str, value: str):
             """,
             (key, value, now),
         )
+
+# ---------------------------------------------------------------------------
+# Composite / agentic operations
+# ---------------------------------------------------------------------------
+
+def find_nodes_by_title(campaign_id: str, title_fragment: str) -> List[NodeResponse]:
+    """
+    Case-insensitive substring search on title.
+    Used by the agent to locate nodes by approximate name before acting on them.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM nodes WHERE campaign_id = ? AND LOWER(title) LIKE LOWER(?) ORDER BY type, title",
+            (campaign_id, f"%{title_fragment}%"),
+        )
+        return [_node_from_row(r) for r in cursor.fetchall()]
+
+
+def merge_nodes(
+    campaign_id: str,
+    primary_id: str,
+    duplicate_ids: List[str],
+    merged_title: Optional[str] = None,
+    merged_summary: Optional[str] = None,
+    merged_content: Optional[str] = None,
+    merged_data_json: Optional[Dict] = None,
+) -> Optional[NodeResponse]:
+    """
+    Merges one or more duplicate nodes into a primary node.
+
+    Steps:
+    1. Re-point all edges from each duplicate to primary_id (avoiding self-loops or exact dupe edges).
+    2. Optionally update the primary node's title/summary/content/data_json.
+    3. Delete the duplicate nodes and all their remaining edges.
+
+    Returns the updated primary node.
+    """
+    if not duplicate_ids:
+        return get_node(primary_id)
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        for dup_id in duplicate_ids:
+            if dup_id == primary_id:
+                continue
+
+            # Re-point outgoing edges from dup → primary (where target != primary to avoid self-loop)
+            cursor.execute(
+                """
+                UPDATE edges
+                SET source_id = ?
+                WHERE campaign_id = ? AND source_id = ? AND target_id != ?
+                """,
+                (primary_id, campaign_id, dup_id, primary_id),
+            )
+
+            # Re-point incoming edges into dup → primary (where source != primary to avoid self-loop)
+            cursor.execute(
+                """
+                UPDATE edges
+                SET target_id = ?
+                WHERE campaign_id = ? AND target_id = ? AND source_id != ?
+                """,
+                (primary_id, campaign_id, dup_id, primary_id),
+            )
+
+            # Remove any exact duplicate edges that would now exist (same source+target+relation)
+            cursor.execute(
+                """
+                DELETE FROM edges
+                WHERE id NOT IN (
+                    SELECT MIN(id) FROM edges
+                    GROUP BY campaign_id, source_id, target_id, relation_type
+                )
+                """,
+            )
+
+            # Delete the duplicate node itself
+            cursor.execute("DELETE FROM nodes WHERE id = ?", (dup_id,))
+
+    # Update the primary node if new merged content was provided
+    if any(v is not None for v in [merged_title, merged_summary, merged_content, merged_data_json]):
+        update_data = NodeUpdate(
+            title=merged_title,
+            summary=merged_summary,
+            content_markdown=merged_content,
+            data_json=merged_data_json,
+        )
+        return update_node(primary_id, update_data)
+
+    return get_node(primary_id)
+
+
+def bulk_delete_nodes(campaign_id: str, node_ids: List[str], force_canon: bool = False) -> Dict[str, Any]:
+    """
+    Deletes a list of nodes and all edges that reference them.
+    Protects canon nodes unless force_canon=True.
+    Returns counts of deleted nodes, deleted edges, and protected canon nodes.
+    """
+    if not node_ids:
+        return {"nodes_deleted": 0, "edges_deleted": 0, "canon_protected_count": 0}
+
+    deleted_nodes = 0
+    deleted_edges = 0
+    canon_protected_nodes = []
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        for nid in node_ids:
+            cursor.execute("SELECT id, title, is_canon FROM nodes WHERE id = ? AND campaign_id = ?", (nid, campaign_id))
+            row = cursor.fetchone()
+            if not row:
+                continue
+            if bool(row["is_canon"]) and not force_canon:
+                canon_protected_nodes.append(row["title"])
+                continue
+
+            # Delete all edges touching this node
+            cursor.execute(
+                "DELETE FROM edges WHERE campaign_id = ? AND (source_id = ? OR target_id = ?)",
+                (campaign_id, nid, nid),
+            )
+            deleted_edges += cursor.rowcount
+            # Delete the node
+            cursor.execute("DELETE FROM nodes WHERE id = ? AND campaign_id = ?", (nid, campaign_id))
+            deleted_nodes += cursor.rowcount
+
+    return {
+        "nodes_deleted": deleted_nodes,
+        "edges_deleted": deleted_edges,
+        "canon_protected_count": len(canon_protected_nodes),
+        "canon_protected_titles": canon_protected_nodes,
+    }
+
+
+def list_edges_for_node(campaign_id: str, node_id: str) -> List[Dict[str, Any]]:
+    """
+    Returns all edges where the node is source or target, enriched with titles.
+    """
+    nodes = list_nodes(campaign_id)
+    id_to_title = {n.id: n.title for n in nodes}
+
+    edges = list_edges(campaign_id)
+    result = []
+    for e in edges:
+        if e.source_id == node_id or e.target_id == node_id:
+            result.append({
+                "id": e.id,
+                "source_id": e.source_id,
+                "source_title": id_to_title.get(e.source_id, "Unknown"),
+                "target_id": e.target_id,
+                "target_title": id_to_title.get(e.target_id, "Unknown"),
+                "relation_type": e.relation_type,
+                "label": e.label,
+            })
+    return result
+
+
+def update_node_status(node_id: str, status: str) -> Optional[NodeResponse]:
+    """
+    Convenience function — sets 'status' inside data_json without touching other fields.
+    """
+    node = get_node(node_id)
+    if not node:
+        return None
+    data = dict(node.data_json or {})
+    data["status"] = status
+    return update_node(node_id, NodeUpdate(data_json=data))
+
+
+def find_duplicate_nodes(campaign_id: str) -> List[Dict[str, Any]]:
+    """
+    Finds clusters of duplicate nodes in a campaign based on normalized title and type.
+    Returns detailed cluster records including node details and edge counts.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT lower(trim(title)) as norm_title, type, count(*) as c, group_concat(id) as ids
+            FROM nodes
+            WHERE campaign_id = ?
+            GROUP BY lower(trim(title)), type
+            HAVING c > 1
+            """,
+            (campaign_id,),
+        )
+        dups = cursor.fetchall()
+
+    clusters = []
+    edges = list_edges(campaign_id)
+    edge_counts: Dict[str, int] = {}
+    for e in edges:
+        edge_counts[e.source_id] = edge_counts.get(e.source_id, 0) + 1
+        edge_counts[e.target_id] = edge_counts.get(e.target_id, 0) + 1
+
+    for norm_title, ntype, count, ids_str in dups:
+        id_list = ids_str.split(",")
+        cluster_nodes = []
+        for nid in id_list:
+            node = get_node(nid)
+            if node:
+                cluster_nodes.append({
+                    "id": node.id,
+                    "title": node.title,
+                    "subtitle": node.subtitle,
+                    "summary": node.summary,
+                    "content_length": len(node.content_markdown or ""),
+                    "content_markdown": node.content_markdown,
+                    "edge_count": edge_counts.get(node.id, 0),
+                    "data_json": node.data_json,
+                })
+
+        if len(cluster_nodes) > 1:
+            clusters.append({
+                "type": ntype,
+                "title": cluster_nodes[0]["title"],
+                "count": len(cluster_nodes),
+                "nodes": cluster_nodes,
+            })
+
+    return clusters
+
+
+def deduplicate_campaign(campaign_id: str, auto_merge: bool = True) -> Dict[str, Any]:
+    """
+    Scans the campaign for duplicate nodes, chooses the canonical/richest node
+    in each duplicate cluster, re-points all relationships, combines lore/notes,
+    and removes duplicate nodes from the SQLite database.
+    """
+    clusters = find_duplicate_nodes(campaign_id)
+    if not clusters:
+        return {
+            "success": True,
+            "clusters_merged": 0,
+            "duplicates_removed": 0,
+            "details": [],
+            "message": "No duplicate nodes found in campaign. The database is already clean!",
+        }
+
+    merged_details = []
+    total_duplicates_removed = 0
+
+    for cluster in clusters:
+        nodes = cluster["nodes"]
+        # Score each node: edge_count * 10 + content_length + summary length
+        def score_node(n):
+            return (n["edge_count"] * 10) + n["content_length"] + len(n.get("summary") or "")
+
+        nodes_sorted = sorted(nodes, key=score_node, reverse=True)
+        primary = nodes_sorted[0]
+        duplicates = nodes_sorted[1:]
+        duplicate_ids = [d["id"] for d in duplicates]
+
+        # Combine summaries if primary is empty or duplicate has richer text
+        combined_summary = primary.get("summary") or ""
+        for d in duplicates:
+            d_summary = d.get("summary") or ""
+            if d_summary and (not combined_summary or len(d_summary) > len(combined_summary)):
+                combined_summary = d_summary
+
+        # Combine markdown content / notes if duplicates have unique info
+        combined_content = primary.get("content_markdown") or ""
+        for d in duplicates:
+            d_content = d.get("content_markdown") or ""
+            if d_content and d_content not in combined_content:
+                if combined_content:
+                    combined_content += f"\n\n---\n**Additional Notes (Merged from duplicate):**\n{d_content}"
+                else:
+                    combined_content = d_content
+
+        # Merge data_json if needed
+        merged_data = dict(primary.get("data_json") or {})
+        for d in duplicates:
+            d_data = d.get("data_json") or {}
+            for k, v in d_data.items():
+                if k not in merged_data or not merged_data[k]:
+                    merged_data[k] = v
+
+        # Execute merge
+        merged_node = merge_nodes(
+            campaign_id=campaign_id,
+            primary_id=primary["id"],
+            duplicate_ids=duplicate_ids,
+            merged_title=primary["title"],
+            merged_summary=combined_summary,
+            merged_content=combined_content,
+            merged_data_json=merged_data,
+        )
+
+        total_duplicates_removed += len(duplicate_ids)
+        merged_details.append({
+            "type": cluster["type"],
+            "title": primary["title"],
+            "primary_id": primary["id"],
+            "duplicates_removed_count": len(duplicate_ids),
+            "duplicate_ids": duplicate_ids,
+        })
+
+    return {
+        "success": True,
+        "clusters_merged": len(merged_details),
+        "duplicates_removed": total_duplicates_removed,
+        "details": merged_details,
+        "message": f"Successfully cleaned {len(merged_details)} duplicate sets and deleted {total_duplicates_removed} redundant nodes from the campaign.",
+    }
+
+

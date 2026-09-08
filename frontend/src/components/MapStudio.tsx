@@ -223,11 +223,11 @@ export const MapStudio: React.FC<MapStudioProps> = ({
                   setSelectedLocationForPin(e.target.value);
                   setIsPlacingPin(Boolean(e.target.value));
                 }}
-                style={{ background: 'transparent', border: 'none', color: '#fff', fontSize: '0.8rem', outline: 'none' }}
+                style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', fontSize: '0.8rem', outline: 'none' }}
               >
-                <option value="" style={{ background: '#121722' }}>Place Pin on Map...</option>
+                <option value="" style={{ background: 'var(--bg-card)', color: 'var(--text-primary)' }}>Place Pin on Map...</option>
                 {locations.map((loc) => (
-                  <option key={loc.id} value={loc.id} style={{ background: '#121722' }}>
+                  <option key={loc.id} value={loc.id} style={{ background: 'var(--bg-card)', color: 'var(--text-primary)' }}>
                     {loc.title}
                   </option>
                 ))}
@@ -260,9 +260,9 @@ export const MapStudio: React.FC<MapStudioProps> = ({
           gap: '10px',
           overflowX: 'auto',
           padding: '8px 12px',
-          background: 'rgba(15, 20, 32, 0.7)',
+          background: 'var(--bg-surface)',
           borderRadius: '10px',
-          border: '1px solid var(--border-subtle)',
+          border: '1px solid var(--border-medium)',
           marginBottom: '16px',
         }}
       >
@@ -271,7 +271,7 @@ export const MapStudio: React.FC<MapStudioProps> = ({
         </span>
 
         {maps.length === 0 ? (
-          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
             No maps uploaded yet. Click &quot;Upload New Map Image&quot; above to add your first battle map!
           </span>
         ) : (
@@ -294,7 +294,7 @@ export const MapStudio: React.FC<MapStudioProps> = ({
                   borderRadius: '8px',
                   cursor: 'pointer',
                   border: isSelected ? '1px solid var(--color-gold)' : '1px solid var(--border-subtle)',
-                  background: isSelected ? 'rgba(245, 158, 11, 0.15)' : 'rgba(255, 255, 255, 0.03)',
+                  background: isSelected ? 'var(--color-amber-glow)' : 'var(--bg-card)',
                   transition: 'all 0.15s ease',
                   whiteSpace: 'nowrap',
                 }}
@@ -308,7 +308,7 @@ export const MapStudio: React.FC<MapStudioProps> = ({
                 ) : (
                   <Compass size={16} style={{ color: 'var(--color-gold)' }} />
                 )}
-                <span style={{ fontSize: '0.82rem', fontWeight: isSelected ? 700 : 500, color: isSelected ? '#fff' : 'var(--text-secondary)' }}>
+                <span style={{ fontSize: '0.82rem', fontWeight: isSelected ? 700 : 500, color: isSelected ? 'var(--text-gold)' : 'var(--text-primary)' }}>
                   {m.title}
                 </span>
                 <span
@@ -316,8 +316,8 @@ export const MapStudio: React.FC<MapStudioProps> = ({
                     fontSize: '0.7rem',
                     padding: '1px 6px',
                     borderRadius: '10px',
-                    background: 'rgba(255,255,255,0.1)',
-                    color: 'var(--text-muted)',
+                    background: 'var(--bg-card-active)',
+                    color: 'var(--text-secondary)',
                   }}
                 >
                   📍 {pinCount}
@@ -422,13 +422,13 @@ export const MapStudio: React.FC<MapStudioProps> = ({
                   </div>
                   <div
                     style={{
-                      background: 'rgba(15, 20, 32, 0.9)',
-                      border: '1px solid var(--border-subtle)',
+                      background: 'var(--bg-surface)',
+                      border: '1px solid var(--border-medium)',
                       borderRadius: '4px',
                       padding: '2px 6px',
                       fontSize: '0.72rem',
                       fontWeight: 700,
-                      color: '#fff',
+                      color: 'var(--text-primary)',
                       whiteSpace: 'nowrap',
                       marginTop: '4px',
                     }}
@@ -452,8 +452,8 @@ export const MapStudio: React.FC<MapStudioProps> = ({
             }}
           >
             <ImageIcon size={48} style={{ color: 'var(--color-gold)' }} />
-            <h3 style={{ fontSize: '1.2rem', color: '#fff' }}>No Map Selected</h3>
-            <p style={{ fontSize: '0.85rem', maxWidth: '400px', textAlign: 'center' }}>
+            <h3 style={{ fontSize: '1.2rem', color: '#f8fafc' }}>No Map Selected</h3>
+            <p style={{ fontSize: '0.85rem', maxWidth: '400px', textAlign: 'center', color: '#cbd5e1' }}>
               Select an available map from the gallery above, or upload any battle map or regional map.
             </p>
             <label className="btn btn-primary" style={{ cursor: 'pointer' }}>
@@ -488,7 +488,7 @@ export const MapStudio: React.FC<MapStudioProps> = ({
                 ✕
               </button>
             </div>
-            <h4 style={{ fontSize: '1rem', color: '#fff', marginBottom: '4px' }}>{selectedPin.label}</h4>
+            <h4 style={{ fontSize: '1rem', color: 'var(--text-primary)', marginBottom: '4px' }}>{selectedPin.label}</h4>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '10px' }}>
               <button
                 onClick={() => handleTogglePinReveal(selectedPin)}

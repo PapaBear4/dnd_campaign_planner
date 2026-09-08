@@ -105,3 +105,19 @@ def import_campaign(data: Dict[str, Any]):
             )
 
     return {"status": "imported", "campaign_id": new_campaign.id, "name": new_campaign.name}
+
+
+@router.get("/{campaign_id}/duplicates")
+def get_campaign_duplicates(campaign_id: str) -> Dict[str, Any]:
+    clusters = graph_service.find_duplicate_nodes(campaign_id)
+    return {
+        "campaign_id": campaign_id,
+        "duplicate_clusters_count": len(clusters),
+        "clusters": clusters,
+    }
+
+
+@router.post("/{campaign_id}/deduplicate")
+def deduplicate_campaign_endpoint(campaign_id: str) -> Dict[str, Any]:
+    result = graph_service.deduplicate_campaign(campaign_id)
+    return result

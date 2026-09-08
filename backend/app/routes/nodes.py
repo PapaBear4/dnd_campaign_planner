@@ -50,3 +50,14 @@ def toggle_reveal(node_id: str):
     new_state = not node.revealed_to_players
     updated = graph_service.update_node(node_id, NodeUpdate(revealed_to_players=new_state))
     return updated
+
+@router.post("/{node_id}/toggle-canon", response_model=NodeResponse)
+def toggle_canon(node_id: str, is_canon: Optional[bool] = None):
+    node = graph_service.get_node(node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+    
+    new_state = (not node.is_canon) if is_canon is None else is_canon
+    updated = graph_service.update_node(node_id, NodeUpdate(is_canon=new_state))
+    return updated
+

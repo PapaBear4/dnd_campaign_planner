@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS nodes (
     content_markdown TEXT DEFAULT '',
     data_json TEXT DEFAULT '{}',
     revealed_to_players INTEGER NOT NULL DEFAULT 0,
+    is_canon INTEGER NOT NULL DEFAULT 1,
     tags TEXT DEFAULT '[]',
     sort_order INTEGER DEFAULT 0,
     created_at TEXT NOT NULL,
@@ -28,6 +29,7 @@ CREATE TABLE IF NOT EXISTS nodes (
 CREATE INDEX IF NOT EXISTS idx_nodes_campaign ON nodes(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(campaign_id, type);
 CREATE INDEX IF NOT EXISTS idx_nodes_revealed ON nodes(campaign_id, revealed_to_players);
+CREATE INDEX IF NOT EXISTS idx_nodes_canon ON nodes(campaign_id, is_canon);
 
 CREATE TABLE IF NOT EXISTS edges (
     id TEXT PRIMARY KEY,
@@ -38,6 +40,7 @@ CREATE TABLE IF NOT EXISTS edges (
     label TEXT DEFAULT '',
     metadata_json TEXT DEFAULT '{}',
     revealed_to_players INTEGER NOT NULL DEFAULT 0,
+    is_canon INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL
 );
 
@@ -115,3 +118,30 @@ CREATE TRIGGER IF NOT EXISTS trg_nodes_update AFTER UPDATE ON nodes BEGIN
     INSERT INTO fts_nodes(rowid, id, campaign_id, type, title, subtitle, summary, content_markdown)
     VALUES (new.rowid, new.id, new.campaign_id, new.type, new.title, new.subtitle, new.summary, new.content_markdown);
 END;
+
+-- Co-DM Chat Conversation Threads & History
+CREATE TABLE IF NOT EXISTS chat_threads (
+    id TEXT PRIMARY KEY,
+    campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    title TEXT NOT NULL DEFAULT 'Prep Session',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_threads_campaign ON chat_threads(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_chat_threads_updated ON chat_threads(updated_at);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id TEXT PRIMARY KEY,
+    thread_id TEXT NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
+    campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    role TEXT NOT NULL, -- 'user' | 'assistant' | 'system'
+    content TEXT NOT NULL,
+    actions_json TEXT DEFAULT '[]',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_messages_thread ON chat_messages(thread_id);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_campaign ON chat_messages(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_created ON chat_messages(created_at);
+

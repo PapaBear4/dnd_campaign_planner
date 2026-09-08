@@ -91,18 +91,18 @@ export const PlayerPortal: React.FC<PlayerPortalProps> = ({ campaignId }) => {
           borderRadius: '16px',
           padding: '24px 30px',
           marginBottom: '24px',
-          background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(15, 23, 42, 0.8) 100%)',
-          border: '1px solid rgba(16, 185, 129, 0.3)',
+          background: 'var(--bg-card)',
+          border: '1px solid var(--border-medium)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
         }}
       >
         <div>
-          <span style={{ fontSize: '0.72rem', color: '#34d399', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+          <span style={{ fontSize: '0.72rem', color: 'var(--color-emerald)', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
             Player View • Progressive Chronicle
           </span>
-          <h2 style={{ fontSize: '1.8rem', color: '#fff', margin: '4px 0' }}>The Adventurer's Codex</h2>
+          <h2 style={{ fontSize: '1.8rem', color: 'var(--text-primary)', margin: '4px 0' }}>The Adventurer's Codex</h2>
           <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
             Your party's record of discovered lore, known allies &amp; enemies, and shared session notes.
           </p>
@@ -164,7 +164,7 @@ export const PlayerPortal: React.FC<PlayerPortalProps> = ({ campaignId }) => {
                     }}
                   >
                     <div>
-                      <div style={{ fontWeight: 600, fontSize: '0.88rem', color: '#fff' }}>{node.title}</div>
+                      <div style={{ fontWeight: 600, fontSize: '0.88rem', color: 'var(--text-primary)' }}>{node.title}</div>
                       <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>{node.subtitle || node.summary?.slice(0, 45)}</div>
                     </div>
                     <span className={`badge badge-${node.type}`}>{node.type}</span>
@@ -183,7 +183,7 @@ export const PlayerPortal: React.FC<PlayerPortalProps> = ({ campaignId }) => {
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Discovered Lore Entry</span>
                 </div>
 
-                <h2 style={{ fontSize: '1.6rem', color: '#fff', marginBottom: '4px' }}>{selectedNode.title}</h2>
+                <h2 style={{ fontSize: '1.6rem', color: 'var(--text-primary)', marginBottom: '4px' }}>{selectedNode.title}</h2>
                 {selectedNode.subtitle && (
                   <p style={{ fontSize: '0.9rem', color: 'var(--text-gold)', fontStyle: 'italic', marginBottom: '14px' }}>
                     {selectedNode.subtitle}
@@ -193,13 +193,14 @@ export const PlayerPortal: React.FC<PlayerPortalProps> = ({ campaignId }) => {
                 {selectedNode.summary && (
                   <div
                     style={{
-                      background: 'rgba(255,255,255,0.03)',
+                      background: 'var(--bg-card)',
                       padding: '12px 16px',
                       borderRadius: '8px',
+                      border: '1px solid var(--border-subtle)',
                       borderLeft: '3px solid var(--color-emerald)',
                       fontSize: '0.88rem',
                       lineHeight: 1.6,
-                      color: '#e2e8f0',
+                      color: 'var(--text-primary)',
                       marginBottom: '18px',
                     }}
                   >
@@ -246,7 +247,7 @@ export const PlayerPortal: React.FC<PlayerPortalProps> = ({ campaignId }) => {
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
                     <span className="badge badge-arc">Campaign Arc</span>
-                    <h4 style={{ fontSize: '1.1rem', color: '#fff' }}>{item.node.title}</h4>
+                    <h4 style={{ fontSize: '1.1rem', color: 'var(--text-primary)' }}>{item.node.title}</h4>
                   </div>
                   {item.node.summary && (
                     <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '12px' }}>
@@ -264,14 +265,15 @@ export const PlayerPortal: React.FC<PlayerPortalProps> = ({ campaignId }) => {
                             background: 'var(--bg-card)',
                             padding: '10px 14px',
                             borderRadius: '8px',
-                            borderLeft: '3px solid #3b82f6',
+                            border: '1px solid var(--border-subtle)',
+                            borderLeft: '3px solid var(--color-arcane-blue)',
                           }}
                         >
-                          <div style={{ fontWeight: 600, fontSize: '0.9rem', color: '#fff' }}>
+                          <div style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-primary)' }}>
                             {q.node.title}
                           </div>
                           {q.node.summary && (
-                            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                            <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
                               {q.node.summary}
                             </p>
                           )}
@@ -314,7 +316,7 @@ export const PlayerPortal: React.FC<PlayerPortalProps> = ({ campaignId }) => {
                     placeholder="e.g. Valeros the Fighter"
                     value={noteAuthor}
                     onChange={(e) => setNoteAuthor(e.target.value)}
-                    style={{ width: '100%', padding: '8px', background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: '6px', color: '#fff' }}
+                    style={{ width: '100%', padding: '8px', background: 'var(--bg-surface)', border: '1px solid var(--border-medium)', borderRadius: '6px', color: 'var(--text-primary)' }}
                   />
                 </div>
                 <div>
@@ -327,7 +329,7 @@ export const PlayerPortal: React.FC<PlayerPortalProps> = ({ campaignId }) => {
                     placeholder="e.g. Session 2 Clues about the Necromancer"
                     value={noteTitle}
                     onChange={(e) => setNoteTitle(e.target.value)}
-                    style={{ width: '100%', padding: '8px', background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: '6px', color: '#fff' }}
+                    style={{ width: '100%', padding: '8px', background: 'var(--bg-surface)', border: '1px solid var(--border-medium)', borderRadius: '6px', color: 'var(--text-primary)' }}
                   />
                 </div>
               </div>
@@ -342,7 +344,7 @@ export const PlayerPortal: React.FC<PlayerPortalProps> = ({ campaignId }) => {
                   placeholder="Record loot, conversations, suspicions, and battle highlights..."
                   value={noteContent}
                   onChange={(e) => setNoteContent(e.target.value)}
-                  style={{ width: '100%', padding: '8px', background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: '6px', color: '#fff' }}
+                  style={{ width: '100%', padding: '8px', background: 'var(--bg-surface)', border: '1px solid var(--border-medium)', borderRadius: '6px', color: 'var(--text-primary)' }}
                 />
               </div>
 
@@ -375,7 +377,7 @@ export const PlayerPortal: React.FC<PlayerPortalProps> = ({ campaignId }) => {
                 >
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span style={{ fontWeight: 700, fontSize: '0.95rem', color: '#fff' }}>{n.title}</span>
+                      <span style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--text-primary)' }}>{n.title}</span>
                       <span style={{ fontSize: '0.75rem', color: 'var(--color-arcane-cyan)' }}>by {n.author_name}</span>
                     </div>
                     <button

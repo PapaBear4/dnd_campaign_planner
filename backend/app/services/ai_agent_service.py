@@ -8,32 +8,720 @@ from app.models import NodeCreate, NodeUpdate, EdgeCreate, PlayerNoteCreate
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """You are the Arcane Weaver, an expert D&D 5e Co-DM, world architect, and DM Mentor.
-Your mission is to help the Dungeon Master learn how to weave campaigns, arcs, quests, sessions, and encounters into an interconnected tapestry.
+SYSTEM_PROMPT = """You are the Arcane Weaver — an expert D&D 5e Co-DM, world architect, and DM Mentor embedded directly in the campaign management system.
 
-You have direct access to the live SQLite Campaign Graph Database (provided in the context prompt as Ground Truth).
+## CRITICAL: You Have Live Database Tools — USE THEM
 
-Core Directives:
-1. Grounded in Existing Lore: Always prioritize and pull from existing Arcs, Quests, NPCs, Factions, Locations, and Relationships in the database before inventing new ones, unless explicitly instructed to create something brand new.
-2. Teach the Art of Weaving:
-   - Connect PC Backstories to Quests: Tie character personal stakes directly to faction conflicts or quest rewards.
-   - Weave Factions into Tension: Show how completing a quest for one NPC/Faction impacts another (allies vs rivals).
-   - Trace Arc-to-Encounter Flow: Show how an overarching Arc crisis breaks down into 2-3 overlapping Quests, which divide into Session milestones, which culminate in dramatic tactical Encounters.
-3. Player Agency & Fail-Forward: A failed check should rarely mean 'nothing happens'; it means a complication, cost, or dramatic escalation.
-4. The Three-Clue Rule: Ensure critical mysteries or quest leads have at least 3 distinct avenues of discovery.
-5. Evocative Boxed Text: Multi-sensory read-aloud prose (sight, sound, smell, temperature) in 2-4 punchy sentences.
+You have real Python tool functions that directly read and write the campaign's SQLite database. When the DM asks you to do something, **DO IT** using your tools. Do NOT describe SQL. Do NOT tell the DM to run commands themselves. Execute the operation, confirm what you did, then summarize the outcome.
 
-When proposing story elements, format them as concrete Graph Nodes (NPC, Location, Quest, Monster, Faction, Item, Clue) and Edges (allied_with, hostile_to, located_at, gives_quest, rewards) so the DM can add them directly to their campaign database.
+### Your Tools and When to Use Them
+
+- **search_nodes(type_filter?, title_fragment?)** — Browse or filter existing graph nodes. Use first to understand what exists before creating duplicates.
+- **get_node_detail(node_id)** — Read the full content, notes, and relationships of a specific node.
+- **find_nodes_by_title(title_fragment)** — Find nodes whose title contains a word or phrase. Use to detect duplicates.
+- **list_edges_for_node(node_id)** — See every relationship touching a node. Use before merging or deleting.
+- **create_node(type, title, subtitle?, summary?, content_markdown?, data_json?)** — Create a new graph node.
+- **update_node(node_id, title?, subtitle?, summary?, content_markdown?, data_json?)** — Update an existing node's content.
+- **update_node_status(node_id, status)** — Quickly set a node's status (planned/active/completed/abandoned).
+- **delete_node(node_id)** — Delete a single node and clean up its edges.
+- **bulk_delete_nodes(node_ids)** — Delete multiple nodes at once.
+- **merge_nodes(primary_id, duplicate_ids, merged_title?, merged_summary?, merged_content?)** — Merge duplicate nodes into one: re-points all relationships to the primary, combines content, then deletes the duplicates.
+- **deduplicate_campaign()** — Automatically audit and merge all duplicate nodes across the entire campaign graph, re-pointing relationships to canonical nodes and deleting duplicate entries from the SQLite database.
+- **set_node_canon(node_id, is_canon)** — Promote a node to official protected Canon lore (is_canon=True), or mark it as a working draft (is_canon=False).
+- **create_edge(source_id, target_id, relation_type, label?)** — Create a relationship between two nodes.
+- **delete_edge(edge_id)** — Remove a specific relationship.
+
+### Workflow Rules
+
+1. **Always search before creating** — use `search_nodes` or `find_nodes_by_title` first to check if something already exists.
+2. **Always inspect before merging or deleting** — use `get_node_detail` and `list_edges_for_node` so you understand what will be affected.
+3. **CANON LORE PROTECTION**:
+   - Nodes marked `[Canon 🔒]` represent established, verified campaign lore.
+   - You CAN read, reference, link to, and expand upon Canon nodes.
+   - You CANNOT delete or destructively overwrite Canon nodes without explicit DM confirmation. If the DM asks you to delete a Canon node, clarify that it is Canon and request confirmation.
+   - Nodes marked `[Draft 📝]` are provisional brainstorms / ingested drafts. You have full authority to modify, deduplicate, merge, or prune Draft nodes.
+   - You can use `set_node_canon` to promote approved drafts to official Canon or vice versa upon the DM's instructions.
+4. **Do the work, don't describe it** — when asked to merge, merge. When asked to delete, delete. When asked to create, create. Then confirm in plain language.
+5. **CRITICAL ON DEDUPLICATION** — When the DM asks to deduplicate the campaign, clean up duplicates, or remove redundant nodes: **DO NOT merely describe what could be merged.** You MUST execute `deduplicate_campaign()` to actually perform the database changes in SQLite! Once the tool returns, summarize the real results from the tool receipt.
+6. **Confirm actions clearly** — after completing multi-step operations, give a short plain-English summary: what you found, what you did, and what the DM should know.
+7. **Grounded in existing lore** — always pull from existing Arcs, Quests, NPCs, Factions, Locations, and Relationships before inventing new content.
+
+### D&D 5e Design Principles
+
+- Connect PC Backstories to Quests through faction conflicts and personal stakes.
+- Weave factions into tension: completing a quest for one NPC/Faction should ripple to another.
+- Three-Clue Rule: ensure critical mysteries have at least 3 distinct discovery avenues.
+- Fail-Forward: failed checks = complications, costs, or escalations — not dead ends.
+- Evocative Boxed Text: multi-sensory, 2-4 punchy sentences of read-aloud prose.
 """
+
+# ---------------------------------------------------------------------------
+# Tool definitions for Gemini function calling
+# ---------------------------------------------------------------------------
+
+AGENT_TOOLS = [
+    {
+        "name": "search_nodes",
+        "description": "List and search campaign graph nodes. Use to browse existing content or find nodes of a specific type before creating new ones.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "type_filter": {
+                    "type": "string",
+                    "description": "Optional node type to filter by. One of: campaign, arc, quest, session, encounter, pc, npc, monster, location, faction, item, clue, map, lore",
+                },
+                "title_fragment": {
+                    "type": "string",
+                    "description": "Optional substring to search in node titles (case-insensitive).",
+                },
+            },
+        },
+    },
+    {
+        "name": "get_node_detail",
+        "description": "Read the full detail of a specific node including its full content, notes, and all metadata.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "node_id": {"type": "string", "description": "The ID of the node to retrieve."},
+            },
+            "required": ["node_id"],
+        },
+    },
+    {
+        "name": "find_nodes_by_title",
+        "description": "Find all nodes whose title contains the given text fragment. Use this to detect duplicates or locate nodes by approximate name.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title_fragment": {"type": "string", "description": "Partial title to search for (case-insensitive)."},
+            },
+            "required": ["title_fragment"],
+        },
+    },
+    {
+        "name": "list_edges_for_node",
+        "description": "List all graph edges (relationships) connected to a specific node, showing what it is linked to.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "node_id": {"type": "string", "description": "The node ID to inspect relationships for."},
+            },
+            "required": ["node_id"],
+        },
+    },
+    {
+        "name": "create_node",
+        "description": "Create a new graph node in the campaign database.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "type": {"type": "string", "description": "Node type: arc, quest, session, encounter, npc, pc, monster, location, faction, item, clue, lore"},
+                "title": {"type": "string", "description": "Node title."},
+                "subtitle": {"type": "string", "description": "Optional subtitle or role (e.g. 'Village Elder', 'Side Quest')."},
+                "summary": {"type": "string", "description": "Brief 1-2 sentence summary."},
+                "content_markdown": {"type": "string", "description": "Full DM notes in markdown format."},
+                "data_json": {"type": "string", "description": "Optional JSON string with extra structured key-value pairs (e.g. '{\"status\": \"planned\", \"cr\": 5}')."},
+                "is_canon": {"type": "boolean", "description": "Set to true for official Canon lore (default), or false for provisional working drafts."},
+            },
+            "required": ["type", "title"],
+        },
+    },
+    {
+        "name": "update_node",
+        "description": "Update an existing node's title, subtitle, summary, content, or data. Only the fields you provide will be changed.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "node_id": {"type": "string", "description": "ID of the node to update."},
+                "title": {"type": "string", "description": "New title."},
+                "subtitle": {"type": "string", "description": "New subtitle."},
+                "summary": {"type": "string", "description": "New summary."},
+                "content_markdown": {"type": "string", "description": "New full DM notes content."},
+                "data_json": {"type": "string", "description": "New or merged structured data as a JSON string."},
+            },
+            "required": ["node_id"],
+        },
+    },
+    {
+        "name": "update_node_status",
+        "description": "Set the status of a node (planned, active, completed, abandoned). Use this to mark quests, sessions, or encounters as done.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "node_id": {"type": "string", "description": "ID of the node to update."},
+                "status": {"type": "string", "description": "New status value: planned, active, completed, or abandoned."},
+            },
+            "required": ["node_id", "status"],
+        },
+    },
+    {
+        "name": "delete_node",
+        "description": "Delete a single node and all edges connected to it. Canon nodes (is_canon=true) are protected from deletion unless the DM gives explicit confirmation.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "node_id": {"type": "string", "description": "ID of the node to delete."},
+                "force_canon": {"type": "boolean", "description": "Set to true only if the DM explicitly confirmed deleting this protected Canon node."},
+            },
+            "required": ["node_id"],
+        },
+    },
+    {
+        "name": "bulk_delete_nodes",
+        "description": "Delete multiple nodes and their edges at once. Skips protected Canon nodes unless force_canon=true.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "node_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of node IDs to delete.",
+                },
+                "force_canon": {"type": "boolean", "description": "Set to true only if the DM explicitly confirmed deleting protected Canon nodes."},
+            },
+            "required": ["node_ids"],
+        },
+    },
+    {
+        "name": "merge_nodes",
+        "description": "Merge one or more duplicate nodes into a single primary node. All edges (relationships) from the duplicates are re-pointed to the primary. The duplicates are then deleted. Optionally provide merged title/summary/content to update the primary with combined information.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "primary_id": {"type": "string", "description": "ID of the node to keep as the canonical record."},
+                "duplicate_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "IDs of the duplicate nodes to merge into the primary and then delete.",
+                },
+                "merged_title": {"type": "string", "description": "Optional new title for the merged primary node."},
+                "merged_summary": {"type": "string", "description": "Optional combined summary for the merged node."},
+                "merged_content": {"type": "string", "description": "Optional combined DM notes for the merged node."},
+            },
+            "required": ["primary_id", "duplicate_ids"],
+        },
+    },
+    {
+        "name": "deduplicate_campaign",
+        "description": "Automatically audit and merge duplicate nodes across the entire campaign in SQLite. Groups nodes sharing matching titles and types, chooses the canonical richest record, re-points all relationships, combines lore/notes, and deletes redundant records from the database. Call this whenever the DM asks to deduplicate or clean up duplicate campaign entries.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
+        "name": "set_node_canon",
+        "description": "Mark a node as official Canon lore (is_canon=true) to protect it from deletion, or mark it as a working draft (is_canon=false) for provisional brainstorming.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "node_id": {"type": "string", "description": "ID of the node."},
+                "is_canon": {"type": "boolean", "description": "True for official Canon (protected from deletion); False for working draft."},
+            },
+            "required": ["node_id", "is_canon"],
+        },
+    },
+    {
+        "name": "create_edge",
+        "description": "Create a relationship (edge) between two existing nodes.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "source_id": {"type": "string", "description": "ID of the source node."},
+                "target_id": {"type": "string", "description": "ID of the target node."},
+                "relation_type": {
+                    "type": "string",
+                    "description": "Relationship type: allied_with, hostile_to, located_at, contains, leads_to, gives_quest, rewards, precedes, parent_of, related_to, associated_with, worships, created_by, recorded_in",
+                },
+                "label": {"type": "string", "description": "Optional custom label for the edge."},
+            },
+            "required": ["source_id", "target_id", "relation_type"],
+        },
+    },
+    {
+        "name": "delete_edge",
+        "description": "Delete a specific relationship (edge) by its ID.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "edge_id": {"type": "string", "description": "ID of the edge to delete."},
+            },
+            "required": ["edge_id"],
+        },
+    },
+]
+
+
+def _dispatch_tool_call(tool_name: str, args: dict, campaign_id: str) -> dict:
+    """
+    Executes a tool call from the agent loop.
+    Returns a JSON-serializable dict with results.
+    """
+    from app.services import graph_service
+    from app.models import NodeCreate, NodeUpdate, EdgeCreate
+
+    try:
+        if tool_name == "search_nodes":
+            type_filter = args.get("type_filter")
+            title_fragment = args.get("title_fragment", "")
+            if title_fragment:
+                nodes = graph_service.find_nodes_by_title(campaign_id, title_fragment)
+                if type_filter:
+                    nodes = [n for n in nodes if n.type == type_filter]
+            else:
+                nodes = graph_service.list_nodes(campaign_id, node_type=type_filter)
+            return {
+                "nodes": [
+                    {
+                        "id": n.id,
+                        "type": n.type,
+                        "title": n.title,
+                        "subtitle": n.subtitle,
+                        "summary": n.summary,
+                        "status": n.data_json.get("status", "planned") if n.data_json else "planned",
+                    }
+                    for n in nodes
+                ],
+                "count": len(nodes),
+            }
+
+        elif tool_name == "get_node_detail":
+            n = graph_service.get_node(args["node_id"])
+            if not n:
+                return {"error": f"Node {args['node_id']} not found."}
+            return {
+                "id": n.id,
+                "type": n.type,
+                "title": n.title,
+                "subtitle": n.subtitle,
+                "summary": n.summary,
+                "content_markdown": n.content_markdown,
+                "data_json": n.data_json,
+                "tags": n.tags,
+            }
+
+        elif tool_name == "find_nodes_by_title":
+            nodes = graph_service.find_nodes_by_title(campaign_id, args["title_fragment"])
+            return {
+                "nodes": [
+                    {"id": n.id, "type": n.type, "title": n.title, "summary": n.summary}
+                    for n in nodes
+                ],
+                "count": len(nodes),
+            }
+
+        elif tool_name == "list_edges_for_node":
+            edges = graph_service.list_edges_for_node(campaign_id, args["node_id"])
+            return {"edges": edges, "count": len(edges)}
+
+        elif tool_name == "create_node":
+            raw_data = args.get("data_json", {})
+            if isinstance(raw_data, str):
+                try:
+                    data_json = json.loads(raw_data)
+                except Exception:
+                    data_json = {}
+            elif isinstance(raw_data, dict):
+                data_json = raw_data
+            else:
+                data_json = {}
+
+            node = graph_service.create_node(
+                NodeCreate(
+                    campaign_id=campaign_id,
+                    type=args["type"],
+                    title=args["title"],
+                    subtitle=args.get("subtitle", ""),
+                    summary=args.get("summary", ""),
+                    content_markdown=args.get("content_markdown", ""),
+                    data_json=data_json,
+                    is_canon=args.get("is_canon", True),
+                ),
+                default_campaign_id=campaign_id,
+            )
+            canon_str = " (Canon 🔒)" if node.is_canon else " (Draft 📝)"
+            return {"created": True, "node_id": node.id, "title": node.title + canon_str, "type": node.type, "is_canon": node.is_canon}
+
+        elif tool_name == "update_node":
+            raw_data = args.get("data_json")
+            if isinstance(raw_data, str):
+                try:
+                    data_json = json.loads(raw_data)
+                except Exception:
+                    data_json = None
+            elif isinstance(raw_data, dict):
+                data_json = raw_data
+            else:
+                data_json = None
+
+            updated = graph_service.update_node(
+                args["node_id"],
+                NodeUpdate(
+                    title=args.get("title"),
+                    subtitle=args.get("subtitle"),
+                    summary=args.get("summary"),
+                    content_markdown=args.get("content_markdown"),
+                    data_json=data_json,
+                ),
+            )
+            if not updated:
+                return {"error": f"Node {args['node_id']} not found."}
+            return {"updated": True, "node_id": updated.id, "title": updated.title}
+
+        elif tool_name == "update_node_status":
+            updated = graph_service.update_node_status(args["node_id"], args["status"])
+            if not updated:
+                return {"error": f"Node {args['node_id']} not found."}
+            return {"updated": True, "node_id": updated.id, "title": updated.title, "status": args["status"]}
+
+        elif tool_name == "delete_node":
+            node = graph_service.get_node(args["node_id"])
+            if not node:
+                return {"error": f"Node {args['node_id']} not found."}
+            force_canon = args.get("force_canon", False)
+            if node.is_canon and not force_canon:
+                return {
+                    "error": "CANON_PROTECTED",
+                    "node_id": node.id,
+                    "title": node.title,
+                    "is_canon": True,
+                    "message": f"PROTECTED LORE: Node '{node.title}' is marked as Canon. It cannot be deleted without explicit confirmation. If you truly wish to remove it, ask me specifically to override Canon protection.",
+                }
+            # Clean up edges referencing this node
+            campaign_edges = graph_service.list_edges(campaign_id)
+            for e in campaign_edges:
+                if e.source_id == args["node_id"] or e.target_id == args["node_id"]:
+                    graph_service.delete_edge(e.id)
+            deleted = graph_service.delete_node(args["node_id"])
+            return {"deleted": deleted, "node_id": args["node_id"], "title": node.title}
+
+        elif tool_name == "bulk_delete_nodes":
+            force_canon = args.get("force_canon", False)
+            result = graph_service.bulk_delete_nodes(campaign_id, args["node_ids"], force_canon=force_canon)
+            return result
+
+        elif tool_name == "set_node_canon":
+            updated = graph_service.toggle_node_canon(args["node_id"], is_canon=args["is_canon"])
+            if not updated:
+                return {"error": f"Node {args['node_id']} not found."}
+            status_text = "Canon Lore 🔒 (Protected from deletion)" if updated.is_canon else "Working Draft 📝 (Provisional)"
+            return {
+                "updated": True,
+                "node_id": updated.id,
+                "title": updated.title,
+                "is_canon": updated.is_canon,
+                "message": f"Node '{updated.title}' is now marked as {status_text}.",
+            }
+
+        elif tool_name == "merge_nodes":
+            merged = graph_service.merge_nodes(
+                campaign_id=campaign_id,
+                primary_id=args["primary_id"],
+                duplicate_ids=args["duplicate_ids"],
+                merged_title=args.get("merged_title"),
+                merged_summary=args.get("merged_summary"),
+                merged_content=args.get("merged_content"),
+            )
+            if not merged:
+                return {"error": f"Primary node {args['primary_id']} not found."}
+            return {
+                "merged": True,
+                "primary_id": merged.id,
+                "primary_title": merged.title,
+                "duplicates_deleted": args["duplicate_ids"],
+            }
+
+        elif tool_name == "deduplicate_campaign":
+            result = graph_service.deduplicate_campaign(campaign_id)
+            return result
+
+        elif tool_name == "create_edge":
+            edge = graph_service.create_edge(
+                EdgeCreate(
+                    campaign_id=campaign_id,
+                    source_id=args["source_id"],
+                    target_id=args["target_id"],
+                    relation_type=args["relation_type"],
+                    label=args.get("label", ""),
+                ),
+                default_campaign_id=campaign_id,
+            )
+            return {"created": True, "edge_id": edge.id, "relation_type": edge.relation_type}
+
+        elif tool_name == "delete_edge":
+            deleted = graph_service.delete_edge(args["edge_id"])
+            return {"deleted": deleted, "edge_id": args["edge_id"]}
+
+        else:
+            return {"error": f"Unknown tool: {tool_name}"}
+
+    except Exception as e:
+        logger.error(f"Tool dispatch error [{tool_name}]: {e}", exc_info=True)
+        return {"error": str(e)}
+
+
+def chat_with_agent(
+    messages: List[Dict[str, str]],
+    campaign_id: str,
+    context_node_id: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Agentic chat loop using Gemini function calling.
+    The model can call any of the 12 graph tools in a multi-turn loop
+    until it produces a final text reply.
+    """
+    model, model_name = _get_configured_gemini_client()
+
+    # Compile live database ground truth
+    db_context = build_campaign_database_context(campaign_id)
+
+    context_extra = ""
+    if context_node_id:
+        from app.services.graph_service import get_node
+        node = get_node(context_node_id)
+        if node:
+            context_extra = (
+                f"\nFocused Node in Workspace:\n"
+                f"- ID: {node.id}\n"
+                f"- Title: {node.title} (Type: {node.type})\n"
+                f"- Summary: {node.summary}\n"
+                f"- Notes: {node.content_markdown}\n"
+            )
+
+    if not model:
+        # Informative offline fallback
+        last_user_msg = messages[-1]["content"] if messages else ""
+        return {
+            "model": "offline-guidance-engine",
+            "reply": (
+                f"🧙‍♂️ **The Arcane Weaver (Co-DM)**\n\n"
+                f"*Note: Gemini API key has not been configured yet. Here is offline guidance:*\n\n"
+                f"**Addressing:** \"{last_user_msg}\"\n\n"
+                f"### Strategic Campaign Advice\n"
+                f"1. **Pacing & Threat Escalation**: Introduce an immediate environmental or social complication.\n"
+                f"2. **NPC Motive**: Give the key NPC two opposing traits (fierce loyalty, but secretly indebted).\n"
+                f"3. **Three-Clue Rule**: One clue in dialogue, one in an inspectable object, one via skill check.\n\n"
+                f"> 💡 *Enter your Gemini API key in Settings to enable live graph tool-calling — merge duplicates, create nodes, manage relationships, and more!*"
+            ),
+            "suggested_nodes": [],
+            "actions_taken": [],
+        }
+
+    try:
+        import google.generativeai as genai
+
+        # Build Gemini tool declarations
+        gemini_tools = [
+            genai.protos.Tool(
+                function_declarations=[
+                    genai.protos.FunctionDeclaration(
+                        name=t["name"],
+                        description=t["description"],
+                        parameters=genai.protos.Schema(
+                            type=genai.protos.Type.OBJECT,
+                            properties={
+                                k: _schema_prop_to_proto(v)
+                                for k, v in t.get("parameters", {}).get("properties", {}).items()
+                            },
+                            required=t.get("parameters", {}).get("required", []),
+                        ),
+                    )
+                    for t in AGENT_TOOLS
+                ]
+            )
+        ]
+
+        # Build conversation history for Gemini
+        gemini_history = []
+        for m in messages[:-1]:
+            gemini_history.append({
+                "role": "user" if m["role"] == "user" else "model",
+                "parts": [m["content"]]
+            })
+
+        # Inject DB context + focused node into the final user prompt
+        last_prompt = (
+            f"{db_context}\n"
+            f"{context_extra}\n"
+            f"## DM Request\n{messages[-1]['content']}"
+        )
+
+        # Create a model instance with tools enabled
+        tool_model = genai.GenerativeModel(
+            model_name=model_name,
+            system_instruction=SYSTEM_PROMPT,
+            tools=gemini_tools,
+        )
+
+        chat = tool_model.start_chat(history=gemini_history)
+
+        # --- Agentic loop ---
+        MAX_TURNS = 10
+        actions_taken = []
+        current_prompt = last_prompt
+        final_reply = ""
+
+        for turn in range(MAX_TURNS):
+            response = chat.send_message(current_prompt)
+
+            # Collect any function calls and text in this response
+            function_calls = []
+            malformed = False
+
+            for candidate in (getattr(response, "candidates", None) or []):
+                finish_reason_name = getattr(candidate.finish_reason, "name", str(candidate.finish_reason))
+                if "MALFORMED" in finish_reason_name.upper():
+                    malformed = True
+
+                if candidate.content and candidate.content.parts:
+                    for part in candidate.content.parts:
+                        if hasattr(part, "function_call") and part.function_call and getattr(part.function_call, "name", None):
+                            function_calls.append(part.function_call)
+
+            # Handle MALFORMED_FUNCTION_CALL from Gemini gracefully
+            if malformed and not function_calls:
+                logger.warning("Gemini returned MALFORMED_FUNCTION_CALL. Recovering with text.")
+                extracted = _extract_text_from_response(response)
+                if extracted:
+                    final_reply = extracted
+                else:
+                    try:
+                        retry_resp = chat.send_message("Please provide your advice directly in plain text without external tool calls.")
+                        final_reply = _extract_text_from_response(retry_resp) or "I've reviewed your request. How can I assist your campaign further?"
+                    except Exception as err:
+                        logger.warning(f"Fallback retry failed: {err}")
+                        final_reply = "I've reviewed your campaign notes. What would you like to build or brainstorm?"
+                break
+
+            if not function_calls:
+                # No tool calls — extract the final text reply safely (never call response.text directly)
+                final_reply = _extract_text_from_response(response)
+                if not final_reply:
+                    final_reply = "I'm ready. How can I help with your campaign prep?"
+                break
+
+            # Execute each tool call and build FunctionResponse parts
+            function_response_parts = []
+            for fc in function_calls:
+                fc_args = {}
+                try:
+                    fc_args = dict(fc.args) if fc.args else {}
+                except Exception:
+                    fc_args = {}
+                tool_result = _dispatch_tool_call(fc.name, fc_args, campaign_id)
+                actions_taken.append({
+                    "tool": fc.name,
+                    "args": fc_args,
+                    "result": tool_result,
+                })
+                function_response_parts.append(
+                    genai.protos.Part(
+                        function_response=genai.protos.FunctionResponse(
+                            name=fc.name,
+                            response={"result": tool_result},
+                        )
+                    )
+                )
+
+            # Feed tool results back into the conversation
+            current_prompt = function_response_parts
+
+        else:
+            # Hit MAX_TURNS without a terminal text reply
+            extracted = _extract_text_from_response(response) if 'response' in locals() else ""
+            final_reply = extracted or (
+                "I've completed the requested operations. "
+                f"Actions taken: {len(actions_taken)}. "
+                "Check the graph to see the updated state."
+            )
+
+        return {
+            "model": model_name,
+            "reply": final_reply,
+            "suggested_nodes": [],
+            "actions_taken": actions_taken,
+        }
+
+    except Exception as e:
+        logger.error(f"Gemini agentic chat error: {e}", exc_info=True)
+        return {
+            "model": "error",
+            "reply": f"An error occurred while contacting Gemini: {e}. Please check your API key and model selection in Settings.",
+            "suggested_nodes": [],
+            "actions_taken": [],
+        }
+
+
+def _extract_text_from_response(response) -> str:
+    """Safely extracts text parts from a Gemini response without throwing on function calls or finish reasons."""
+    if not response or not getattr(response, "candidates", None):
+        return ""
+    text_chunks = []
+    for candidate in response.candidates:
+        if candidate.content and candidate.content.parts:
+            for part in candidate.content.parts:
+                try:
+                    # Skip parts that are function calls
+                    if getattr(part, "function_call", None) and getattr(part.function_call, "name", None):
+                        continue
+                    if hasattr(part, "text") and part.text:
+                        text_chunks.append(part.text)
+                except Exception:
+                    pass
+    return "\n\n".join(text_chunks).strip()
+
+
+def _schema_prop_to_proto(prop: dict):
+    """Convert a JSON Schema property dict to a Gemini protos.Schema."""
+    import google.generativeai as genai
+
+    type_map = {
+        "string": genai.protos.Type.STRING,
+        "number": genai.protos.Type.NUMBER,
+        "integer": genai.protos.Type.INTEGER,
+        "boolean": genai.protos.Type.BOOLEAN,
+        "object": genai.protos.Type.OBJECT,
+        "array": genai.protos.Type.ARRAY,
+    }
+    ptype = type_map.get(prop.get("type", "string"), genai.protos.Type.STRING)
+
+    if ptype == genai.protos.Type.ARRAY:
+        items_prop = prop.get("items", {"type": "string"})
+        return genai.protos.Schema(
+            type=ptype,
+            items=_schema_prop_to_proto(items_prop),
+            description=prop.get("description", ""),
+        )
+    elif ptype == genai.protos.Type.OBJECT:
+        nested_props = prop.get("properties", {})
+        if nested_props:
+            return genai.protos.Schema(
+                type=ptype,
+                properties={k: _schema_prop_to_proto(v) for k, v in nested_props.items()},
+                description=prop.get("description", ""),
+            )
+        else:
+            # Fallback to STRING if an arbitrary object has no defined properties
+            return genai.protos.Schema(
+                type=genai.protos.Type.STRING,
+                description=prop.get("description", "") + " (Pass as JSON string)",
+            )
+    else:
+        return genai.protos.Schema(
+            type=ptype,
+            description=prop.get("description", ""),
+        )
+
 
 def _get_configured_gemini_client():
     api_key = get_setting("gemini_api_key", os.getenv("GEMINI_API_KEY", ""))
     if not api_key:
         return None, None
-    
+
     model_name = get_setting("gemini_model", "gemini-2.5-flash")
     # Normalize model name if user specified shorthand
-    if not model_name.startswith("models/") and not "/" in model_name:
+    if not model_name.startswith("models/") and "/" not in model_name:
         effective_model = model_name
     else:
         effective_model = model_name
@@ -41,6 +729,8 @@ def _get_configured_gemini_client():
     try:
         import google.generativeai as genai
         genai.configure(api_key=api_key)
+        # Return a basic client for non-chat functions (boxed text, coach, etc.)
+        # chat_with_agent creates its own tool-enabled model instance
         model = genai.GenerativeModel(
             model_name=effective_model,
             system_instruction=SYSTEM_PROMPT
@@ -75,31 +765,34 @@ def build_campaign_database_context(campaign_id: str) -> str:
         ""
     ]
 
+    def _c_tag(node) -> str:
+        return "[Canon 🔒]" if getattr(node, "is_canon", True) else "[Draft 📝]"
+
     # Arcs & Quests hierarchy
     if "arc" in by_type or "quest" in by_type:
         lines.append("**Story Structure (Arcs & Quests)**:")
         for arc in by_type.get("arc", []):
             status = arc.data_json.get("status", "planned") if arc.data_json else "planned"
-            lines.append(f"- [Arc] {arc.title} (Status: {status}): {arc.summary}")
+            lines.append(f"- [Arc] {_c_tag(arc)} {arc.title} [id: {arc.id}] (Status: {status}): {arc.summary}")
         for q in by_type.get("quest", []):
             status = q.data_json.get("status", "planned") if q.data_json else "planned"
-            lines.append(f"  * [Quest] {q.title} (Status: {status}): {q.summary}")
+            lines.append(f"  * [Quest] {_c_tag(q)} {q.title} [id: {q.id}] (Status: {status}): {q.summary}")
         lines.append("")
 
     # Factions & NPCs
     if "faction" in by_type or "npc" in by_type:
         lines.append("**Factions & Key NPCs**:")
         for f in by_type.get("faction", []):
-            lines.append(f"- [Faction] {f.title}: {f.summary}")
+            lines.append(f"- [Faction] {_c_tag(f)} {f.title} [id: {f.id}]: {f.summary}")
         for npc in by_type.get("npc", []):
-            lines.append(f"- [NPC] {npc.title} ({npc.subtitle or 'NPC'}): {npc.summary}")
+            lines.append(f"- [NPC] {_c_tag(npc)} {npc.title} [id: {npc.id}] ({npc.subtitle or 'NPC'}): {npc.summary}")
         lines.append("")
 
     # Locations
     if "location" in by_type:
         lines.append("**Key Locations**:")
         for loc in by_type.get("location", []):
-            lines.append(f"- [Location] {loc.title} ({loc.subtitle or ''}): {loc.summary}")
+            lines.append(f"- [Location] {_c_tag(loc)} {loc.title} [id: {loc.id}] ({loc.subtitle or ''}): {loc.summary}")
         lines.append("")
 
     # Monsters
@@ -107,14 +800,14 @@ def build_campaign_database_context(campaign_id: str) -> str:
         lines.append("**Monsters & Bosses**:")
         for m in by_type.get("monster", []):
             cr = m.data_json.get("cr", "?") if m.data_json else "?"
-            lines.append(f"- [Monster] {m.title} (CR {cr}): {m.summary}")
+            lines.append(f"- [Monster] {_c_tag(m)} {m.title} [id: {m.id}] (CR {cr}): {m.summary}")
         lines.append("")
 
     # Player Characters (PCs)
     if "pc" in by_type:
         lines.append("**Player Characters (PCs)**:")
         for pc in by_type.get("pc", []):
-            lines.append(f"- [PC] {pc.title}: {pc.summary}")
+            lines.append(f"- [PC] {_c_tag(pc)} {pc.title} [id: {pc.id}]: {pc.summary}")
         lines.append("")
 
     # Key Relationships (Edges)
@@ -130,67 +823,6 @@ def build_campaign_database_context(campaign_id: str) -> str:
 
     return "\n".join(lines)
 
-def chat_with_agent(
-    messages: List[Dict[str, str]],
-    campaign_id: str,
-    context_node_id: Optional[str] = None
-) -> Dict[str, Any]:
-    model, model_name = _get_configured_gemini_client()
-    
-    # Compile live database ground truth
-    db_context = build_campaign_database_context(campaign_id)
-    
-    context_extra = ""
-    if context_node_id:
-        from app.services.graph_service import get_node
-        node = get_node(context_node_id)
-        if node:
-            context_extra = f"\nFocused Node in Workspace:\n- Title: {node.title} (Type: {node.type})\n- Summary: {node.summary}\n- Notes: {node.content_markdown}\n"
-
-
-    if not model:
-        # Informative offline fallback when API key is not yet set
-        last_user_msg = messages[-1]["content"] if messages else ""
-        return {
-            "model": "offline-guidance-engine",
-            "reply": (
-                f"🧙‍♂️ **The Arcane Weaver (Co-DM)**\n\n"
-                f"*Note: Gemini API key has not been entered yet in Settings. Here is guidance from the offline D&D 5e campaign engine:*\n\n"
-                f"**Addressing:** \"{last_user_msg}\"\n\n"
-                f"### Strategic Campaign Advice\n"
-                f"1. **Pacing & Threat Escalation**: Introduce an immediate environmental or social complication to anchor the party's attention.\n"
-                f"2. **NPC Motive**: Give the key NPC two opposing traits (e.g., fierce loyalty to their guild, but secretly indebted to a rival faction).\n"
-                f"3. **Three-Clue Rule**: Place one clue in dialogue, one clue in an inspectable object/location, and one clue obtainable through a skill check.\n\n"
-                f"> 💡 *Tip: Paste your Gemini API key in the top-right Settings modal to activate real-time generation, deep lore weaving, and automated node extraction!*"
-            ),
-            "suggested_nodes": []
-        }
-
-    try:
-        # Build prompt history
-        gemini_history = []
-        for m in messages[:-1]:
-            gemini_history.append({
-                "role": "user" if m["role"] == "user" else "model",
-                "parts": [m["content"]]
-            })
-        
-        last_prompt = f"{db_context}\n{context_extra}\nDM Request:\n{messages[-1]['content']}"
-        chat = model.start_chat(history=gemini_history)
-        response = chat.send_message(last_prompt)
-        
-        return {
-            "model": model_name,
-            "reply": response.text,
-            "suggested_nodes": []
-        }
-    except Exception as e:
-        logger.error(f"Gemini chat error: {e}")
-        return {
-            "model": "error",
-            "reply": f"An error occurred while contacting Gemini ({e}). Please check your API key and model selection in Settings.",
-            "suggested_nodes": []
-        }
 
 def generate_boxed_text(
     location_title: str,
