@@ -143,5 +143,33 @@ export interface ChatThread {
   last_message?: string | null;
 }
 
+export type DeconflictMatchStatus = 'new' | 'exact_match' | 'potential_match' | 'conflict';
+export type DeconflictAction = 'merge' | 'create';
 
+export interface ExtractedDraftNode {
+  type: NodeType;
+  title: string;
+  subtitle?: string;
+  summary?: string;
+  content_markdown?: string;
+  data_json?: Record<string, any>;
+  revealed_to_players?: boolean;
+  match_status?: DeconflictMatchStatus;
+  matched_node_id?: string | null;
+  matched_node_title?: string | null;
+  match_confidence?: number;
+  conflict_reason?: string | null;
+  merge_notes?: string | null;
+  action?: DeconflictAction;
+  merge_target_id?: string | null;
+}
 
+export interface ExtractedDraftEdge {
+  source_title?: string;
+  target_title?: string;
+  relation_type?: string;
+  label?: string;
+  metadata_json?: Record<string, any>;
+  source_id?: string;
+  target_id?: string;
+}

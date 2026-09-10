@@ -1,3 +1,4 @@
+import difflib
 import json
 import logging
 import os
@@ -1042,15 +1043,16 @@ def extract_entities_from_text(
         # Simple rule-based extraction fallback
         lines = [line.strip() for line in text_content.split("\n") if line.strip()]
         sample_title = lines[0][:50] if lines else "Adventure Excerpt"
+        raw_fallback_nodes = [
+            {
+                "type": "location",
+                "title": sample_title,
+                "summary": "Extracted location from uploaded document snippet.",
+                "content_markdown": text_content[:500]
+            }
+        ]
         return {
-            "extracted_nodes": [
-                {
-                    "type": "location",
-                    "title": sample_title,
-                    "summary": "Extracted location from uploaded document snippet.",
-                    "content_markdown": text_content[:500]
-                }
-            ],
+            "extracted_nodes": _reconcile_extracted_nodes_with_campaign(raw_fallback_nodes, campaign_id),
             "extracted_edges": [],
             "model": "offline-extractor"
         }
@@ -1101,7 +1103,7 @@ Return strictly JSON matching this structure:
         response = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
         data = json.loads(response.text)
         return {
-            "extracted_nodes": data.get("extracted_nodes", []),
+            "extracted_nodes": _reconcile_extracted_nodes_with_campaign(data.get("extracted_nodes", []), campaign_id),
             "extracted_edges": data.get("extracted_edges", []),
             "model": model_name
         }
@@ -1261,6 +1263,132 @@ def _split_text_into_chunks(text: str, chars_per_chunk: int = 18000, overlap: in
     return chunks
 
 
+def _reconcile_extracted_nodes_with_campaign(
+    extracted_nodes: List[Dict[str, Any]], campaign_id: str
+) -> List[Dict[str, Any]]:
+    """
+    Reconciles newly extracted entities against existing campaign graph nodes.
+    - Exact match: Marks as exact_match (confidence: 1.0) for seamless auto-merge.
+    - Info conflict: Flags conflicting disposition, CR, or lore for DM review.
+    - Fuzzy/near match: Computes confidence rating (0.50–0.95) and targets candidate node.
+    - New entity: Marks as new (confidence: 0.0).
+    """
+    if not extracted_nodes:
+        return []
+
+    campaign_nodes = list_nodes(campaign_id) if campaign_id else []
+    id_to_existing = {n.id: n for n in campaign_nodes}
+    exact_title_map = {n.title.lower().strip(): n for n in campaign_nodes}
+
+    reconciled = []
+    for node in extracted_nodes:
+        n = dict(node)
+        ext_title = (n.get("title") or "").strip()
+        norm_title = ext_title.lower()
+
+        matched_node = None
+        match_confidence = float(n.get("match_confidence") or 0.0)
+        match_status = n.get("match_status") or "new"
+        conflict_reason = n.get("conflict_reason")
+
+        # 1. Check if AI already matched an existing node by ID
+        matched_id = n.get("matched_node_id")
+        if matched_id and matched_id in id_to_existing:
+            matched_node = id_to_existing[matched_id]
+        elif norm_title in exact_title_map:
+            # Deterministic exact match by normalized title
+            matched_node = exact_title_map[norm_title]
+            match_confidence = 1.0
+            if match_status not in ("conflict", "exact_match"):
+                match_status = "exact_match"
+
+        # 2. If no exact match yet, perform fuzzy / alias matching
+        if not matched_node:
+            best_cand = None
+            best_score = 0.0
+            title_clean = norm_title.replace("the ", "").replace("captain ", "").replace("lord ", "").replace("sir ", "").strip()
+            ext_type = n.get("type")
+
+            for cand in campaign_nodes:
+                cand_norm = cand.title.lower().strip()
+                cand_clean = cand_norm.replace("the ", "").replace("captain ", "").replace("lord ", "").replace("sir ", "").strip()
+                same_type = bool(ext_type and cand.type and ext_type == cand.type)
+
+                if title_clean and cand_clean and title_clean == cand_clean:
+                    score = 0.95 if same_type else 0.85
+                elif title_clean and cand_clean and (title_clean in cand_clean or cand_clean in title_clean) and min(len(title_clean), len(cand_clean)) >= 4:
+                    score = 0.82 if same_type else 0.60
+                else:
+                    ratio = difflib.SequenceMatcher(None, norm_title, cand_norm).ratio()
+                    score = round(ratio, 2)
+                    if not same_type and score < 0.90:
+                        score = round(score * 0.85, 2)
+
+                if score > best_score:
+                    best_score = score
+                    best_cand = cand
+
+            if best_score >= 0.70 and best_cand:
+                matched_node = best_cand
+                match_confidence = best_score
+                if match_status == "new":
+                    match_status = "potential_match"
+
+        # 3. Check for lore / stat conflict if matched
+        if matched_node:
+            n["matched_node_id"] = matched_node.id
+            n["matched_node_title"] = matched_node.title
+            n["match_confidence"] = match_confidence or 1.0
+
+            conflicts = []
+            ext_data = n.get("data_json") or {}
+            exist_data = matched_node.data_json or {}
+
+            # Conflict analysis: CR discrepancy
+            ext_cr = str(ext_data.get("cr", "")).strip()
+            exist_cr = str(exist_data.get("cr", "")).strip()
+            if ext_cr and exist_cr and ext_cr != exist_cr and ext_cr not in ("?", "None", "") and exist_cr not in ("?", "None", ""):
+                conflicts.append(f"CR conflict (existing: {exist_cr} vs imported: {ext_cr})")
+
+            # Conflict analysis: disposition discrepancy
+            ext_disp = ext_data.get("disposition")
+            exist_disp = exist_data.get("disposition")
+            if ext_disp and exist_disp and str(ext_disp).lower().strip() != str(exist_disp).lower().strip():
+                conflicts.append(f"Disposition conflict (existing: '{exist_disp}' vs imported: '{ext_disp}')")
+
+            # Conflict analysis: alignment discrepancy
+            ext_align = ext_data.get("alignment")
+            exist_align = exist_data.get("alignment")
+            if ext_align and exist_align and str(ext_align).lower().strip() != str(exist_align).lower().strip():
+                conflicts.append(f"Alignment conflict (existing: '{exist_align}' vs imported: '{ext_align}')")
+
+            # Conflict analysis: faction discrepancy
+            ext_fac = ext_data.get("faction")
+            exist_fac = exist_data.get("faction")
+            if ext_fac and exist_fac and str(ext_fac).lower().strip() != str(exist_fac).lower().strip():
+                conflicts.append(f"Faction conflict (existing: '{exist_fac}' vs imported: '{ext_fac}')")
+
+            if conflicts:
+                match_status = "conflict"
+                conflict_reason = " | ".join(conflicts)
+
+            n["match_status"] = match_status
+            if conflict_reason:
+                n["conflict_reason"] = conflict_reason
+            if not n.get("merge_notes"):
+                n["merge_notes"] = f"Will merge with existing '{matched_node.title}' in campaign graph without losing canon notes."
+        else:
+            n["match_status"] = "new"
+            n["matched_node_id"] = None
+            n["matched_node_title"] = None
+            n["match_confidence"] = 0.0
+            n["conflict_reason"] = None
+
+        reconciled.append(n)
+
+    return reconciled
+
+
 def _chunk_and_extract_nodes(
     text_content: str,
     model,
@@ -1270,6 +1398,7 @@ def _chunk_and_extract_nodes(
     db_context: str,
     current_nodes: Optional[List[Dict[str, Any]]] = None,
     current_edges: Optional[List[Dict[str, Any]]] = None,
+    campaign_id: str = "",
 ) -> Dict[str, Any]:
     """
     Splits document text into overlapping chunks, calls Gemini once per chunk,
@@ -1304,9 +1433,14 @@ EXTRACTION CONTEXT:
 DM'S STEERING PROMPT / INSTRUCTION:
 \"\"\"{instruction or 'Exhaustively extract all entities found in this document segment.'}\"\"\"
 
-STEERING GUIDANCE:
+STEERING & DECONFLICTION GUIDANCE:
 - Perform an exhaustive extraction of all entities, lore, and structural elements in this segment.
-- If the DM provided a steering prompt above (e.g. asking to prioritize or search for specific entities, monsters, items, factions, or story hooks), prioritize capturing those elements in rich detail, while still extracting all other entities in this segment.
+- If the DM provided a steering prompt above, prioritize capturing those elements in rich detail, while still extracting all other entities in this segment.
+- DECONFLICTION: Check each entity against the EXTRACTION CONTEXT above:
+  * If it's an exact match to an existing node: "match_status": "exact_match", "match_confidence": 1.0, provide "matched_node_id" and "matched_node_title".
+  * If lore/stats contradict the existing node: "match_status": "conflict", explain in "conflict_reason".
+  * If it's a likely alias or near match (e.g. 'Captain Zarr' vs 'Zarr'): "match_status": "potential_match", set confidence 0.5-0.9.
+  * If brand new: "match_status": "new", "match_confidence": 0.0.
 
 DOCUMENT SEGMENT ({chunk_label}):
 \"\"\"
@@ -1331,7 +1465,13 @@ Return strictly JSON:
          "ac": 13,
          "abilities": {{ "str": 10, "dex": 12, "con": 12, "int": 10, "wis": 10, "cha": 10 }}
       }},
-      "revealed_to_players": false
+      "revealed_to_players": false,
+      "match_status": "new|exact_match|potential_match|conflict",
+      "matched_node_id": "UUID from EXTRACTION CONTEXT if matched, else null",
+      "matched_node_title": "Existing Title from EXTRACTION CONTEXT if matched, else null",
+      "match_confidence": 1.0,
+      "conflict_reason": "Specific conflict details if lore/stats contradict existing node, else null",
+      "merge_notes": "Summary of new lore/stats to merge into existing node, else null"
     }}
   ],
   "extracted_edges": [
@@ -1371,16 +1511,18 @@ Return strictly JSON:
         if chunk_data.get("overview_summary"):
             summary_parts.append(f"**{chunk_label}**: {chunk_data['overview_summary']}")
 
+    reconciled_nodes = _reconcile_extracted_nodes_with_campaign(all_nodes, campaign_id)
+
     combined_summary = (
         f"### ✅ Exhaustive Multi-Pass Extraction Complete\n\n"
         f"Processed **{len(chunks)} segments** from document.\n"
-        f"Found **{len(all_nodes)} total unique entities** and **{len(all_edges)} relationships**.\n\n"
+        f"Found **{len(reconciled_nodes)} total unique entities** and **{len(all_edges)} relationships**.\n\n"
         + "\n\n".join(summary_parts)
     )
 
     return {
         "overview_summary": combined_summary,
-        "extracted_nodes": all_nodes,
+        "extracted_nodes": reconciled_nodes,
         "extracted_edges": all_edges,
         "model": model_name,
         "chunks_processed": len(chunks)
@@ -1539,30 +1681,31 @@ def decompose_adventure_document(
                     f"I have refined the working draft according to your steering: *\"{instruction}\"*.\n"
                     f"Updated working draft now contains **{len(updated_nodes)} nodes**."
                 ),
-                "extracted_nodes": updated_nodes,
+                "extracted_nodes": _reconcile_extracted_nodes_with_campaign(updated_nodes, campaign_id),
                 "extracted_edges": current_edges or [],
                 "model": "offline-decomposer"
             }
 
         lines = [line.strip() for line in text_content.split("\n") if line.strip()]
         title_guess = lines[0][:60] if lines else "Imported Adventure Segment"
+        raw_offline_nodes = [
+            {
+                "type": "lore" if decomposition_mode == "world_lore" else ("arc" if decomposition_mode == "campaign_structure" else ("monster" if decomposition_mode == "monsters" else "quest")),
+                "title": title_guess,
+                "subtitle": "World Lore & Setting" if decomposition_mode == "world_lore" else "Imported from Document",
+                "summary": f"Extracted via {decomposition_mode} parser. Ready for DM editing and refinement.",
+                "content_markdown": text_content[:1200],
+                "data_json": {"status": "planned"},
+                "revealed_to_players": False
+            }
+        ]
         return {
             "overview_summary": (
                 f"### 🧙‍♂️ Adventure Decomposed (Offline Preview)\n\n"
                 f"Decomposed segment based on instruction: *\"{instruction or 'Standard Arc & Quest decomposition'}\"*.\n\n"
                 f"> 💡 *Tip: Configure your Gemini API key in Settings to unlock deep semantic extraction of 5e statblocks and multi-tier narrative arcs!*"
             ),
-            "extracted_nodes": [
-                {
-                    "type": "lore" if decomposition_mode == "world_lore" else ("arc" if decomposition_mode == "campaign_structure" else ("monster" if decomposition_mode == "monsters" else "quest")),
-                    "title": title_guess,
-                    "subtitle": "World Lore & Setting" if decomposition_mode == "world_lore" else "Imported from Document",
-                    "summary": f"Extracted via {decomposition_mode} parser. Ready for DM editing and refinement.",
-                    "content_markdown": text_content[:1200],
-                    "data_json": {"status": "planned"},
-                    "revealed_to_players": False
-                }
-            ],
+            "extracted_nodes": _reconcile_extracted_nodes_with_campaign(raw_offline_nodes, campaign_id),
             "extracted_edges": [],
             "model": "offline-decomposer"
         }
@@ -1580,6 +1723,7 @@ def decompose_adventure_document(
             db_context=db_context,
             current_nodes=current_nodes,
             current_edges=current_edges,
+            campaign_id=campaign_id,
         )
 
     # --- Single-pass extraction (default or small documents) ---
@@ -1622,6 +1766,11 @@ CRITICAL INSTRUCTIONS FOR REFINING NODES:
 2. "extracted_nodes": Output the COMPLETE, EXHAUSTIVE set of all entities found — extract every single named NPC, monster, location, item, faction, and clue. Do NOT stop at a representative sample.
 3. "extracted_edges": Output the complete, updated set of working draft edges connecting these nodes.
 4. If the DM asked to split a quest or arc, produce the resulting sub-nodes. If they asked to change stats, factions, or difficulty, update the data_json and descriptions accordingly.
+5. DECONFLICTION: Check each entity against the campaign database context:
+   - If exact match to an existing node: set "match_status": "exact_match", "match_confidence": 1.0, and specify "matched_node_id" and "matched_node_title".
+   - If stats or lore contradict existing records (e.g. CR mismatch, alignment/faction/disposition difference): set "match_status": "conflict" and provide "conflict_reason".
+   - If it appears to be an alias or near match: set "match_status": "potential_match", assign confidence (0.50-0.95), and provide "matched_node_title".
+   - If it is a completely new entity: set "match_status": "new", "match_confidence": 0.0.
 
 Respond strictly in JSON matching this structure:
 {{
@@ -1640,7 +1789,13 @@ Respond strictly in JSON matching this structure:
          "ac": 13,
          "abilities": {{ "str": 10, "dex": 12, "con": 12, "int": 10, "wis": 10, "cha": 10 }}
       }},
-      "revealed_to_players": false
+      "revealed_to_players": false,
+      "match_status": "new|exact_match|potential_match|conflict",
+      "matched_node_id": "optional existing node id if matched",
+      "matched_node_title": "optional existing node title if matched",
+      "match_confidence": 1.0,
+      "conflict_reason": "Explanation of stat or lore contradiction if conflict",
+      "merge_notes": "How this will be merged into the existing record"
     }}
   ],
   "extracted_edges": [
@@ -1659,9 +1814,11 @@ Respond strictly in JSON matching this structure:
             generation_config={"response_mime_type": "application/json", "max_output_tokens": 8192}
         )
         data = json.loads(response.text)
+        raw_nodes = data.get("extracted_nodes", current_nodes or [])
+        reconciled_nodes = _reconcile_extracted_nodes_with_campaign(raw_nodes, campaign_id)
         return {
             "overview_summary": data.get("overview_summary", "Adventure refined successfully."),
-            "extracted_nodes": data.get("extracted_nodes", current_nodes or []),
+            "extracted_nodes": reconciled_nodes,
             "extracted_edges": data.get("extracted_edges", current_edges or []),
             "model": model_name
         }

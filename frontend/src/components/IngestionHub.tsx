@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
+  AlertTriangle,
   ArrowRight,
   BookOpen,
   Calendar,
@@ -11,6 +12,7 @@ import {
   Compass,
   FileText,
   Flame,
+  GitMerge,
   HelpCircle,
   Layers,
   Loader2,
@@ -48,7 +50,7 @@ import {
 import { DocumentLibraryModal } from './DocumentLibraryModal';
 import { DuplicateUploadModal } from './DuplicateUploadModal';
 import { MarkdownView } from './MarkdownView';
-import { NodeItem, NodeType } from '../types';
+import { ExtractedDraftEdge, ExtractedDraftNode, NodeItem, NodeType } from '../types';
 
 interface IngestionHubProps {
   campaignId: string;
@@ -151,10 +153,12 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
 
   const [isDecomposing, setIsDecomposing] = useState<boolean>(false);
   const [overviewSummary, setOverviewSummary] = useState<string>('');
-  const [extractedNodes, setExtractedNodes] = useState<any[]>([]);
-  const [extractedEdges, setExtractedEdges] = useState<any[]>([]);
+  const [extractedNodes, setExtractedNodes] = useState<ExtractedDraftNode[]>([]);
+  const [extractedEdges, setExtractedEdges] = useState<ExtractedDraftEdge[]>([]);
   const [selectedNodeIndices, setSelectedNodeIndices] = useState<Set<number>>(new Set());
   const [commitStatus, setCommitStatus] = useState<string>('');
+  const [commitResult, setCommitResult] = useState<{ created: number; merged: number; edges: number } | null>(null);
+  const [deconflictFilter, setDeconflictFilter] = useState<'all' | 'conflict' | 'potential_match' | 'exact_match' | 'new'>('all');
 
   const [steeringConversation, setSteeringConversation] = useState<SteeringMessage[]>([]);
   const [feedbackInput, setFeedbackInput] = useState<string>('');
@@ -442,12 +446,14 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
         exhaustive: exhaustiveMode,
       });
 
-      const nodes = res.extracted_nodes || [];
+      const rawNodes = res.extracted_nodes || [];
       const edges = res.extracted_edges || [];
+      const processedNodes = processIncomingNodes(rawNodes);
+
       setOverviewSummary(res.overview_summary || '');
-      setExtractedNodes(nodes);
+      setExtractedNodes(processedNodes);
       setExtractedEdges(edges);
-      setSelectedNodeIndices(new Set(nodes.map((_: any, i: number) => i)));
+      setSelectedNodeIndices(new Set(processedNodes.map((_: any, i: number) => i)));
       if (res.chunks_processed) setChunksProcessed(res.chunks_processed);
 
       setSteeringConversation([
@@ -456,13 +462,47 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
           role: 'assistant',
           content: res.overview_summary || 'I have decomposed the chapter into draft campaign nodes and relationships. Review below and reply to steer or refine any elements.',
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          nodeCount: nodes.length,
+          nodeCount: processedNodes.length,
         },
       ]);
     } catch (err: any) {
       alert('Decomposition failed: ' + err.message);
     } finally {
       setIsDecomposing(false);
+    }
+  };
+
+  const processIncomingNodes = (nodes: any[]): ExtractedDraftNode[] => {
+    return nodes.map((n) => {
+      let defaultAction: 'merge' | 'create' | undefined = n.action;
+      if (!defaultAction) {
+        if (n.match_status === 'exact_match') {
+          defaultAction = 'merge';
+        } else if (n.match_status === 'new' || !n.match_status) {
+          defaultAction = 'create';
+        }
+      }
+      return {
+        ...n,
+        action: defaultAction,
+        merge_target_id: n.merge_target_id || n.matched_node_id || null,
+      };
+    });
+  };
+
+  const handleSetNodeAction = (index: number, action: 'merge' | 'create') => {
+    setExtractedNodes((prev) => {
+      const next = [...prev];
+      next[index] = { ...next[index], action };
+      return next;
+    });
+  };
+
+  const handleSelectAll = (select: boolean) => {
+    if (select) {
+      setSelectedNodeIndices(new Set(extractedNodes.map((_, i) => i)));
+    } else {
+      setSelectedNodeIndices(new Set());
     }
   };
 
@@ -496,11 +536,13 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
         conversation_history: newHistory.map((m) => ({ role: m.role, content: m.content })),
       });
 
-      const updatedNodes = res.extracted_nodes || extractedNodes;
+      const updatedRaw = res.extracted_nodes || extractedNodes;
       const updatedEdges = res.extracted_edges || extractedEdges;
-      setExtractedNodes(updatedNodes);
+      const processedUpdated = processIncomingNodes(updatedRaw);
+
+      setExtractedNodes(processedUpdated);
       setExtractedEdges(updatedEdges);
-      setSelectedNodeIndices(new Set(updatedNodes.map((_: any, i: number) => i)));
+      setSelectedNodeIndices(new Set(processedUpdated.map((_: any, i: number) => i)));
       setOverviewSummary(res.overview_summary || '');
 
       const assistantReply: SteeringMessage = {
@@ -508,7 +550,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
         role: 'assistant',
         content: res.overview_summary || 'Adjusted working draft nodes per your instructions.',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        nodeCount: updatedNodes.length,
+        nodeCount: processedUpdated.length,
       };
 
       setSteeringConversation([...newHistory, assistantReply]);
@@ -543,11 +585,16 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
     try {
       const allowedTitles = new Set(nodesToCommit.map((n) => n.title));
       const edgesToCommit = extractedEdges.filter(
-        (e) => allowedTitles.has(e.source_title) && allowedTitles.has(e.target_title)
+        (e) => e.source_title && e.target_title && allowedTitles.has(e.source_title) && allowedTitles.has(e.target_title)
       );
 
-      await agentApplyExtracted(nodesToCommit, edgesToCommit, campaignId);
+      const res = await agentApplyExtracted(nodesToCommit, edgesToCommit, campaignId);
       setCommitStatus('success');
+      setCommitResult({
+        created: res.nodes_created || 0,
+        merged: res.nodes_merged || 0,
+        edges: res.edges_created || 0,
+      });
       onRefresh();
     } catch (err: any) {
       alert('Failed to commit to campaign: ' + err.message);
@@ -1945,7 +1992,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                 )}
               </div>
 
-              {/* Commit Success Banner */}
+              {/* Commit Success Banner with Detailed Metrics */}
               {commitStatus === 'success' && (
                 <div
                   style={{
@@ -1959,9 +2006,16 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
+                    flexWrap: 'wrap',
+                    gap: '10px',
                   }}
                 >
-                  <span>✨ Successfully committed entities and relationships to Campaign Graph!</span>
+                  <span>
+                    ✨ Successfully committed to Campaign Graph:
+                    {commitResult?.merged ? ` ${commitResult.merged} nodes safely merged (lore & canon preserved),` : ''}
+                    {` ${commitResult?.created ?? 0} new nodes created,`}
+                    {` ${commitResult?.edges ?? 0} relationships linked.`}
+                  </span>
                   <div style={{ display: 'flex', gap: '8px' }}>
                     <button
                       onClick={() => onNavigateTab('hierarchy')}
@@ -2118,8 +2172,154 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                 </div>
               )}
 
-              {/* Extracted Nodes List with live checkboxes */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '380px', overflowY: 'auto' }}>
+              {/* Deconfliction Filter Pills & Selection Bar */}
+              {extractedNodes.length > 0 && (() => {
+                const conflictCount = extractedNodes.filter((n) => n.match_status === 'conflict').length;
+                const potentialCount = extractedNodes.filter((n) => n.match_status === 'potential_match').length;
+                const exactCount = extractedNodes.filter((n) => n.match_status === 'exact_match').length;
+                const newCount = extractedNodes.filter((n) => !n.match_status || n.match_status === 'new').length;
+
+                return (
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      marginBottom: '10px',
+                      flexWrap: 'wrap',
+                      gap: '8px',
+                      padding: '6px 10px',
+                      background: 'var(--bg-surface)',
+                      borderRadius: '8px',
+                      border: '1px solid var(--border-subtle)',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: '0.73rem', color: 'var(--text-muted)', fontWeight: 600, marginRight: '2px' }}>
+                        Filter:
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setDeconflictFilter('all')}
+                        className="btn"
+                        style={{
+                          fontSize: '0.72rem',
+                          padding: '3px 9px',
+                          borderRadius: '12px',
+                          background: deconflictFilter === 'all' ? 'var(--color-gold)' : 'var(--bg-card)',
+                          color: deconflictFilter === 'all' ? '#111' : 'var(--text-secondary)',
+                          fontWeight: deconflictFilter === 'all' ? 700 : 500,
+                          border: '1px solid var(--border-medium)',
+                        }}
+                      >
+                        All ({extractedNodes.length})
+                      </button>
+
+                      {conflictCount > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setDeconflictFilter('conflict')}
+                          className="btn"
+                          style={{
+                            fontSize: '0.72rem',
+                            padding: '3px 9px',
+                            borderRadius: '12px',
+                            background: deconflictFilter === 'conflict' ? '#ef4444' : 'rgba(239, 68, 68, 0.15)',
+                            color: deconflictFilter === 'conflict' ? '#fff' : '#f87171',
+                            fontWeight: 700,
+                            border: '1px solid #ef4444',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                          }}
+                        >
+                          <AlertTriangle size={12} />
+                          Conflicts ({conflictCount})
+                        </button>
+                      )}
+
+                      {potentialCount > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setDeconflictFilter('potential_match')}
+                          className="btn"
+                          style={{
+                            fontSize: '0.72rem',
+                            padding: '3px 9px',
+                            borderRadius: '12px',
+                            background: deconflictFilter === 'potential_match' ? '#8b5cf6' : 'rgba(139, 92, 246, 0.15)',
+                            color: deconflictFilter === 'potential_match' ? '#fff' : '#c084fc',
+                            fontWeight: 700,
+                            border: '1px solid #8b5cf6',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                          }}
+                        >
+                          <HelpCircle size={12} />
+                          Potential ({potentialCount})
+                        </button>
+                      )}
+
+                      {exactCount > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setDeconflictFilter('exact_match')}
+                          className="btn"
+                          style={{
+                            fontSize: '0.72rem',
+                            padding: '3px 9px',
+                            borderRadius: '12px',
+                            background: deconflictFilter === 'exact_match' ? '#10b981' : 'rgba(16, 185, 129, 0.15)',
+                            color: deconflictFilter === 'exact_match' ? '#fff' : '#34d399',
+                            fontWeight: 700,
+                            border: '1px solid #10b981',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                          }}
+                        >
+                          <GitMerge size={12} />
+                          Auto-Merges ({exactCount})
+                        </button>
+                      )}
+
+                      {newCount > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setDeconflictFilter('new')}
+                          className="btn"
+                          style={{
+                            fontSize: '0.72rem',
+                            padding: '3px 9px',
+                            borderRadius: '12px',
+                            background: deconflictFilter === 'new' ? 'var(--border-medium)' : 'var(--bg-card)',
+                            color: deconflictFilter === 'new' ? 'var(--text-primary)' : 'var(--text-secondary)',
+                            fontWeight: 600,
+                            border: '1px solid var(--border-medium)',
+                          }}
+                        >
+                          New ({newCount})
+                        </button>
+                      )}
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <button
+                        type="button"
+                        onClick={() => handleSelectAll(selectedNodeIndices.size < extractedNodes.length)}
+                        className="btn btn-secondary"
+                        style={{ fontSize: '0.72rem', padding: '3px 8px' }}
+                      >
+                        {selectedNodeIndices.size === extractedNodes.length ? 'Deselect All' : `Select All (${extractedNodes.length})`}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Extracted Nodes List with Live Deconfliction & Selection Controls */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '440px', overflowY: 'auto' }}>
                 {extractedNodes.length === 0 ? (
                   <div
                     style={{
@@ -2139,50 +2339,303 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                       Upload an adventure chapter or stat sheet, choose your instructions, and click <strong>Decompose with Co-DM</strong>.
                     </p>
                   </div>
-                ) : (
-                  extractedNodes.map((n, idx) => {
+                ) : (() => {
+                  const filteredList = extractedNodes
+                    .map((n, idx) => ({ node: n, originalIdx: idx }))
+                    .filter(({ node }) => {
+                      if (deconflictFilter === 'conflict') return node.match_status === 'conflict';
+                      if (deconflictFilter === 'potential_match') return node.match_status === 'potential_match';
+                      if (deconflictFilter === 'exact_match') return node.match_status === 'exact_match';
+                      if (deconflictFilter === 'new') return !node.match_status || node.match_status === 'new';
+                      return true;
+                    });
+
+                  if (filteredList.length === 0) {
+                    return (
+                      <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+                        No nodes match the "{deconflictFilter}" filter.
+                      </div>
+                    );
+                  }
+
+                  return filteredList.map(({ node: n, originalIdx: idx }) => {
                     const isChecked = selectedNodeIndices.has(idx);
+                    const isConflict = n.match_status === 'conflict';
+                    const isPotential = n.match_status === 'potential_match';
+                    const isExact = n.match_status === 'exact_match';
+                    const willMerge = n.action === 'merge' || (!n.action && isExact);
+
                     return (
                       <div
                         key={idx}
-                        onClick={() => toggleSelectNode(idx)}
                         className="glass-panel"
                         style={{
-                          padding: '10px 14px',
+                          padding: '12px 14px',
                           borderRadius: '8px',
-                          border: `1px solid ${isChecked ? 'var(--color-gold)' : 'var(--border-subtle)'}`,
-                          background: isChecked ? 'var(--color-amber-glow)' : 'var(--bg-surface)',
+                          border: `1px solid ${
+                            isConflict
+                              ? 'rgba(239, 68, 68, 0.45)'
+                              : isChecked
+                              ? 'var(--color-gold)'
+                              : 'var(--border-subtle)'
+                          }`,
+                          background: isConflict
+                            ? 'rgba(239, 68, 68, 0.05)'
+                            : isChecked
+                            ? 'var(--color-amber-glow)'
+                            : 'var(--bg-surface)',
                           display: 'flex',
-                          alignItems: 'flex-start',
-                          gap: '10px',
-                          cursor: 'pointer',
+                          flexDirection: 'column',
+                          gap: '8px',
                           transition: 'all 0.15s ease',
                         }}
                       >
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          onChange={() => toggleSelectNode(idx)}
-                          style={{ marginTop: '3px', cursor: 'pointer' }}
-                        />
-                        <div style={{ flex: 1 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '2px' }}>
-                            <span className={`badge badge-${n.type || 'quest'}`}>{n.type}</span>
-                            <span style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-primary)' }}>{n.title}</span>
-                            {n.subtitle && (
-                              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                                • {n.subtitle}
-                              </span>
+                        {/* Header Row with Checkbox, Titles, and Deconfliction Badge */}
+                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => toggleSelectNode(idx)}
+                            style={{ marginTop: '4px', cursor: 'pointer' }}
+                          />
+                          <div style={{ flex: 1 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap', marginBottom: '4px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                                <span className={`badge badge-${n.type || 'quest'}`}>{n.type}</span>
+                                <span style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-primary)' }}>{n.title}</span>
+                                {n.subtitle && (
+                                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                    • {n.subtitle}
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* Status Badge */}
+                              <div>
+                                {isExact && (
+                                  <span
+                                    style={{
+                                      fontSize: '0.72rem',
+                                      fontWeight: 600,
+                                      padding: '2px 8px',
+                                      borderRadius: '10px',
+                                      background: willMerge ? 'rgba(16, 185, 129, 0.18)' : 'rgba(59, 130, 246, 0.18)',
+                                      color: willMerge ? '#34d399' : '#60a5fa',
+                                      border: `1px solid ${willMerge ? '#10b981' : '#3b82f6'}`,
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '4px',
+                                    }}
+                                  >
+                                    {willMerge ? <GitMerge size={11} /> : <Plus size={11} />}
+                                    {willMerge ? `Auto-Merge: "${n.matched_node_title || n.title}"` : 'Creating as Separate Node'}
+                                  </span>
+                                )}
+
+                                {isConflict && (
+                                  <span
+                                    style={{
+                                      fontSize: '0.72rem',
+                                      fontWeight: 700,
+                                      padding: '2px 8px',
+                                      borderRadius: '10px',
+                                      background: 'rgba(239, 68, 68, 0.2)',
+                                      color: '#f87171',
+                                      border: '1px solid #ef4444',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '4px',
+                                    }}
+                                  >
+                                    <AlertTriangle size={11} />
+                                    ⚠️ Lore Conflict: "{n.matched_node_title}"
+                                  </span>
+                                )}
+
+                                {isPotential && (
+                                  <span
+                                    style={{
+                                      fontSize: '0.72rem',
+                                      fontWeight: 600,
+                                      padding: '2px 8px',
+                                      borderRadius: '10px',
+                                      background: 'rgba(139, 92, 246, 0.2)',
+                                      color: '#c084fc',
+                                      border: '1px solid #8b5cf6',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '4px',
+                                    }}
+                                  >
+                                    <HelpCircle size={11} />
+                                    Potential Match ({Math.round((n.match_confidence || 0.8) * 100)}%)
+                                  </span>
+                                )}
+
+                                {!isExact && !isConflict && !isPotential && (
+                                  <span
+                                    style={{
+                                      fontSize: '0.72rem',
+                                      padding: '2px 8px',
+                                      borderRadius: '10px',
+                                      background: 'var(--bg-card)',
+                                      color: 'var(--text-muted)',
+                                      border: '1px solid var(--border-subtle)',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '4px',
+                                    }}
+                                  >
+                                    <Plus size={11} />
+                                    New Entity
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: '4px 0 6px' }}>
+                              {n.summary || n.content_markdown?.slice(0, 140)}
+                            </p>
+
+                            {/* Lossless merge guarantee note for exact matches */}
+                            {isExact && willMerge && (
+                              <div style={{ fontSize: '0.72rem', color: '#10b981', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '4px' }}>
+                                <CheckCircle size={12} />
+                                Lossless Auto-Merge: Existing canon notes &amp; stats preserved; imported lore safely appended under a dated section.
+                              </div>
+                            )}
+
+                            {/* Conflict Alert Box */}
+                            {isConflict && (
+                              <div
+                                style={{
+                                  padding: '8px 12px',
+                                  borderRadius: '6px',
+                                  background: 'rgba(239, 68, 68, 0.1)',
+                                  border: '1px solid rgba(239, 68, 68, 0.35)',
+                                  fontSize: '0.76rem',
+                                  color: 'var(--text-primary)',
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  gap: '4px',
+                                  marginBottom: '6px',
+                                }}
+                              >
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#f87171', fontWeight: 700 }}>
+                                  <AlertTriangle size={13} />
+                                  Flagged for DM Review: Conflicting Lore / Stats with Existing Campaign Node
+                                </div>
+                                <div style={{ color: 'var(--text-secondary)' }}>
+                                  {n.conflict_reason || 'Contradictory values detected between existing campaign record and imported document.'}
+                                </div>
+                                <div style={{ fontSize: '0.71rem', color: 'var(--text-muted)' }}>
+                                  Existing Campaign Target: <strong>{n.matched_node_title}</strong> (ID: {n.matched_node_id})
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Potential Match Candidate Box */}
+                            {isPotential && (
+                              <div
+                                style={{
+                                  padding: '8px 12px',
+                                  borderRadius: '6px',
+                                  background: 'rgba(139, 92, 246, 0.1)',
+                                  border: '1px solid rgba(139, 92, 246, 0.35)',
+                                  fontSize: '0.76rem',
+                                  color: 'var(--text-primary)',
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  gap: '4px',
+                                  marginBottom: '6px',
+                                }}
+                              >
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#c084fc', fontWeight: 700 }}>
+                                  <HelpCircle size={13} />
+                                  Confidence Rating: {Math.round((n.match_confidence || 0.8) * 100)}% Match with "{n.matched_node_title}"
+                                </div>
+                                <div style={{ color: 'var(--text-secondary)' }}>
+                                  The agent suspects this entity matches existing node <strong>"{n.matched_node_title}"</strong>. Choose whether to confirm merging into that record or create a distinct record:
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Interactive Action Controls (Confirm / New Record Buttons) */}
+                            {(isConflict || isPotential || isExact) && (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginTop: '4px' }}>
+                                <span style={{ fontSize: '0.71rem', color: 'var(--text-muted)', fontWeight: 600 }}>
+                                  Action:
+                                </span>
+
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleSetNodeAction(idx, 'merge');
+                                  }}
+                                  className="btn"
+                                  style={{
+                                    padding: '3px 10px',
+                                    fontSize: '0.73rem',
+                                    borderRadius: '6px',
+                                    background: willMerge
+                                      ? 'rgba(16, 185, 129, 0.25)'
+                                      : 'var(--bg-surface)',
+                                    border: willMerge
+                                      ? '1px solid #10b981'
+                                      : '1px solid var(--border-medium)',
+                                    color: willMerge ? '#34d399' : 'var(--text-secondary)',
+                                    fontWeight: willMerge ? 700 : 500,
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  <GitMerge size={12} />
+                                  {isConflict
+                                    ? 'Merge & Preserve Canon Lore'
+                                    : isPotential
+                                    ? `Confirm Merge with ${n.matched_node_title}`
+                                    : `Auto-Merge into ${n.matched_node_title || 'Existing'}`}
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleSetNodeAction(idx, 'create');
+                                  }}
+                                  className="btn"
+                                  style={{
+                                    padding: '3px 10px',
+                                    fontSize: '0.73rem',
+                                    borderRadius: '6px',
+                                    background: n.action === 'create'
+                                      ? 'rgba(59, 130, 246, 0.25)'
+                                      : 'var(--bg-surface)',
+                                    border: n.action === 'create'
+                                      ? '1px solid #3b82f6'
+                                      : '1px solid var(--border-medium)',
+                                    color: n.action === 'create' ? '#60a5fa' : 'var(--text-secondary)',
+                                    fontWeight: n.action === 'create' ? 700 : 500,
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  <Plus size={12} />
+                                  Create as New Record
+                                </button>
+                              </div>
                             )}
                           </div>
-                          <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: 0 }}>
-                            {n.summary || n.content_markdown?.slice(0, 120)}
-                          </p>
                         </div>
                       </div>
                     );
-                  })
-                )}
+                  });
+                })()}
               </div>
 
               {/* Extracted Relationships Preview */}
