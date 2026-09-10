@@ -224,13 +224,14 @@ class DecomposeAdventureRequest(BaseModel):
     filename: Optional[str] = None
     text_content: Optional[str] = None
     start_page: Optional[int] = 1
-    end_page: Optional[int] = 30
+    end_page: Optional[int] = None  # None = use full document
     instruction: Optional[str] = ""
     decomposition_mode: Optional[str] = "campaign_structure" # "campaign_structure", "monsters", "pc_sheets", "npcs_factions", "encounters", "custom"
     campaign_id: Optional[str] = None
     current_nodes: Optional[List[Dict[str, Any]]] = None
     current_edges: Optional[List[Dict[str, Any]]] = None
     conversation_history: Optional[List[AgentChatMessage]] = None
+    exhaustive: Optional[bool] = True  # When True (default), uses multi-pass chunked extraction
 
 class SessionAdaptRequest(BaseModel):
     campaign_id: Optional[str] = None

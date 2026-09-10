@@ -2,9 +2,12 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   Check,
   Compass,
+  Edit2,
+  ExternalLink,
   Eye,
   EyeOff,
   Image as ImageIcon,
+  Layers,
   MapPin,
   Maximize2,
   Move,
@@ -37,6 +40,7 @@ export interface MapPinData {
   y: number; // percentage (0 - 100)
   label: string;
   revealed: boolean;
+  targetMapId?: string; // Optional linked map ID to launch
 }
 
 export const MapStudio: React.FC<MapStudioProps> = ({
@@ -51,10 +55,15 @@ export const MapStudio: React.FC<MapStudioProps> = ({
   const [selectedMapId, setSelectedMapId] = useState<string>('');
   const [selectedPin, setSelectedPin] = useState<MapPinData | null>(null);
 
+  // Map title editing state
+  const [editingMapId, setEditingMapId] = useState<string | null>(null);
+  const [editMapTitle, setEditMapTitle] = useState<string>('');
+
   // Pin placement mode
   const [isPlacingPin, setIsPlacingPin] = useState(false);
   const [pendingPinCoords, setPendingPinCoords] = useState<{ xPct: number; yPct: number } | null>(null);
   const [selectedLocationForPin, setSelectedLocationForPin] = useState<string>('');
+  const [selectedTargetMapForPin, setSelectedTargetMapForPin] = useState<string>('');
   const [customPinLabel, setCustomPinLabel] = useState<string>('');
   const [pinIsRevealedInitially, setPinIsRevealedInitially] = useState<boolean>(true);
 
@@ -135,17 +144,17 @@ export const MapStudio: React.FC<MapStudioProps> = ({
   const handleMouseDown = (e: React.MouseEvent) => {
     // Only handle left mouse button
     if (e.button !== 0) return;
+    didDragRef.current = false;
     if (isPlacingPin) return;
 
     setIsDraggingMap(true);
-    didDragRef.current = false;
     dragStartRef.current = { x: e.clientX, y: e.clientY };
     panStartRef.current = { ...pan };
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
     if (draggingPinId && activeMap) {
-      // Pin dragging logic
+      // Pin dragging logic with exact container coords
       const rect = mapContainerRef.current?.getBoundingClientRect();
       if (!rect) return;
       const clientX = e.clientX - rect.left;
@@ -155,9 +164,13 @@ export const MapStudio: React.FC<MapStudioProps> = ({
       const xPct = Math.min(Math.max(Number(((imgX / rect.width) * 100).toFixed(2)), 0), 100);
       const yPct = Math.min(Math.max(Number(((imgY / rect.height) * 100).toFixed(2)), 0), 100);
 
-      const updated = pins.map((p) => (p.id === draggingPinId ? { ...p, x: xPct, y: yPct } : p));
+      // Mutate and trigger rerender
+      const currentPins = activeMap.data_json?.pins || [];
+      const updated = currentPins.map((p: any) => (p.id === draggingPinId ? { ...p, x: xPct, y: yPct } : p));
       if (!activeMap.data_json) activeMap.data_json = {};
       activeMap.data_json.pins = updated;
+      // Also update selectedPin if dragged
+      setSelectedPin((prev) => (prev && prev.id === draggingPinId ? { ...prev, x: xPct, y: yPct } : prev));
       return;
     }
 
@@ -204,7 +217,7 @@ export const MapStudio: React.FC<MapStudioProps> = ({
     const mouseY = e.clientY - rect.top;
 
     const zoomFactor = e.deltaY < 0 ? 1.15 : 0.87;
-    const newScale = Math.min(Math.max(scale * zoomFactor, 0.4), 7.0);
+    const newScale = Math.min(Math.max(scale * zoomFactor, 0.4), 25.0);
 
     // Anchored pan math: keep the map point under the mouse stationary
     const worldX = (mouseX - pan.x) / scale;
@@ -225,7 +238,7 @@ export const MapStudio: React.FC<MapStudioProps> = ({
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
 
-    const newScale = Math.min(scale * 1.5, 7.0);
+    const newScale = Math.min(scale * 1.5, 25.0);
     const worldX = (mouseX - pan.x) / scale;
     const worldY = (mouseY - pan.y) / scale;
     const newPanX = mouseX - worldX * newScale;
@@ -274,8 +287,11 @@ export const MapStudio: React.FC<MapStudioProps> = ({
 
   // --- Pin Creation with Exact Coordinates ---
   const handleMapClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (didDragRef.current) return;
     if (!isPlacingPin || !activeMap) return;
+    if (didDragRef.current) {
+      didDragRef.current = false;
+      return;
+    }
 
     const rect = mapContainerRef.current?.getBoundingClientRect();
     if (!rect) return;
@@ -332,6 +348,7 @@ export const MapStudio: React.FC<MapStudioProps> = ({
       y: pendingPinCoords.yPct,
       label: label,
       revealed: pinIsRevealedInitially,
+      targetMapId: selectedTargetMapForPin || undefined,
     };
 
     const updatedPins = [...pins, newPin];
@@ -346,6 +363,7 @@ export const MapStudio: React.FC<MapStudioProps> = ({
       setIsPlacingPin(false);
       setPendingPinCoords(null);
       setSelectedLocationForPin('');
+      setSelectedTargetMapForPin('');
       setCustomPinLabel('');
       onRefresh();
     } catch (err: any) {
@@ -382,6 +400,27 @@ export const MapStudio: React.FC<MapStudioProps> = ({
     }
   };
 
+  const handleUpdatePinTargetMap = async (pinId: string, targetMapId: string) => {
+    if (!activeMap) return;
+    const updatedPins = pins.map((p) => (p.id === pinId ? { ...p, targetMapId: targetMapId || undefined } : p));
+    try {
+      await updateNode(activeMap.id, {
+        data_json: {
+          ...(activeMap.data_json || {}),
+          pins: updatedPins,
+        },
+      });
+
+      if (selectedPin && selectedPin.id === pinId) {
+        setSelectedPin({ ...selectedPin, targetMapId: targetMapId || undefined });
+      }
+
+      onRefresh();
+    } catch (err: any) {
+      console.error('Error updating pin target map:', err);
+    }
+  };
+
   const handleDeletePin = async (pinId: string) => {
     if (!activeMap) return;
     const updatedPins = pins.filter((p) => p.id !== pinId);
@@ -408,6 +447,28 @@ export const MapStudio: React.FC<MapStudioProps> = ({
       } catch (err: any) {
         alert('Failed to delete map: ' + err.message);
       }
+    }
+  };
+
+  const handleStartRenameMap = (mapId: string, currentTitle: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingMapId(mapId);
+    setEditMapTitle(currentTitle);
+  };
+
+  const handleSaveMapTitle = async (mapId: string, e?: React.FormEvent | React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const newTitle = editMapTitle.trim();
+    if (!newTitle) {
+      setEditingMapId(null);
+      return;
+    }
+    try {
+      await updateNode(mapId, { title: newTitle });
+      setEditingMapId(null);
+      onRefresh();
+    } catch (err: any) {
+      alert('Failed to rename map: ' + err.message);
     }
   };
 
@@ -452,6 +513,7 @@ export const MapStudio: React.FC<MapStudioProps> = ({
           {activeMap && (
             <button
               onClick={() => {
+                didDragRef.current = false;
                 setIsPlacingPin(!isPlacingPin);
                 setPendingPinCoords(null);
               }}
@@ -534,9 +596,70 @@ export const MapStudio: React.FC<MapStudioProps> = ({
                 ) : (
                   <Compass size={16} style={{ color: 'var(--color-gold)' }} />
                 )}
-                <span style={{ fontSize: '0.82rem', fontWeight: isSelected ? 700 : 500, color: isSelected ? 'var(--text-gold)' : 'var(--text-primary)' }}>
-                  {m.title}
-                </span>
+
+                {editingMapId === m.id ? (
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
+                  >
+                    <input
+                      type="text"
+                      value={editMapTitle}
+                      autoFocus
+                      onChange={(e) => setEditMapTitle(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleSaveMapTitle(m.id);
+                        if (e.key === 'Escape') setEditingMapId(null);
+                      }}
+                      style={{
+                        padding: '2px 6px',
+                        fontSize: '0.8rem',
+                        background: 'var(--bg-surface)',
+                        border: '1px solid var(--color-gold)',
+                        borderRadius: '4px',
+                        color: '#fff',
+                        width: '130px',
+                      }}
+                    />
+                    <button
+                      onClick={(e) => handleSaveMapTitle(m.id, e)}
+                      style={{ background: 'none', border: 'none', color: '#10b981', cursor: 'pointer', padding: '2px' }}
+                      title="Save name"
+                    >
+                      <Check size={14} />
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditingMapId(null);
+                      }}
+                      style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '2px' }}
+                      title="Cancel"
+                    >
+                      <X size={13} />
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <span style={{ fontSize: '0.82rem', fontWeight: isSelected ? 700 : 500, color: isSelected ? 'var(--text-gold)' : 'var(--text-primary)' }}>
+                      {m.title}
+                    </span>
+                    <button
+                      onClick={(e) => handleStartRenameMap(m.id, m.title, e)}
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: 'var(--text-muted)',
+                        cursor: 'pointer',
+                        padding: '2px',
+                        opacity: 0.7,
+                      }}
+                      title="Rename map"
+                    >
+                      <Edit2 size={12} />
+                    </button>
+                  </div>
+                )}
 
                 {/* Player Visibility Tag */}
                 <button
@@ -672,6 +795,14 @@ export const MapStudio: React.FC<MapStudioProps> = ({
             {/* Pins */}
             {pins.map((pin) => {
               const isSelected = selectedPin?.id === pin.id;
+              // Dynamic pin scale so pins don't blow up in size when zooming in deep on large maps
+              const pinScale = Math.max(0.4, Math.min(1.0, 1.2 / Math.sqrt(scale)));
+              const pinHeadColor = pin.revealed
+                ? 'radial-gradient(circle at 35% 35%, #6ee7b7 0%, #10b981 50%, #047857 100%)'
+                : 'radial-gradient(circle at 35% 35%, #fca5a5 0%, #ef4444 50%, #b91c1c 100%)';
+              const pinBorder = isSelected ? '1.5px solid #f59e0b' : '0.75px solid #000';
+              const glowColor = pin.revealed ? 'rgba(16, 185, 129, 0.6)' : 'rgba(239, 68, 68, 0.6)';
+
               return (
                 <div
                   key={pin.id}
@@ -683,66 +814,94 @@ export const MapStudio: React.FC<MapStudioProps> = ({
                   onClick={(e) => {
                     e.stopPropagation();
                     setSelectedPin(pin);
-                    const loc = locations.find((l) => l.id === pin.nodeId);
-                    if (loc) onSelectNode(loc);
                   }}
                   style={{
                     position: 'absolute',
                     left: `${pin.x}%`,
                     top: `${pin.y}%`,
-                    transform: 'translate(-50%, -100%)',
-                    cursor: 'pointer',
-                    zIndex: 20,
+                    transform: `translate(-50%, -100%) scale(${pinScale})`,
+                    transformOrigin: 'bottom center',
+                    cursor: draggingPinId === pin.id ? 'grabbing' : 'grab',
+                    zIndex: isSelected ? 28 : 20,
                     display: 'flex',
                     flexDirection: 'column',
                     alignItems: 'center',
                     transition: draggingPinId === pin.id ? 'none' : 'transform 0.15s ease',
+                    padding: '8px 12px 0 12px', // Generous hit box for easy grabbing
                   }}
                   title={`${pin.label} (${pin.revealed ? 'Revealed' : 'DM Secret'})`}
                 >
+                  {/* Label on TOP of the pin so the map location underneath the tip is unobstructed */}
                   <div
                     style={{
-                      width: '32px',
-                      height: '32px',
-                      borderRadius: '50% 50% 50% 0',
-                      transform: 'rotate(-45deg)',
-                      background: pin.revealed
-                        ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)'
-                        : 'linear-gradient(135deg, #ef4444 0%, #b91c1c 100%)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      boxShadow: isSelected
-                        ? '0 0 16px rgba(245, 158, 11, 0.9), 0 4px 12px rgba(0,0,0,0.6)'
-                        : '0 3px 10px rgba(0,0,0,0.7)',
-                      border: isSelected ? '2.5px solid #f59e0b' : '2px solid #fff',
-                    }}
-                  >
-                    <MapPin size={16} color="#fff" style={{ transform: 'rotate(45deg)' }} />
-                  </div>
-                  <div
-                    style={{
-                      background: 'rgba(15, 23, 42, 0.9)',
-                      backdropFilter: 'blur(4px)',
-                      border: `1px solid ${isSelected ? 'var(--color-gold)' : 'var(--border-medium)'}`,
-                      borderRadius: '4px',
-                      padding: '2px 6px',
+                      background: 'rgba(10, 15, 29, 0.92)',
+                      backdropFilter: 'blur(6px)',
+                      border: `1px solid ${isSelected ? 'var(--color-gold)' : 'rgba(255,255,255,0.18)'}`,
+                      borderRadius: '5px',
+                      padding: '2px 7px',
                       fontSize: '0.72rem',
                       fontWeight: 700,
-                      color: isSelected ? 'var(--text-gold)' : '#fff',
+                      color: isSelected ? 'var(--text-gold)' : '#f8fafc',
                       whiteSpace: 'nowrap',
-                      marginTop: '4px',
-                      boxShadow: '0 2px 6px rgba(0,0,0,0.6)',
+                      marginBottom: '3px',
+                      boxShadow: '0 3px 10px rgba(0,0,0,0.7)',
+                      letterSpacing: '0.02em',
+                      pointerEvents: 'none',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
                     }}
                   >
-                    {pin.label}
-                    {!pin.revealed && <span style={{ color: '#ef4444', marginLeft: '4px' }}>🔒</span>}
+                    {pin.targetMapId && <span title="Connected to another map">🗺️</span>}
+                    <span>{pin.label}</span>
+                    {!pin.revealed && <span style={{ color: '#ef4444' }}>🔒</span>}
                   </div>
+
+                  {/* Stick-Pin Head (Spherical Bead with 3D Specular Highlight) */}
+                  <div
+                    style={{
+                      width: '13px',
+                      height: '13px',
+                      borderRadius: '50%',
+                      background: pinHeadColor,
+                      border: pinBorder,
+                      boxShadow: isSelected
+                        ? `0 0 16px rgba(245, 158, 11, 0.9), 0 3px 8px rgba(0,0,0,0.8)`
+                        : `0 0 10px ${glowColor}, 0 2px 6px rgba(0,0,0,0.7)`,
+                      position: 'relative',
+                      zIndex: 2,
+                    }}
+                  />
+
+                  {/* Stick-Pin Needle Shaft tapering down directly to the exact map point */}
+                  <div
+                    style={{
+                      width: '2.5px',
+                      height: '18px',
+                      background: 'linear-gradient(to right, #94a3b8, #f8fafc, #64748b)',
+                      boxShadow: '1px 1px 3px rgba(0,0,0,0.75)',
+                      borderRadius: '1px 1px 0 0',
+                      position: 'relative',
+                      zIndex: 1,
+                    }}
+                  />
+
+                  {/* Sharp needle tip at the contact point */}
+                  <div
+                    style={{
+                      width: 0,
+                      height: 0,
+                      borderLeft: '1.5px solid transparent',
+                      borderRight: '1.5px solid transparent',
+                      borderTop: '5px solid #cbd5e1',
+                      zIndex: 1,
+                    }}
+                  />
                 </div>
               );
             })}
 
-            {/* Temporary Placement Marker */}
+            {/* Temporary Placement Marker (Stick-pin style) */}
             {pendingPinCoords && (
               <div
                 style={{
@@ -750,29 +909,59 @@ export const MapStudio: React.FC<MapStudioProps> = ({
                   left: `${pendingPinCoords.xPct}%`,
                   top: `${pendingPinCoords.yPct}%`,
                   transform: 'translate(-50%, -100%)',
-                  zIndex: 25,
+                  transformOrigin: 'bottom center',
+                  zIndex: 29,
                   display: 'flex',
                   flexDirection: 'column',
                   alignItems: 'center',
+                  animation: 'bounce 1s infinite alternate',
                 }}
               >
                 <div
                   style={{
-                    width: '36px',
-                    height: '36px',
-                    borderRadius: '50% 50% 50% 0',
-                    transform: 'rotate(-45deg)',
-                    background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    boxShadow: '0 0 20px #f59e0b',
-                    border: '2px solid #fff',
-                    animation: 'pulse 1.5s infinite',
+                    background: 'rgba(10, 15, 29, 0.95)',
+                    border: '1px solid var(--color-gold)',
+                    borderRadius: '4px',
+                    padding: '2px 6px',
+                    fontSize: '0.68rem',
+                    fontWeight: 700,
+                    color: 'var(--text-gold)',
+                    marginBottom: '3px',
+                    whiteSpace: 'nowrap',
                   }}
                 >
-                  <MapPin size={18} color="#fff" style={{ transform: 'rotate(45deg)' }} />
+                  Drop Here
                 </div>
+                <div
+                  style={{
+                    width: '14px',
+                    height: '14px',
+                    borderRadius: '50%',
+                    background: 'radial-gradient(circle at 35% 35%, #fde047 0%, #f59e0b 50%, #b45309 100%)',
+                    border: '0.75px solid #000',
+                    boxShadow: '0 0 16px #f59e0b',
+                    position: 'relative',
+                    zIndex: 2,
+                  }}
+                />
+                <div
+                  style={{
+                    width: '2.5px',
+                    height: '18px',
+                    background: 'linear-gradient(to right, #94a3b8, #fff, #64748b)',
+                    zIndex: 1,
+                  }}
+                />
+                <div
+                  style={{
+                    width: 0,
+                    height: 0,
+                    borderLeft: '1.5px solid transparent',
+                    borderRight: '1.5px solid transparent',
+                    borderTop: '5px solid #cbd5e1',
+                    zIndex: 1,
+                  }}
+                />
               </div>
             )}
           </div>
@@ -815,7 +1004,7 @@ export const MapStudio: React.FC<MapStudioProps> = ({
           {/* Zoom In Button */}
           <button
             onClick={() => {
-              const newScale = Math.min(scale * 1.25, 7.0);
+              const newScale = Math.min(scale * 1.25, 25.0);
               setScale(newScale);
             }}
             className="btn btn-secondary glass-panel"
@@ -964,6 +1153,30 @@ export const MapStudio: React.FC<MapStudioProps> = ({
                 />
               </div>
 
+              {/* Option C: Link to Sub-Map / Tactical Battle Map */}
+              <div style={{ marginBottom: '14px' }}>
+                <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--color-gold)', marginBottom: '4px' }}>
+                  🗺️ Launch Map on Click (Optional):
+                </label>
+                <select
+                  value={selectedTargetMapForPin}
+                  onChange={(e) => setSelectedTargetMapForPin(e.target.value)}
+                  style={{ width: '100%', padding: '8px', background: 'var(--bg-surface)', border: '1px solid var(--border-medium)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '0.82rem' }}
+                >
+                  <option value="">-- No Linked Map --</option>
+                  {maps
+                    .filter((m) => m.id !== activeMap?.id)
+                    .map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.title}
+                      </option>
+                    ))}
+                </select>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'block', marginTop: '3px' }}>
+                  Clicking this pin in the viewer will allow fast travel / drilling down directly into this map!
+                </span>
+              </div>
+
               {/* Initial Player Visibility */}
               <div style={{ marginBottom: '18px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <input
@@ -1028,6 +1241,66 @@ export const MapStudio: React.FC<MapStudioProps> = ({
               Coords: {selectedPin.x}%, {selectedPin.y}% • Drag pin to reposition
             </div>
 
+            {/* Launch Linked Map (Fast travel) */}
+            {selectedPin.targetMapId && (
+              <div style={{ marginBottom: '10px' }}>
+                <button
+                  onClick={() => {
+                    const targetId = selectedPin.targetMapId;
+                    setSelectedPin(null);
+                    if (targetId) handleSelectMap(targetId);
+                  }}
+                  className="btn btn-primary"
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    fontSize: '0.82rem',
+                    fontWeight: 600,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px',
+                    background: 'linear-gradient(135deg, #f59e0b 0%, #b45309 100%)',
+                    boxShadow: '0 2px 10px rgba(245, 158, 11, 0.4)',
+                  }}
+                >
+                  <Compass size={16} />
+                  <span>
+                    Open {maps.find((m) => m.id === selectedPin.targetMapId)?.title || 'Connected Map'}
+                  </span>
+                </button>
+              </div>
+            )}
+
+            {/* Connect / Change Target Map */}
+            <div style={{ marginBottom: '10px' }}>
+              <label style={{ display: 'block', fontSize: '0.72rem', color: 'var(--text-secondary)', marginBottom: '3px' }}>
+                🗺️ Connected Map:
+              </label>
+              <select
+                value={selectedPin.targetMapId || ''}
+                onChange={(e) => handleUpdatePinTargetMap(selectedPin.id, e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '5px 8px',
+                  background: 'var(--bg-surface)',
+                  border: '1px solid var(--border-medium)',
+                  borderRadius: '5px',
+                  color: 'var(--text-primary)',
+                  fontSize: '0.75rem',
+                }}
+              >
+                <option value="">-- None (No Map Linked) --</option>
+                {maps
+                  .filter((m) => m.id !== activeMap?.id)
+                  .map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.title}
+                    </option>
+                  ))}
+              </select>
+            </div>
+
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '10px' }}>
               <button
                 onClick={() => handleTogglePinReveal(selectedPin)}
@@ -1050,6 +1323,17 @@ export const MapStudio: React.FC<MapStudioProps> = ({
                 title="Remove Pin"
               >
                 <Trash2 size={15} />
+              </button>
+              <button
+                onClick={() => {
+                  const loc = locations.find((l) => l.id === selectedPin.nodeId);
+                  if (loc) onSelectNode(loc);
+                }}
+                className="btn btn-secondary"
+                style={{ padding: '6px 8px', fontSize: '0.75rem', color: 'var(--text-secondary)' }}
+                title="Open Location Entity Drawer"
+              >
+                <ExternalLink size={14} />
               </button>
               <button
                 onClick={() => {

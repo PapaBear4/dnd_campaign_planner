@@ -47,6 +47,7 @@ import {
 } from '../api';
 import { DocumentLibraryModal } from './DocumentLibraryModal';
 import { DuplicateUploadModal } from './DuplicateUploadModal';
+import { MarkdownView } from './MarkdownView';
 import { NodeItem, NodeType } from '../types';
 
 interface IngestionHubProps {
@@ -137,14 +138,16 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
   const [originalName, setOriginalName] = useState<string>('');
   const [totalPages, setTotalPages] = useState<number>(0);
   const [startPage, setStartPage] = useState<number>(1);
-  const [endPage, setEndPage] = useState<number>(20);
+  const [endPage, setEndPage] = useState<number>(1);
   const [pastedText, setPastedText] = useState<string>('');
   const [isUploading, setIsUploading] = useState<boolean>(false);
 
   const [instruction, setInstruction] = useState<string>(
-    'Decompose this chapter into the overarching Campaign Arc, primary Quests, key Sessions, and initial Encounters. Extract all named NPCs and factions.'
+    'Decompose this entire document into all overarching Campaign Arcs, primary Quests, key Sessions, Encounters, named NPCs, monsters, locations, items, and factions.'
   );
   const [decompMode, setDecompMode] = useState<'campaign_structure' | 'monsters' | 'characters' | 'world_lore' | 'general'>('campaign_structure');
+  const [exhaustiveMode, setExhaustiveMode] = useState<boolean>(true);
+  const [chunksProcessed, setChunksProcessed] = useState<number>(0);
 
   const [isDecomposing, setIsDecomposing] = useState<boolean>(false);
   const [overviewSummary, setOverviewSummary] = useState<string>('');
@@ -198,57 +201,82 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
   // Preset chips for Decomposer
   const bookPresets = [
     {
-      label: 'Campaign Arc & Quests',
-      prompt: 'Decompose this chapter into the overarching Campaign Arc, primary Quests, key Sessions, and initial Encounters. Extract all named NPCs and factions.',
+      label: 'Everything',
+      prompt: 'Decompose this entire document into all overarching Campaign Arcs, primary Quests, key Sessions, Encounters, named NPCs, monsters, locations, items, and factions.',
       mode: 'campaign_structure' as const,
     },
     {
-      label: 'Dungeon / Act: Encounters & Rooms',
-      prompt: 'Decompose this dungeon level into location nodes for each keyed room, encounters with monster rosters, and treasure/clue items.',
+      label: 'Arc & Quests',
+      prompt: 'Extract narrative campaign structure: main Arcs, primary Quests, key Sessions, and story milestones.',
       mode: 'campaign_structure' as const,
     },
     {
-      label: 'Faction Intrigue & Secrets',
+      label: 'Dungeon & Rooms',
+      prompt: 'Extract keyed rooms as location nodes, with monster encounter rosters, hazards, and treasure items.',
+      mode: 'campaign_structure' as const,
+    },
+    {
+      label: 'Factions & Secrets',
       prompt: 'Extract all factions, their leaders, active rivalries, hidden motivations, and rumor table entries as connected nodes.',
       mode: 'general' as const,
+    },
+    {
+      label: 'Section or Pages',
+      prompt: 'Focus specifically on the section or chapter titled "[Insert Chapter or Section Title]" (or approx. physical PDF pp. [X-Y] / book page [Z]). Extract all keyed encounters, room descriptions, NPCs, monsters, and treasure within this section.',
+      mode: 'campaign_structure' as const,
     },
   ];
 
   const monsterPresets = [
     {
-      label: 'Extract 5e Monster Stat Blocks',
-      prompt: 'Extract all monsters and bosses mentioned with full 5e stats: AC, HP, Speed, CR, STR/DEX/CON/INT/WIS/CHA, traits, and action lists.',
+      label: 'All Monsters',
+      prompt: 'Extract all monsters and creatures mentioned with full 5e stats: AC, HP, Speed, CR, STR/DEX/CON/INT/WIS/CHA, traits, and actions.',
+      mode: 'monsters' as const,
+    },
+    {
+      label: 'Bosses & Villains',
+      prompt: 'Extract only legendary creatures, unique named villains, and bosses with full stat blocks, lair actions, and legendary resistances.',
+      mode: 'monsters' as const,
+    },
+    {
+      label: 'Section or Pages',
+      prompt: 'Extract only monsters appearing in section "[Section Title / Appendix]" (or approx. pp. [X-Y]) with complete 5e stat blocks.',
       mode: 'monsters' as const,
     },
   ];
 
   const characterPresets = [
     {
-      label: 'Extract PC Sheets & Backstories',
+      label: 'All Characters',
       prompt: 'Extract player characters including Name, Class, Level, Race, Core Stats, Backstory, Personality Traits, Ideals, Bonds, and Flaws for campaign integration.',
+      mode: 'characters' as const,
+    },
+    {
+      label: 'Section or Pages',
+      prompt: 'Extract player character sheets and backstories appearing in section "[Section Name / Character Appendix]" (or approx. pp. [X-Y]).',
       mode: 'characters' as const,
     },
   ];
 
   const lorePresets = [
     {
-      label: 'Pantheons, Deities & Holy Orders',
+      label: 'All Lore',
+      prompt: 'Extract all deities, pantheons, historical eras, legendary artifacts, holy orders, myths, prophecies, and rumors into linked lore and faction nodes.',
+      mode: 'world_lore' as const,
+    },
+    {
+      label: 'Deities & Religions',
       prompt: 'Extract all deities, divine domains, holy orders, cults, and religious sites. Create faction nodes for each order and location nodes for temples and shrines.',
       mode: 'world_lore' as const,
     },
     {
-      label: 'History, Wars & Cataclysms',
-      prompt: 'Extract major historical eras, wars, cataclysms, and legendary figures as lore nodes. Create timeline edges linking cause and effect across eras.',
+      label: 'History & Wars',
+      prompt: 'Extract major historical eras, wars, cataclysms, and legendary figures as lore nodes with timeline edges.',
       mode: 'world_lore' as const,
     },
     {
-      label: 'Myths, Prophecies & Rumors',
-      prompt: 'Extract all prophecies, folk myths, tavern rumors, lost texts, and cryptic portents as clue nodes linked to relevant factions and locations.',
-      mode: 'world_lore' as const,
-    },
-    {
-      label: 'Artifacts & Ancient Traditions',
-      prompt: 'Extract legendary artifacts, lost magical traditions, and ancient orders that created them. Link artifacts to their creators and current custodians.',
+      label: 'Section or Pages',
+      prompt: 'Extract world lore, history, and geographical details specifically from section "[Chapter / Gazetteer Title]" (or approx. pp. [X-Y]).',
       mode: 'world_lore' as const,
     },
   ];
@@ -302,12 +330,12 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
       setOriginalName(res.original_name);
       if (res.page_count) {
         setTotalPages(res.page_count);
-        setEndPage(Math.min(res.page_count, 20));
+        setEndPage(res.page_count); // Default to full document — DM can narrow range if needed
       } else if (res.original_name.toLowerCase().endsWith('.pdf')) {
         try {
           const pdfInfo = await parsePdfDocument(res.filename, 50);
           setTotalPages(pdfInfo.total_pages || 1);
-          setEndPage(Math.min(pdfInfo.total_pages || 20, 20));
+          setEndPage(pdfInfo.total_pages || 1); // Full document by default
         } catch {
           // fallback default
         }
@@ -333,7 +361,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
     setOriginalName(doc.original_name);
     if (doc.page_count) {
       setTotalPages(doc.page_count);
-      setEndPage(Math.min(doc.page_count, 20));
+      setEndPage(doc.page_count); // Default to full document
     }
     if (doc.category === 'transcript') {
       setActiveCategory('session');
@@ -401,6 +429,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
 
     setIsDecomposing(true);
     setCommitStatus('');
+    setChunksProcessed(0);
     try {
       const res = await agentDecomposeAdventure({
         filename: uploadedFilename || undefined,
@@ -410,6 +439,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
         start_page: startPage,
         end_page: endPage,
         campaign_id: campaignId,
+        exhaustive: exhaustiveMode,
       });
 
       const nodes = res.extracted_nodes || [];
@@ -418,6 +448,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
       setExtractedNodes(nodes);
       setExtractedEdges(edges);
       setSelectedNodeIndices(new Set(nodes.map((_: any, i: number) => i)));
+      if (res.chunks_processed) setChunksProcessed(res.chunks_processed);
 
       setSteeringConversation([
         {
@@ -1222,9 +1253,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                           </span>
                           <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>{msg.timestamp}</span>
                         </div>
-                        <div style={{ color: 'var(--text-primary)', whiteSpace: 'pre-wrap' }}>
-                          {msg.content}
-                        </div>
+                        <MarkdownView content={msg.content} />
                       </div>
                     ))}
                     <div ref={sessionChatBottomRef} />
@@ -1656,9 +1685,18 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                 }}
               >
                 <div>
-                  <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Chapter / Page Range:</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Chapter / Page Range:</span>
+                    {totalPages > 0 && startPage === 1 && endPage === totalPages && (
+                      <span style={{ fontSize: '0.7rem', background: 'rgba(var(--color-gold-rgb, 212,175,55), 0.15)', color: 'var(--color-gold)', padding: '1px 6px', borderRadius: '8px', fontWeight: 600 }}>
+                        Full Document
+                      </span>
+                    )}
+                  </div>
                   <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                    Target specific chapter pages (e.g. Chapter 1: Pages 1-25)
+                    {totalPages > 0 && startPage === 1 && endPage === totalPages
+                      ? `All ${totalPages} pages selected — narrow range to focus on a specific chapter`
+                      : 'Target specific chapter pages (e.g. Chapter 1: Pages 1-25)'}
                   </p>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -1743,9 +1781,48 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                 background: 'var(--bg-card)',
               }}
             >
+              {/* Exhaustive Scan Toggle - Positioned at top as default behavior */}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '11px 14px',
+                borderRadius: '8px',
+                background: exhaustiveMode ? 'rgba(var(--color-gold-rgb, 212, 175, 55), 0.08)' : 'var(--bg-surface)',
+                border: `1px solid ${exhaustiveMode ? 'var(--color-gold)' : 'var(--border-medium)'}`,
+                marginBottom: '14px',
+                cursor: 'pointer',
+              }} onClick={() => setExhaustiveMode(v => !v)}>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <input
+                      type="checkbox"
+                      id="exhaustive-scan"
+                      checked={exhaustiveMode}
+                      onChange={(e) => { e.stopPropagation(); setExhaustiveMode(e.target.checked); }}
+                      style={{ accentColor: 'var(--color-gold)', width: '16px', height: '16px', cursor: 'pointer' }}
+                    />
+                    <label htmlFor="exhaustive-scan" style={{ fontSize: '0.86rem', fontWeight: 600, color: 'var(--text-primary)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      🔍 Exhaustive Decomposition (Multi-Pass)
+                      <span style={{ fontSize: '0.72rem', color: exhaustiveMode ? 'var(--color-gold)' : 'var(--text-muted)', fontWeight: 600 }}>
+                        {exhaustiveMode ? '(Default: ON)' : '(Single-Pass Mode)'}
+                      </span>
+                    </label>
+                  </div>
+                  <p style={{ fontSize: '0.74rem', color: 'var(--text-muted)', margin: '4px 0 0 24px', lineHeight: 1.4 }}>
+                    {exhaustiveMode
+                      ? `Enabled by default. Chunks large documents and scans each segment to extract ALL entities without skipping or truncating.${totalPages > 5 ? ` Estimated: ~${Math.ceil(totalPages / 5)} AI passes.` : ''}`
+                      : 'Single-pass extraction active — fast, but long documents may truncate or miss entities. Re-enable for complete coverage.'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Steering Prompt Header & Suggestions */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
                 <Sparkles size={16} style={{ color: 'var(--color-gold)' }} />
-                <label style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>Initial Instruction to Co-DM:</label>
+                <label style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                  Steering Prompt &amp; Focus (Optional):
+                </label>
               </div>
 
               {/* Quick Suggestion Chips */}
@@ -1759,13 +1836,14 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                     }}
                     className="btn btn-ghost"
                     style={{
-                      padding: '3px 8px',
-                      fontSize: '0.72rem',
+                      padding: '4px 10px',
+                      fontSize: '0.73rem',
                       borderRadius: '12px',
                       background: instruction === p.prompt ? 'var(--color-amber-glow)' : 'var(--bg-surface)',
                       border: `1px solid ${instruction === p.prompt ? 'var(--color-gold)' : 'var(--border-medium)'}`,
                       color: instruction === p.prompt ? 'var(--text-gold)' : 'var(--text-primary)',
                       fontWeight: instruction === p.prompt ? 700 : 500,
+                      cursor: 'pointer',
                     }}
                   >
                     {p.label}
@@ -1776,7 +1854,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
               <textarea
                 value={instruction}
                 onChange={(e) => setInstruction(e.target.value)}
-                placeholder="Give specific guidance on how the Co-DM should decompose this material into your campaign..."
+                placeholder="Optional steering prompt: What specific elements or section should the agent focus on? (e.g. 'Focus on the Red Wizards and their ritual items', 'Extract only beasts and aberrations', or 'Focus on Chapter 3: Sunken Citadel'). Leave default for complete extraction."
                 rows={3}
                 style={{
                   width: '100%',
@@ -1810,12 +1888,14 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                 {isDecomposing ? (
                   <>
                     <Loader2 size={18} className="animate-spin" />
-                    Decomposing with Co-DM Architect...
+                    {exhaustiveMode
+                      ? `Running Exhaustive Scan${totalPages > 5 ? ` (~${Math.ceil((endPage - startPage + 1) / 5)} passes)` : ''}...`
+                      : 'Decomposing with Co-DM Architect...'}
                   </>
                 ) : (
                   <>
                     <Wand2 size={18} />
-                    Decompose with Co-DM
+                    {exhaustiveMode ? '🔍 Exhaustive Scan & Decompose' : 'Decompose with Co-DM'}
                   </>
                 )}
               </button>
@@ -1977,9 +2057,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                             </span>
                           )}
                         </div>
-                        <div style={{ color: 'var(--text-primary)', whiteSpace: 'pre-wrap' }}>
-                          {msg.content}
-                        </div>
+                        <MarkdownView content={msg.content} />
                       </div>
                     ))}
                     <div ref={chatBottomRef} />

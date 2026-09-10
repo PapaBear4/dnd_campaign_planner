@@ -1240,6 +1240,194 @@ def list_available_gemini_models(api_key: Optional[str] = None) -> Dict[str, Any
             "source": "fallback"
         }
 
+# ---------------------------------------------------------------------------
+# Chunked extraction helpers — used by exhaustive ingestion mode
+# ---------------------------------------------------------------------------
+
+def _split_text_into_chunks(text: str, chars_per_chunk: int = 18000, overlap: int = 1500) -> List[str]:
+    """
+    Splits a large text into overlapping chunks so no entity is cut off at a boundary.
+    Overlap ensures that stat blocks / NPC entries that span a chunk border are captured.
+    """
+    chunks = []
+    start = 0
+    length = len(text)
+    while start < length:
+        end = min(start + chars_per_chunk, length)
+        chunks.append(text[start:end])
+        if end >= length:
+            break
+        start += chars_per_chunk - overlap
+    return chunks
+
+
+def _chunk_and_extract_nodes(
+    text_content: str,
+    model,
+    model_name: str,
+    selected_prompt: str,
+    instruction: str,
+    db_context: str,
+    current_nodes: Optional[List[Dict[str, Any]]] = None,
+    current_edges: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """
+    Splits document text into overlapping chunks, calls Gemini once per chunk,
+    then merges + deduplicates all extracted nodes and edges.
+    Used when exhaustive=True to ensure every entity in a large document is captured.
+    """
+    chunks = _split_text_into_chunks(text_content, chars_per_chunk=18000, overlap=1500)
+    logger.info(f"[ExhaustiveExtract] Splitting document into {len(chunks)} chunks for multi-pass extraction")
+
+    all_nodes: List[Dict[str, Any]] = list(current_nodes or [])
+    all_edges: List[Dict[str, Any]] = list(current_edges or [])
+    seen_titles: set = {n.get("title", "").lower().strip() for n in all_nodes}
+    seen_edges: set = {
+        f"{e.get('source_title','').lower()}|{e.get('target_title','').lower()}|{e.get('relation_type','')}"
+        for e in all_edges
+    }
+    summary_parts = []
+
+    for i, chunk in enumerate(chunks):
+        chunk_label = f"Chunk {i + 1} of {len(chunks)}"
+        logger.info(f"[ExhaustiveExtract] Processing {chunk_label} ({len(chunk)} chars)")
+
+        chunk_prompt = f"""You are an expert D&D 5e adventure analyst and Co-DM architect.
+Exhaustively extract EVERY named entity from the text segment below.
+Do NOT stop early. Extract every single named NPC, monster, creature, character, faction, location, item, and clue present in this segment.
+
+{selected_prompt}
+
+EXTRACTION CONTEXT:
+{db_context}
+
+DM'S STEERING PROMPT / INSTRUCTION:
+\"\"\"{instruction or 'Exhaustively extract all entities found in this document segment.'}\"\"\"
+
+STEERING GUIDANCE:
+- Perform an exhaustive extraction of all entities, lore, and structural elements in this segment.
+- If the DM provided a steering prompt above (e.g. asking to prioritize or search for specific entities, monsters, items, factions, or story hooks), prioritize capturing those elements in rich detail, while still extracting all other entities in this segment.
+
+DOCUMENT SEGMENT ({chunk_label}):
+\"\"\"
+{chunk}
+\"\"\"
+
+CRITICAL: Extract EVERY entity present — do not summarize or sample. If 12 monsters are on the page, return all 12.
+Return strictly JSON:
+{{
+  "overview_summary": "Brief summary of what was found in this segment.",
+  "extracted_nodes": [
+    {{
+      "type": "arc|quest|session|encounter|pc|npc|monster|location|faction|item|clue",
+      "title": "Clear Name",
+      "subtitle": "Short epithet, CR, or Level/Class",
+      "summary": "1-2 sentence synopsis",
+      "content_markdown": "Full formatted markdown details",
+      "data_json": {{
+         "status": "planned",
+         "cr": "1/2 (if monster)",
+         "hp": 22,
+         "ac": 13,
+         "abilities": {{ "str": 10, "dex": 12, "con": 12, "int": 10, "wis": 10, "cha": 10 }}
+      }},
+      "revealed_to_players": false
+    }}
+  ],
+  "extracted_edges": [
+    {{
+      "source_title": "Exact Title of Source Node",
+      "target_title": "Exact Title of Target Node",
+      "relation_type": "contains|allied_with|hostile_to|located_at|gives_quest|rewards|member_of|knows_secret",
+      "label": "Short relation description"
+    }}
+  ]
+}}
+"""
+        try:
+            response = model.generate_content(
+                chunk_prompt,
+                generation_config={"response_mime_type": "application/json", "max_output_tokens": 8192}
+            )
+            chunk_data = json.loads(response.text)
+        except Exception as e:
+            logger.warning(f"[ExhaustiveExtract] {chunk_label} failed: {e}")
+            continue
+
+        # Merge nodes — deduplicate by normalized title
+        for node in chunk_data.get("extracted_nodes", []):
+            title_key = node.get("title", "").lower().strip()
+            if title_key and title_key not in seen_titles:
+                all_nodes.append(node)
+                seen_titles.add(title_key)
+
+        # Merge edges — deduplicate by (source, target, relation)
+        for edge in chunk_data.get("extracted_edges", []):
+            edge_key = f"{edge.get('source_title','').lower()}|{edge.get('target_title','').lower()}|{edge.get('relation_type','')}"
+            if edge_key not in seen_edges:
+                all_edges.append(edge)
+                seen_edges.add(edge_key)
+
+        if chunk_data.get("overview_summary"):
+            summary_parts.append(f"**{chunk_label}**: {chunk_data['overview_summary']}")
+
+    combined_summary = (
+        f"### ✅ Exhaustive Multi-Pass Extraction Complete\n\n"
+        f"Processed **{len(chunks)} segments** from document.\n"
+        f"Found **{len(all_nodes)} total unique entities** and **{len(all_edges)} relationships**.\n\n"
+        + "\n\n".join(summary_parts)
+    )
+
+    return {
+        "overview_summary": combined_summary,
+        "extracted_nodes": all_nodes,
+        "extracted_edges": all_edges,
+        "model": model_name,
+        "chunks_processed": len(chunks)
+    }
+
+
+def _chunk_and_summarize_transcript(transcript_text: str, model, chars_per_chunk: int = 20000) -> str:
+    """
+    For very long transcripts (> 80k chars), performs a two-pass extraction:
+    Pass 1: Extract a structured event timeline from each chunk (fast, concise).
+    Pass 2: Returns the consolidated event list to be used as input for the full adapt prompt.
+    This prevents important late-session events from being truncated.
+    """
+    if len(transcript_text) <= chars_per_chunk * 2:
+        # Short enough to send directly — no chunking needed
+        return transcript_text
+
+    chunks = _split_text_into_chunks(transcript_text, chars_per_chunk=chars_per_chunk, overlap=500)
+    logger.info(f"[TranscriptChunk] Transcript is {len(transcript_text)} chars — splitting into {len(chunks)} segments for event extraction pass")
+
+    event_summaries = []
+    for i, chunk in enumerate(chunks):
+        chunk_prompt = f"""You are a D&D session analyst. Summarize ALL key events that occurred in this transcript segment.
+Focus on: resolved encounters, NPC interactions/dispositions, items found/used, decisions made, cliffhangers.
+Be concise but thorough — do NOT omit events.
+
+Segment {i+1} of {len(chunks)}:
+\"\"\"
+{chunk}
+\"\"\"
+
+Return a plain numbered list of events. No JSON needed."""
+        try:
+            response = model.generate_content(chunk_prompt)
+            event_summaries.append(f"=== Segment {i+1} Events ===\n{response.text}")
+        except Exception as e:
+            logger.warning(f"[TranscriptChunk] Segment {i+1} event extraction failed: {e}")
+
+    consolidated = "\n\n".join(event_summaries)
+    logger.info(f"[TranscriptChunk] Consolidated event list: {len(consolidated)} chars from {len(chunks)} segments")
+    return consolidated
+
+
+# ---------------------------------------------------------------------------
+# Main decomposition function
+# ---------------------------------------------------------------------------
+
 def decompose_adventure_document(
     text_content: str,
     instruction: str,
@@ -1247,7 +1435,8 @@ def decompose_adventure_document(
     campaign_id: str,
     current_nodes: Optional[List[Dict[str, Any]]] = None,
     current_edges: Optional[List[Dict[str, Any]]] = None,
-    conversation_history: Optional[List[Dict[str, str]]] = None
+    conversation_history: Optional[List[Dict[str, str]]] = None,
+    exhaustive: bool = True
 ) -> Dict[str, Any]:
     """
     Decomposes adventure book chapters, monster sheets, or PC sheets based on DM instructions.
@@ -1260,45 +1449,48 @@ def decompose_adventure_document(
         "campaign_structure": (
             "DECOMPOSITION MODE: Campaign Hierarchy & Narrative Arcs.\n"
             "- Analyze the overall story structure from this chapter/introduction.\n"
-            "- Extract 1 to 4 major Arcs (Act/Milestone levels).\n"
-            "- For each Arc, extract 1 to 3 Quests with clear objectives and stakes.\n"
+            "- Extract ALL major Arcs (Act/Milestone levels) found in the text — do not skip any.\n"
+            "- For each Arc, extract ALL Quests with clear objectives and stakes.\n"
             "- For each Quest, identify initial Session steps.\n"
             "- Create 'contains' edges connecting Arc -> Quest -> Session."
         ),
         "monsters": (
             "DECOMPOSITION MODE: 5e Monster & Enemy Stat Blocks.\n"
-            "- Extract all monster, villain, and beast stat blocks found in the text.\n"
+            "- Extract EVERY SINGLE monster, villain, and beast stat block found in the text — do not stop early.\n"
+            "- If there are 20 creatures in the document, return all 20. Do not sample.\n"
             "- Populate data_json with: cr, xp, ac, hp, speed, abilities (str/dex/con/int/wis/cha), actions list.\n"
             "- Format full Markdown text with Traits, Multiattack, Actions, and Legendary Actions."
         ),
         "pc_sheets": (
             "DECOMPOSITION MODE: Player Character (PC) Sheets.\n"
-            "- Extract Player Characters: Name (title), Class/Race/Level (subtitle).\n"
+            "- Extract ALL Player Characters found — do not skip any.\n"
+            "- Name (title), Class/Race/Level (subtitle).\n"
             "- Summary of key background, ideals, bonds, flaws, and personal quest hooks.\n"
             "- data_json with attributes, key equipment, and spellcasting."
         ),
         "npcs_factions": (
             "DECOMPOSITION MODE: NPCs, Factions & Living World Graph.\n"
-            "- Extract all named NPCs, their factions, and their interpersonal relationships.\n"
+            "- Extract ALL named NPCs, their factions, and their interpersonal relationships — every single one.\n"
             "- Create edges: member_of, allied_with, hostile_to, gives_quest, knows_secret."
         ),
         "encounters": (
             "DECOMPOSITION MODE: Tactical & Social Encounters.\n"
-            "- Extract specific combat encounters, puzzles, social challenges, and traps.\n"
+            "- Extract ALL specific combat encounters, puzzles, social challenges, and traps — do not stop early.\n"
             "- Include threat difficulty, monsters present, and fail-forward outcomes."
         ),
         "world_lore": (
             "DECOMPOSITION MODE: World Lore, Pantheons, History & Setting Primers.\n"
-            "- Extract key historical eras, cataclysms, myths, and planar cosmology as 'lore' nodes.\n"
-            "- Extract deities, divine domains, holy orders, and secret cabals as 'faction' nodes.\n"
-            "- Extract sacred sanctuaries, ancient ruins, and planar rifts as 'location' nodes.\n"
-            "- Extract legendary artifacts and lost texts as 'item' nodes.\n"
-            "- Extract tavern rumors, lost prophecies, and folk superstitions as 'clue' nodes.\n"
+            "- Extract ALL key historical eras, cataclysms, myths, and planar cosmology as 'lore' nodes.\n"
+            "- Extract ALL deities, divine domains, holy orders, and secret cabals as 'faction' nodes.\n"
+            "- Extract ALL sacred sanctuaries, ancient ruins, and planar rifts as 'location' nodes.\n"
+            "- Extract ALL legendary artifacts and lost texts as 'item' nodes.\n"
+            "- Extract ALL tavern rumors, lost prophecies, and folk superstitions as 'clue' nodes.\n"
             "- Create rich relationships: associated_with, worships, created_by, recorded_in, located_at."
         ),
         "custom": (
             "DECOMPOSITION MODE: Custom DM Directive.\n"
-            "- Closely follow the DM's specific instruction below and extract appropriate campaign nodes and edges."
+            "- Closely follow the DM's specific instruction below and extract appropriate campaign nodes and edges.\n"
+            "- Extract EVERY relevant entity found — do not stop at a representative sample."
         )
     }
 
@@ -1375,6 +1567,22 @@ def decompose_adventure_document(
             "model": "offline-decomposer"
         }
 
+    # --- Exhaustive multi-pass chunked extraction ---
+    # When exhaustive=True and the document is large, chunk the text and call the model
+    # once per chunk, then merge and deduplicate all results.
+    if exhaustive and len(text_content) > 20000:
+        return _chunk_and_extract_nodes(
+            text_content=text_content,
+            model=model,
+            model_name=model_name,
+            selected_prompt=selected_prompt,
+            instruction=instruction,
+            db_context=db_context,
+            current_nodes=current_nodes,
+            current_edges=current_edges,
+        )
+
+    # --- Single-pass extraction (default or small documents) ---
     refinement_context = ""
     if current_nodes:
         refinement_context = f"""
@@ -1406,12 +1614,12 @@ DM'S LATEST STEERING INSTRUCTION / FEEDBACK:
 
 ADVENTURE / RULEBOOK TEXT REFERENCE:
 \"\"\"
-{text_content[:12000]}
+{text_content}
 \"\"\"
 
 CRITICAL INSTRUCTIONS FOR REFINING NODES:
 1. "overview_summary": Address the DM directly. Specifically explain what changes, additions, splits, or removals you performed in response to their feedback.
-2. "extracted_nodes": Output the complete, updated set of working draft nodes incorporating the DM's feedback.
+2. "extracted_nodes": Output the COMPLETE, EXHAUSTIVE set of all entities found — extract every single named NPC, monster, location, item, faction, and clue. Do NOT stop at a representative sample.
 3. "extracted_edges": Output the complete, updated set of working draft edges connecting these nodes.
 4. If the DM asked to split a quest or arc, produce the resulting sub-nodes. If they asked to change stats, factions, or difficulty, update the data_json and descriptions accordingly.
 
@@ -1446,7 +1654,10 @@ Respond strictly in JSON matching this structure:
 }}
 """
     try:
-        response = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
+        response = model.generate_content(
+            prompt,
+            generation_config={"response_mime_type": "application/json", "max_output_tokens": 8192}
+        )
         data = json.loads(response.text)
         return {
             "overview_summary": data.get("overview_summary", "Adventure refined successfully."),
@@ -1671,6 +1882,15 @@ def adapt_campaign_from_transcript(
             transcript_text, campaign_id, session_node_id, instruction, generate_player_recap
         )
 
+    # For very long transcripts (VTT chat exports, marathon sessions), pre-process
+    # through a chunked event-extraction pass so late-session events aren't dropped.
+    # Threshold: 80,000 characters (~40+ pages of dialogue / ~6+ hour sessions).
+    effective_transcript = transcript_text
+    if len(transcript_text) > 80000:
+        logger.info(f"[TranscriptAdapt] Long transcript detected ({len(transcript_text)} chars) — running chunked event extraction pass")
+        effective_transcript = _chunk_and_summarize_transcript(transcript_text, model)
+        logger.info(f"[TranscriptAdapt] Event summary condensed to {len(effective_transcript)} chars")
+
     # Online Gemini adaptation
     prompt = f"""You are the expert Co-DM and Campaign Chronicler for a D&D 5e game.
 The Dungeon Master is submitting an ACTUAL PLAY TRANSCRIPT, VTT CHAT EXPORT, OR POST-SESSION SUMMARY/DEBRIEF NOTES from a game session that was just played.
@@ -1690,7 +1910,7 @@ DM STEERING INSTRUCTION / FOCUS:
 
 SESSION TRANSCRIPT OR SUMMARY NOTES:
 \"\"\"
-{transcript_text[:14000]}
+{effective_transcript}
 \"\"\"
 
 ANALYZE THE TRANSCRIPT AND RETURN STRICT JSON WITH THESE SECTIONS:
@@ -1745,7 +1965,10 @@ ANALYZE THE TRANSCRIPT AND RETURN STRICT JSON WITH THESE SECTIONS:
 }}
 """
     try:
-        response = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
+        response = model.generate_content(
+            prompt,
+            generation_config={"response_mime_type": "application/json", "max_output_tokens": 8192}
+        )
         data = json.loads(response.text)
         recap = data.get("session_recap", "Session analyzed and adapted successfully.")
         status_updates = data.get("status_updates", [])

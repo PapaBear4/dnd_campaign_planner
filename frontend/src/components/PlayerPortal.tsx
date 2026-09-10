@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { createPlayerNote, deletePlayerNote, getPlayerGraph, getPlayerHierarchy, getPlayerNotes } from '../api';
 import { GraphData, HierarchyItem, NodeItem, PlayerNote } from '../types';
+import { MarkdownView } from './MarkdownView';
 
 interface PlayerPortalProps {
   campaignId: string;
@@ -248,8 +249,8 @@ export const PlayerPortal: React.FC<PlayerPortalProps> = ({ campaignId }) => {
                 )}
 
                 {selectedNode.content_markdown && (
-                  <div style={{ fontSize: '0.88rem', lineHeight: 1.7, color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>
-                    {selectedNode.content_markdown}
+                  <div style={{ marginTop: '12px' }}>
+                    <MarkdownView content={selectedNode.content_markdown} />
                   </div>
                 )}
               </div>
@@ -548,7 +549,7 @@ export const PlayerPortal: React.FC<PlayerPortalProps> = ({ campaignId }) => {
                 const mouseX = e.clientX - rect.left;
                 const mouseY = e.clientY - rect.top;
                 const zoomFactor = e.deltaY < 0 ? 1.15 : 0.87;
-                const nextScale = Math.min(Math.max(mapScale * zoomFactor, 0.4), 6.0);
+                const nextScale = Math.min(Math.max(mapScale * zoomFactor, 0.4), 25.0);
                 const worldX = (mouseX - mapPan.x) / mapScale;
                 const worldY = (mouseY - mapPan.y) / mapScale;
                 setMapScale(nextScale);
@@ -562,7 +563,7 @@ export const PlayerPortal: React.FC<PlayerPortalProps> = ({ campaignId }) => {
                 if (!rect) return;
                 const mouseX = e.clientX - rect.left;
                 const mouseY = e.clientY - rect.top;
-                const nextScale = Math.min(mapScale * 1.5, 6.0);
+                const nextScale = Math.min(mapScale * 1.5, 25.0);
                 const worldX = (mouseX - mapPan.x) / mapScale;
                 const worldY = (mouseY - mapPan.y) / mapScale;
                 setMapScale(nextScale);
@@ -612,6 +613,11 @@ export const PlayerPortal: React.FC<PlayerPortalProps> = ({ campaignId }) => {
                 {/* Revealed Pins Only */}
                 {playerPins.map((pin: any) => {
                   const isSelected = selectedPlayerPin?.id === pin.id;
+                  // Dynamic pin scale so pins don't blow up in size when zooming in deep on large maps
+                  const pinScale = Math.max(0.4, Math.min(1.0, 1.2 / Math.sqrt(mapScale)));
+                  const pinHeadColor = 'radial-gradient(circle at 35% 35%, #6ee7b7 0%, #10b981 50%, #047857 100%)';
+                  const pinBorder = isSelected ? '1.5px solid #38bdf8' : '0.75px solid #000';
+
                   return (
                     <div
                       key={pin.id}
@@ -625,49 +631,81 @@ export const PlayerPortal: React.FC<PlayerPortalProps> = ({ campaignId }) => {
                         position: 'absolute',
                         left: `${pin.x}%`,
                         top: `${pin.y}%`,
-                        transform: 'translate(-50%, -100%)',
+                        transform: `translate(-50%, -100%) scale(${pinScale})`,
+                        transformOrigin: 'bottom center',
                         cursor: 'pointer',
-                        zIndex: 20,
+                        zIndex: isSelected ? 28 : 20,
                         display: 'flex',
                         flexDirection: 'column',
                         alignItems: 'center',
+                        padding: '8px 12px 0 12px',
                       }}
                     >
+                      {/* Label on TOP of the pin so the map landmark remains visible underneath */}
                       <div
                         style={{
-                          width: '32px',
-                          height: '32px',
-                          borderRadius: '50% 50% 50% 0',
-                          transform: 'rotate(-45deg)',
-                          background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          boxShadow: isSelected
-                            ? '0 0 16px rgba(16, 185, 129, 0.9), 0 4px 12px rgba(0,0,0,0.6)'
-                            : '0 3px 10px rgba(0,0,0,0.7)',
-                          border: isSelected ? '2.5px solid #10b981' : '2px solid #fff',
-                        }}
-                      >
-                        <MapPin size={16} color="#fff" style={{ transform: 'rotate(45deg)' }} />
-                      </div>
-                      <div
-                        style={{
-                          background: 'rgba(15, 23, 42, 0.9)',
-                          backdropFilter: 'blur(4px)',
-                          border: `1px solid ${isSelected ? '#10b981' : 'var(--border-medium)'}`,
-                          borderRadius: '4px',
-                          padding: '2px 6px',
+                          background: 'rgba(10, 15, 29, 0.92)',
+                          backdropFilter: 'blur(6px)',
+                          border: `1px solid ${isSelected ? '#38bdf8' : 'rgba(255,255,255,0.18)'}`,
+                          borderRadius: '5px',
+                          padding: '2px 7px',
                           fontSize: '0.72rem',
                           fontWeight: 700,
-                          color: isSelected ? 'var(--color-emerald)' : '#fff',
+                          color: isSelected ? '#38bdf8' : '#f8fafc',
                           whiteSpace: 'nowrap',
-                          marginTop: '4px',
-                          boxShadow: '0 2px 6px rgba(0,0,0,0.6)',
+                          marginBottom: '3px',
+                          boxShadow: '0 3px 10px rgba(0,0,0,0.7)',
+                          letterSpacing: '0.02em',
+                          pointerEvents: 'none',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px',
                         }}
                       >
-                        {pin.label}
+                        {pin.targetMapId && <span title="Enter local map">🗺️</span>}
+                        <span>{pin.label}</span>
                       </div>
+
+                      {/* Stick-Pin Head (Spherical Bead) */}
+                      <div
+                        style={{
+                          width: '13px',
+                          height: '13px',
+                          borderRadius: '50%',
+                          background: pinHeadColor,
+                          border: pinBorder,
+                          boxShadow: isSelected
+                            ? '0 0 16px rgba(56, 189, 248, 0.9), 0 3px 8px rgba(0,0,0,0.8)'
+                            : '0 0 10px rgba(16, 185, 129, 0.6), 0 2px 6px rgba(0,0,0,0.7)',
+                          position: 'relative',
+                          zIndex: 2,
+                        }}
+                      />
+
+                      {/* Stick-Pin Needle Shaft */}
+                      <div
+                        style={{
+                          width: '2.5px',
+                          height: '18px',
+                          background: 'linear-gradient(to right, #94a3b8, #f8fafc, #64748b)',
+                          boxShadow: '1px 1px 3px rgba(0,0,0,0.75)',
+                          borderRadius: '1px 1px 0 0',
+                          position: 'relative',
+                          zIndex: 1,
+                        }}
+                      />
+
+                      {/* Needle Tip Point directly on the location */}
+                      <div
+                        style={{
+                          width: 0,
+                          height: 0,
+                          borderLeft: '1.5px solid transparent',
+                          borderRight: '1.5px solid transparent',
+                          borderTop: '5px solid #cbd5e1',
+                          zIndex: 1,
+                        }}
+                      />
                     </div>
                   );
                 })}
@@ -686,7 +724,7 @@ export const PlayerPortal: React.FC<PlayerPortalProps> = ({ campaignId }) => {
                 }}
               >
                 <button
-                  onClick={() => setMapScale((s) => Math.min(s * 1.25, 6.0))}
+                  onClick={() => setMapScale((s) => Math.min(s * 1.25, 25.0))}
                   className="btn btn-secondary glass-panel"
                   style={{ width: '38px', height: '38px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '8px' }}
                   title="Zoom In (+)"
@@ -760,6 +798,60 @@ export const PlayerPortal: React.FC<PlayerPortalProps> = ({ campaignId }) => {
                       {selectedNode.summary || selectedNode.subtitle || 'Known point of interest on the campaign map.'}
                     </p>
                   )}
+
+                  {/* Launch Connected Map for Players */}
+                  {selectedPlayerPin.targetMapId && (() => {
+                    const targetMap = playerMaps.find((m) => m.id === selectedPlayerPin.targetMapId);
+                    if (targetMap) {
+                      return (
+                        <button
+                          onClick={() => {
+                            setSelectedPlayerMapId(targetMap.id);
+                            setSelectedPlayerPin(null);
+                            setMapScale(1);
+                            setMapPan({ x: 0, y: 0 });
+                          }}
+                          className="btn btn-primary"
+                          style={{
+                            width: '100%',
+                            marginTop: '12px',
+                            padding: '8px 12px',
+                            fontSize: '0.82rem',
+                            fontWeight: 600,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '6px',
+                            background: 'linear-gradient(135deg, #10b981 0%, #047857 100%)',
+                            boxShadow: '0 2px 10px rgba(16, 185, 129, 0.4)',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          <Compass size={16} />
+                          <span>Enter Map: {targetMap.title}</span>
+                        </button>
+                      );
+                    } else {
+                      return (
+                        <div
+                          style={{
+                            marginTop: '10px',
+                            padding: '6px 10px',
+                            borderRadius: '6px',
+                            background: 'rgba(239, 68, 68, 0.1)',
+                            border: '1px solid rgba(239, 68, 68, 0.2)',
+                            fontSize: '0.74rem',
+                            color: '#fca5a5',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                          }}
+                        >
+                          <span>🔒 Detailed tactical map is undiscovered or hidden by the DM.</span>
+                        </div>
+                      );
+                    }
+                  })()}
                 </div>
               )}
             </div>

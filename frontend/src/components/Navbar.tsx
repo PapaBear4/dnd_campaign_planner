@@ -154,7 +154,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             boxShadow: '0 0 15px rgba(245, 158, 11, 0.4)',
             color: '#0a0d14'
           }}>
-            <Compass size={24} />
+            <BookOpen size={24} />
           </div>
           <div>
             <h1 style={{ fontSize: '1.2rem', lineHeight: 1.1, fontWeight: 800 }}>ArcaneWeaver</h1>

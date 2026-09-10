@@ -123,12 +123,21 @@ def decompose_adventure(request: DecomposeAdventureRequest):
         if file_path.exists():
             if file_path.suffix.lower() == ".pdf":
                 start_p = request.start_page or 1
-                end_p = request.end_page or 30
+                # Default end_page to full document length
+                if request.end_page:
+                    end_p = request.end_page
+                else:
+                    import pypdf
+                    try:
+                        reader = pypdf.PdfReader(str(file_path))
+                        end_p = len(reader.pages)
+                    except Exception:
+                        end_p = 999  # fallback: read all
                 text_to_analyze = pdf_service.get_pdf_page_text(str(file_path), start_p, end_p)
             else:
                 try:
                     with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-                        text_to_analyze = f.read()[:20000]
+                        text_to_analyze = f.read()  # No artificial cap — send full file text
                 except Exception:
                     pass
 
@@ -144,8 +153,10 @@ def decompose_adventure(request: DecomposeAdventureRequest):
         campaign_id=cid,
         current_nodes=request.current_nodes,
         current_edges=request.current_edges,
-        conversation_history=history_dicts
+        conversation_history=history_dicts,
+        exhaustive=request.exhaustive if request.exhaustive is not None else True
     )
+
 
 @router.post("/apply-extracted")
 def apply_extracted(data: Dict[str, Any]):

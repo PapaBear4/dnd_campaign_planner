@@ -1,4 +1,5 @@
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -412,6 +413,26 @@ def get_graph(campaign_id: str, player_mode: bool = False) -> GraphResponse:
 
     return GraphResponse(nodes=nodes, edges=visible_edges)
 
+def _natural_sort_key(node: NodeResponse):
+    """
+    Computes a robust sort tuple for hierarchy nodes:
+    1. sort_order (explicit manual ordering, default 0)
+    2. Has session/act/arc number extracted from title (e.g. Session 1 < Session 2 < Session 10)
+    3. Created date as tie-breaker
+    """
+    title = (node.title or "").strip()
+    match_seq = re.search(r"(?:session|arc|act|part|quest|chapter|episode)\s*(\d+)", title, re.IGNORECASE)
+    if match_seq:
+        num_key = (0, int(match_seq.group(1)))
+    else:
+        match_any_num = re.search(r"\b(\d+)\b", title)
+        if match_any_num:
+            num_key = (1, int(match_any_num.group(1)))
+        else:
+            num_key = (2, 999999)
+
+    return (node.sort_order, num_key, node.created_at, title.lower())
+
 # --- Hierarchy Tree (Campaign -> Arc -> Quest -> Session -> Encounter) ---
 def get_hierarchy_tree(campaign_id: str, player_mode: bool = False) -> List[HierarchyItem]:
     """
@@ -443,27 +464,34 @@ def get_hierarchy_tree(campaign_id: str, player_mode: bool = False) -> List[Hier
         node = node_map.get(nid)
         if not node:
             return None
+        child_ids = child_map.get(nid, [])
+        # Sort children by explicit sort_order and natural numbering
+        valid_children_nodes = [node_map[cid] for cid in child_ids if cid in node_map]
+        valid_children_nodes.sort(key=_natural_sort_key)
+        
         children_items = []
-        for cid in child_map.get(nid, []):
-            child_item = build_item(cid)
+        for c_node in valid_children_nodes:
+            child_item = build_item(c_node.id)
             if child_item:
                 children_items.append(child_item)
         return HierarchyItem(node=node, children=children_items)
 
     root_items = []
     # 1. First pick 'arc' nodes with no parents
-    for n in nodes:
-        if n.type == "arc" and n.id not in parent_map:
-            item = build_item(n.id)
-            if item:
-                root_items.append(item)
+    root_arcs = [n for n in nodes if n.type == "arc" and n.id not in parent_map]
+    root_arcs.sort(key=_natural_sort_key)
+    for n in root_arcs:
+        item = build_item(n.id)
+        if item:
+            root_items.append(item)
 
     # 2. Pick orphan quests / sessions / encounters that have no parents
-    for n in nodes:
-        if n.type in hierarchy_types and n.type != "arc" and n.id not in parent_map:
-            item = build_item(n.id)
-            if item:
-                root_items.append(item)
+    orphan_roots = [n for n in nodes if n.type in hierarchy_types and n.type != "arc" and n.id not in parent_map]
+    orphan_roots.sort(key=_natural_sort_key)
+    for n in orphan_roots:
+        item = build_item(n.id)
+        if item:
+            root_items.append(item)
 
     return root_items
 

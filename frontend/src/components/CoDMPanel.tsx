@@ -34,6 +34,7 @@ import {
   getThreadMessages,
 } from '../api';
 import { AgentActionTaken, AgentChatMessage, ChatThread, NodeItem } from '../types';
+import { MarkdownView } from './MarkdownView';
 
 const ActionReceipt: React.FC<{ actions: AgentActionTaken[] }> = ({ actions }) => {
   const [expanded, setExpanded] = useState(false);
@@ -984,7 +985,7 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
                     color: 'var(--text-primary)',
                   }}
                 >
-                  <div style={{ whiteSpace: 'pre-wrap' }}>{m.content}</div>
+                  <MarkdownView content={m.content} />
 
                   {/* Operation Receipt if assistant executed live tools */}
                   {m.actions_taken && m.actions_taken.length > 0 && (

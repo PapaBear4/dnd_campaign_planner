@@ -380,11 +380,13 @@ export async function agentDecomposeAdventure(data: {
   current_nodes?: any[];
   current_edges?: any[];
   conversation_history?: { role: string; content: string }[];
+  exhaustive?: boolean;
 }): Promise<{
   overview_summary: string;
   extracted_nodes: any[];
   extracted_edges: any[];
   model: string;
+  chunks_processed?: number;
 }> {
   const res = await fetch(`${BASE_URL}/api/agent/decompose`, {
     method: 'POST',

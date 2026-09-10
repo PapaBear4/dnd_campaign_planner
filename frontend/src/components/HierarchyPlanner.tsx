@@ -2,11 +2,15 @@ import React, { useState } from 'react';
 import confetti from 'canvas-confetti';
 import {
   AlertCircle,
+  ArrowDown,
+  ArrowUp,
   BookOpen,
   Calendar,
   CheckCircle,
   ChevronDown,
   ChevronRight,
+  ChevronsDown,
+  ChevronsUp,
   Clock,
   Eye,
   EyeOff,
@@ -51,7 +55,62 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
   const [newSummary, setNewSummary] = useState('');
 
   const toggleExpand = (id: string) => {
-    setExpandedNodes((prev) => ({ ...prev, [id]: !prev[id] }));
+    setExpandedNodes((prev) => ({
+      ...prev,
+      [id]: prev[id] === false ? true : false,
+    }));
+  };
+
+  const handleExpandAll = () => {
+    const allExpanded: Record<string, boolean> = {};
+    const recurse = (items: HierarchyItem[]) => {
+      for (const item of items) {
+        allExpanded[item.node.id] = true;
+        if (item.children && item.children.length > 0) recurse(item.children);
+      }
+    };
+    recurse(hierarchy);
+    setExpandedNodes(allExpanded);
+  };
+
+  const handleCollapseAll = () => {
+    const allCollapsed: Record<string, boolean> = {};
+    const recurse = (items: HierarchyItem[]) => {
+      for (const item of items) {
+        allCollapsed[item.node.id] = false;
+        if (item.children && item.children.length > 0) recurse(item.children);
+      }
+    };
+    recurse(hierarchy);
+    setExpandedNodes(allCollapsed);
+  };
+
+  const handleMoveSibling = async (
+    e: React.MouseEvent,
+    siblings: HierarchyItem[],
+    index: number,
+    direction: 'up' | 'down'
+  ) => {
+    e.stopPropagation();
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= siblings.length) return;
+
+    // Build the new desired ordering of siblings
+    const reordered = [...siblings];
+    const [moved] = reordered.splice(index, 1);
+    reordered.splice(targetIndex, 0, moved);
+
+    // Assign clean sequential sort_orders (10, 20, 30...)
+    try {
+      await Promise.all(
+        reordered.map((item, i) =>
+          updateNode(item.node.id, { sort_order: (i + 1) * 10 })
+        )
+      );
+      onRefresh();
+    } catch (err) {
+      console.error('Failed to reorder items:', err);
+    }
   };
 
   const handleToggleCanon = async (e: React.MouseEvent, node: NodeItem) => {
@@ -154,11 +213,35 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
     if (!newTitle.trim()) return;
 
     try {
+      // Find current siblings to append at end
+      let nextSortOrder = 10;
+      if (targetParentId) {
+        const findChildren = (items: HierarchyItem[]): HierarchyItem[] | null => {
+          for (const it of items) {
+            if (it.node.id === targetParentId) return it.children;
+            const res = findChildren(it.children);
+            if (res) return res;
+          }
+          return null;
+        };
+        const currentSiblings = findChildren(hierarchy) || [];
+        if (currentSiblings.length > 0) {
+          const maxSort = Math.max(...currentSiblings.map((s) => s.node.sort_order || 0));
+          nextSortOrder = maxSort + 10;
+        }
+      } else {
+        if (hierarchy.length > 0) {
+          const maxSort = Math.max(...hierarchy.map((s) => s.node.sort_order || 0));
+          nextSortOrder = maxSort + 10;
+        }
+      }
+
       const created = await createNode({
         campaign_id: campaignId,
         type: targetChildType,
         title: newTitle.trim(),
         summary: newSummary.trim(),
+        sort_order: nextSortOrder,
         data_json: { status: 'planned' },
         revealed_to_players: targetChildType === 'arc' || targetChildType === 'quest',
       });
@@ -182,10 +265,17 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
     }
   };
 
-  const renderTreeItem = (item: HierarchyItem, depth: number = 0) => {
+  const renderTreeItem = (
+    item: HierarchyItem,
+    depth: number = 0,
+    siblings: HierarchyItem[] = [],
+    siblingIndex: number = 0
+  ) => {
     const { node, children } = item;
     const isExpanded = expandedNodes[node.id] ?? true;
     const status = node.data_json?.status || 'planned';
+    const isFirst = siblingIndex === 0;
+    const isLast = siblingIndex === siblings.length - 1;
 
     let nextChildType: NodeType | null = null;
     if (node.type === 'arc') nextChildType = 'quest';
@@ -230,20 +320,35 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
                 : 'var(--border-subtle)')
           }
         >
-          {/* Left: Expand + Icon + Title */}
+          {/* Left: Expand/Collapse Chevron + Badge + Title */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1 }}>
             {children.length > 0 ? (
               <button
+                type="button"
                 onClick={(e) => {
                   e.stopPropagation();
                   toggleExpand(node.id);
                 }}
-                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex' }}
+                style={{
+                  background: 'rgba(255, 255, 255, 0.06)',
+                  border: '1px solid var(--border-medium)',
+                  borderRadius: '6px',
+                  color: isExpanded ? 'var(--color-gold)' : 'var(--text-secondary)',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: '26px',
+                  height: '26px',
+                  padding: 0,
+                  transition: 'all 0.15s ease',
+                }}
+                title={isExpanded ? 'Collapse nested items' : 'Expand nested items'}
               >
-                {isExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
+                {isExpanded ? <ChevronDown size={17} /> : <ChevronRight size={17} />}
               </button>
             ) : (
-              <div style={{ width: '18px' }} />
+              <div style={{ width: '26px' }} />
             )}
 
             <span className={`badge badge-${node.type}`}>{node.type}</span>
@@ -263,8 +368,53 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
             </div>
           </div>
 
-          {/* Right: Status Pill, Reveal Eye, Co-DM focus, Add Child, Delete */}
+          {/* Right: Actions, Reorder, Status Pill, Reveal Eye, Co-DM focus, Add Child, Delete */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {/* Reorder Up / Down */}
+            {siblings.length > 1 && (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  background: 'var(--bg-surface)',
+                  borderRadius: '6px',
+                  border: '1px solid var(--border-subtle)',
+                  padding: '1px 2px',
+                }}
+              >
+                <button
+                  type="button"
+                  disabled={isFirst}
+                  onClick={(e) => handleMoveSibling(e, siblings, siblingIndex, 'up')}
+                  className="btn btn-ghost"
+                  style={{
+                    padding: '3px 4px',
+                    color: isFirst ? 'var(--text-muted)' : 'var(--text-primary)',
+                    opacity: isFirst ? 0.3 : 1,
+                    cursor: isFirst ? 'default' : 'pointer',
+                  }}
+                  title={isFirst ? 'Already first in order' : 'Move up in timeline'}
+                >
+                  <ArrowUp size={13} />
+                </button>
+                <button
+                  type="button"
+                  disabled={isLast}
+                  onClick={(e) => handleMoveSibling(e, siblings, siblingIndex, 'down')}
+                  className="btn btn-ghost"
+                  style={{
+                    padding: '3px 4px',
+                    color: isLast ? 'var(--text-muted)' : 'var(--text-primary)',
+                    opacity: isLast ? 0.3 : 1,
+                    cursor: isLast ? 'default' : 'pointer',
+                  }}
+                  title={isLast ? 'Already last in order' : 'Move down in timeline'}
+                >
+                  <ArrowDown size={13} />
+                </button>
+              </div>
+            )}
+
             {/* Status Selector */}
             <div style={{ display: 'flex', gap: '4px', background: 'var(--bg-surface)', padding: '2px 4px', borderRadius: '6px', border: '1px solid var(--border-subtle)' }}>
               <button
@@ -383,8 +533,8 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
 
         {/* Children Recursion */}
         {isExpanded && children.length > 0 && (
-          <div style={{ borderLeft: '2px dashed var(--border-subtle)', marginLeft: '8px', paddingLeft: '4px' }}>
-            {children.map((child) => renderTreeItem(child, depth + 1))}
+          <div style={{ borderLeft: '2px dashed var(--border-subtle)', marginLeft: '13px', paddingLeft: '6px' }}>
+            {children.map((child, idx) => renderTreeItem(child, depth + 1, children, idx))}
           </div>
         )}
       </div>
@@ -394,7 +544,7 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
   return (
     <div style={{ padding: '24px', maxWidth: '1200px', margin: '0 auto' }}>
       {/* Header bar */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px', gap: '16px', flexWrap: 'wrap' }}>
         <div>
           <h2 style={{ fontSize: '1.5rem', display: 'flex', alignItems: 'center', gap: '10px' }}>
             <Calendar style={{ color: 'var(--color-gold)' }} /> Campaign Arc &amp; Session Timeline
@@ -403,7 +553,30 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
             Plan, organize, and pace your story from overarching campaign Arcs down to Encounters.
           </p>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+          {hierarchy.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginRight: '6px', background: 'var(--bg-surface)', padding: '2px', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+              <button
+                type="button"
+                onClick={handleExpandAll}
+                className="btn btn-ghost"
+                style={{ fontSize: '0.75rem', padding: '5px 10px', gap: '5px' }}
+                title="Expand all tree levels"
+              >
+                <ChevronsDown size={14} style={{ color: 'var(--color-gold)' }} /> Expand All
+              </button>
+              <button
+                type="button"
+                onClick={handleCollapseAll}
+                className="btn btn-ghost"
+                style={{ fontSize: '0.75rem', padding: '5px 10px', gap: '5px' }}
+                title="Collapse all tree levels"
+              >
+                <ChevronsUp size={14} style={{ color: 'var(--text-secondary)' }} /> Collapse All
+              </button>
+            </div>
+          )}
+
           {onNavigateToTranscript && (
             <button
               onClick={() => onNavigateToTranscript()}
@@ -461,7 +634,7 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
           </button>
         </div>
       ) : (
-        <div>{hierarchy.map((item) => renderTreeItem(item, 0))}</div>
+        <div>{hierarchy.map((item, idx) => renderTreeItem(item, 0, hierarchy, idx))}</div>
       )}
 
       {/* Add Modal */}
