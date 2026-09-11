@@ -39,6 +39,9 @@ def _node_from_row(row) -> NodeResponse:
         except Exception:
             tags = []
 
+    confidence = float(row["confidence"]) if "confidence" in row.keys() and row["confidence"] is not None else 1.0
+    lore_status = str(row["lore_status"]) if "lore_status" in row.keys() and row["lore_status"] else "fact"
+
     return NodeResponse(
         id=row["id"],
         campaign_id=row["campaign_id"],
@@ -50,6 +53,8 @@ def _node_from_row(row) -> NodeResponse:
         data_json=data_json,
         revealed_to_players=bool(row["revealed_to_players"]),
         is_canon=bool(row["is_canon"]) if "is_canon" in row.keys() else True,
+        confidence=confidence,
+        lore_status=lore_status,
         tags=tags,
         sort_order=row["sort_order"] or 0,
         created_at=row["created_at"],
@@ -64,6 +69,9 @@ def _edge_from_row(row) -> EdgeResponse:
         except Exception:
             metadata_json = {}
 
+    confidence = float(row["confidence"]) if "confidence" in row.keys() and row["confidence"] is not None else 1.0
+    lore_status = str(row["lore_status"]) if "lore_status" in row.keys() and row["lore_status"] else "fact"
+
     return EdgeResponse(
         id=row["id"],
         campaign_id=row["campaign_id"],
@@ -74,6 +82,8 @@ def _edge_from_row(row) -> EdgeResponse:
         metadata_json=metadata_json,
         revealed_to_players=bool(row["revealed_to_players"]),
         is_canon=bool(row["is_canon"]) if "is_canon" in row.keys() else True,
+        confidence=confidence,
+        lore_status=lore_status,
         created_at=row["created_at"],
     )
 
@@ -154,7 +164,16 @@ def delete_campaign(campaign_id: str) -> bool:
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM campaigns WHERE id = ?", (campaign_id,))
-        return cursor.rowcount > 0
+        deleted = cursor.rowcount > 0
+        if deleted:
+            cursor.execute("SELECT value FROM settings WHERE key = 'active_campaign_id'")
+            row = cursor.fetchone()
+            if row and row["value"] == campaign_id:
+                cursor.execute("SELECT id FROM campaigns ORDER BY updated_at DESC LIMIT 1")
+                other = cursor.fetchone()
+                if other:
+                    cursor.execute("UPDATE settings SET value = ? WHERE key = 'active_campaign_id'", (other["id"],))
+        return deleted
 
 # --- Nodes ---
 def create_node(data: NodeCreate, default_campaign_id: str) -> NodeResponse:
@@ -165,6 +184,8 @@ def create_node(data: NodeCreate, default_campaign_id: str) -> NodeResponse:
     tags_str = json.dumps(data.tags or [])
     revealed = 1 if data.revealed_to_players else 0
     canon = 1 if (data.is_canon is None or data.is_canon) else 0
+    confidence = float(data.confidence) if data.confidence is not None else 1.0
+    lore_status = data.lore_status or "fact"
 
     with get_db() as conn:
         cursor = conn.cursor()
@@ -172,8 +193,8 @@ def create_node(data: NodeCreate, default_campaign_id: str) -> NodeResponse:
             """
             INSERT INTO nodes (
                 id, campaign_id, type, title, subtitle, summary, content_markdown,
-                data_json, revealed_to_players, is_canon, tags, sort_order, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                data_json, revealed_to_players, is_canon, confidence, lore_status, tags, sort_order, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 nid,
@@ -186,6 +207,8 @@ def create_node(data: NodeCreate, default_campaign_id: str) -> NodeResponse:
                 data_json_str,
                 revealed,
                 canon,
+                confidence,
+                lore_status,
                 tags_str,
                 data.sort_order or 0,
                 now,
@@ -257,6 +280,12 @@ def update_node(node_id: str, data: NodeUpdate) -> Optional[NodeResponse]:
     if data.is_canon is not None:
         updates.append("is_canon = ?")
         params.append(1 if data.is_canon else 0)
+    if data.confidence is not None:
+        updates.append("confidence = ?")
+        params.append(float(data.confidence))
+    if data.lore_status is not None:
+        updates.append("lore_status = ?")
+        params.append(str(data.lore_status))
     if data.tags is not None:
         updates.append("tags = ?")
         params.append(json.dumps(data.tags))
@@ -290,6 +319,8 @@ def create_edge(data: EdgeCreate, default_campaign_id: str) -> EdgeResponse:
     metadata_json_str = json.dumps(data.metadata_json or {})
     revealed = 1 if data.revealed_to_players else 0
     canon = 1 if (data.is_canon is None or data.is_canon) else 0
+    confidence = float(data.confidence) if data.confidence is not None else 1.0
+    lore_status = data.lore_status or "fact"
 
     with get_db() as conn:
         cursor = conn.cursor()
@@ -297,8 +328,8 @@ def create_edge(data: EdgeCreate, default_campaign_id: str) -> EdgeResponse:
             """
             INSERT INTO edges (
                 id, campaign_id, source_id, target_id, relation_type,
-                label, metadata_json, revealed_to_players, is_canon, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                label, metadata_json, revealed_to_players, is_canon, confidence, lore_status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 eid,
@@ -310,6 +341,8 @@ def create_edge(data: EdgeCreate, default_campaign_id: str) -> EdgeResponse:
                 metadata_json_str,
                 revealed,
                 canon,
+                confidence,
+                lore_status,
                 now,
             ),
         )
@@ -372,6 +405,12 @@ def update_edge(edge_id: str, data: EdgeUpdate) -> Optional[EdgeResponse]:
     if data.is_canon is not None:
         updates.append("is_canon = ?")
         params.append(1 if data.is_canon else 0)
+    if data.confidence is not None:
+        updates.append("confidence = ?")
+        params.append(float(data.confidence))
+    if data.lore_status is not None:
+        updates.append("lore_status = ?")
+        params.append(str(data.lore_status))
 
     if not updates:
         return get_edge(edge_id)

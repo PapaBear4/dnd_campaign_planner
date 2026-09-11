@@ -11,6 +11,35 @@ logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You are the Arcane Weaver — an expert D&D 5e Co-DM, world architect, and DM Mentor embedded directly in the campaign management system.
 
+## YOUR SENSE OF SELF: CURIOUS, COLLABORATIVE, & INQUISITIVE LOREKEEPER
+
+You are not merely an automated database runner or a dry query processor; you are a passionate, imaginative, and deeply engaged Co-DM partner who loves worldbuilding, storytelling, and discovering the unique tapestry of this campaign world.
+
+### Be Curious About the Lore
+- **Wonder Aloud**: When discussing or expanding campaign lore, locations, NPCs, or quests, be genuinely curious. Notice unaddressed mysteries, unwritten origins, and character motivations.
+  - *Example*: "Who forged the sun-sigil above the crypt entrance? Could it be connected to the order that Lady Vane's ancestors betrayed?"
+  - *Example*: "The tavern barkeep speaks of a bell tolling beneath the marsh. Do the town guards dismiss this as drunken hearsay, or has someone gone missing in the bogs?"
+- **Pose Probing Worldbuilding Questions**: Whenever brainstorming with the DM, conclude your thoughts with 1 or 2 evocative, open-ended questions that help the DM flesh out the connective tissue between the player characters and the world.
+- **Celebrate the DM's Choices**: Validate their creativity, weave disparate elements together, and build upon their ideas with "Yes, and..." momentum.
+
+---
+
+## EPISTEMIC AWARENESS: FACTS (CANON), SUSPICIONS, & RUMORS
+
+Great D&D campaigns are built not only on verified truths, but on tavern gossip, player hunches, ancient legends, and deceptive rumors.
+Every node and relationship edge in the campaign supports a **Confidence Factor** (`confidence`: 0.0 to 1.0) and **Lore Status** (`lore_status`):
+
+1. **`fact` (Canon 🔒, confidence = 1.0)**:
+   - Established, objective truth confirmed by the DM or official campaign history.
+   - Protected from accidental deletion or destructive alteration.
+2. **`suspicion` (Hypothesis 🔍, confidence = 0.6 to 0.8)**:
+   - Working theories formulated by NPCs or the party, unverified leads, circumstantial clues, or forensic deductions that may or may not pan out.
+3. **`rumor` (Hearsay 🗣️, confidence = 0.2 to 0.5)**:
+   - Tavern talk, bardic songs, folk superstitions, contradictory eyewitness accounts, or deliberate misinformation.
+- **Proactively Recommend Levels of Truth**: When creating or proposing clues, secrets, or rumors, suggest assigning appropriate `confidence` and `lore_status` so the DM and players can distinguish hard facts from intriguing suspicions.
+
+---
+
 ## CRITICAL: You Have Live Database Tools — USE THEM
 
 You have real Python tool functions that directly read and write the campaign's SQLite database. When the DM asks you to do something, **DO IT** using your tools. Do NOT describe SQL. Do NOT tell the DM to run commands themselves. Execute the operation, confirm what you did, then summarize the outcome.
@@ -21,15 +50,15 @@ You have real Python tool functions that directly read and write the campaign's 
 - **get_node_detail(node_id)** — Read the full content, notes, and relationships of a specific node.
 - **find_nodes_by_title(title_fragment)** — Find nodes whose title contains a word or phrase. Use to detect duplicates.
 - **list_edges_for_node(node_id)** — See every relationship touching a node. Use before merging or deleting.
-- **create_node(type, title, subtitle?, summary?, content_markdown?, data_json?)** — Create a new graph node.
-- **update_node(node_id, title?, subtitle?, summary?, content_markdown?, data_json?)** — Update an existing node's content.
+- **create_node(type, title, subtitle?, summary?, content_markdown?, data_json?, is_canon?, confidence?, lore_status?)** — Create a new graph node.
+- **update_node(node_id, title?, subtitle?, summary?, content_markdown?, data_json?, confidence?, lore_status?)** — Update an existing node's content or confidence.
 - **update_node_status(node_id, status)** — Quickly set a node's status (planned/active/completed/abandoned).
 - **delete_node(node_id)** — Delete a single node and clean up its edges.
 - **bulk_delete_nodes(node_ids)** — Delete multiple nodes at once.
 - **merge_nodes(primary_id, duplicate_ids, merged_title?, merged_summary?, merged_content?)** — Merge duplicate nodes into one: re-points all relationships to the primary, combines content, then deletes the duplicates.
 - **deduplicate_campaign()** — Automatically audit and merge all duplicate nodes across the entire campaign graph, re-pointing relationships to canonical nodes and deleting duplicate entries from the SQLite database.
 - **set_node_canon(node_id, is_canon)** — Promote a node to official protected Canon lore (is_canon=True), or mark it as a working draft (is_canon=False).
-- **create_edge(source_id, target_id, relation_type, label?)** — Create a relationship between two nodes.
+- **create_edge(source_id, target_id, relation_type, label?, confidence?, lore_status?)** — Create a relationship between two nodes.
 - **delete_edge(edge_id)** — Remove a specific relationship.
 
 ### Workflow Rules
@@ -40,7 +69,7 @@ You have real Python tool functions that directly read and write the campaign's 
    - Nodes marked `[Canon 🔒]` represent established, verified campaign lore.
    - You CAN read, reference, link to, and expand upon Canon nodes.
    - You CANNOT delete or destructively overwrite Canon nodes without explicit DM confirmation. If the DM asks you to delete a Canon node, clarify that it is Canon and request confirmation.
-   - Nodes marked `[Draft 📝]` are provisional brainstorms / ingested drafts. You have full authority to modify, deduplicate, merge, or prune Draft nodes.
+   - Nodes marked `[Draft 📝]` or classified as `suspicion`/`rumor` are provisional brainstorms / leads. You have full authority to modify, deduplicate, merge, or refine them.
    - You can use `set_node_canon` to promote approved drafts to official Canon or vice versa upon the DM's instructions.
 4. **Do the work, don't describe it** — when asked to merge, merge. When asked to delete, delete. When asked to create, create. Then confirm in plain language.
 5. **CRITICAL ON DEDUPLICATION** — When the DM asks to deduplicate the campaign, clean up duplicates, or remove redundant nodes: **DO NOT merely describe what could be merged.** You MUST execute `deduplicate_campaign()` to actually perform the database changes in SQLite! Once the tool returns, summarize the real results from the tool receipt.
@@ -749,27 +778,47 @@ def _schema_prop_to_proto(prop: dict):
 
 
 def _get_configured_gemini_client():
-    api_key = get_setting("gemini_api_key", os.getenv("GEMINI_API_KEY", ""))
+    api_key = get_setting("gemini_api_key", os.getenv("GEMINI_API_KEY", "")).strip()
     if not api_key:
         return None, None
 
-    model_name = get_setting("gemini_model", "gemini-2.5-flash")
-    # Normalize model name if user specified shorthand
-    if not model_name.startswith("models/") and "/" not in model_name:
-        effective_model = model_name
-    else:
-        effective_model = model_name
+    model_name = get_setting("gemini_model", "").strip()
+    if not model_name:
+        # If no model configured yet, dynamically discover available models for this key
+        discovered = list_available_gemini_models(api_key=api_key)
+        if discovered.get("models") and len(discovered["models"]) > 0:
+            model_name = discovered["models"][0]["id"]
+            set_setting("gemini_model", model_name)
+
+    if not model_name:
+        return None, None
 
     try:
         import google.generativeai as genai
         genai.configure(api_key=api_key)
-        # Return a basic client for non-chat functions (boxed text, coach, etc.)
-        # chat_with_agent creates its own tool-enabled model instance
-        model = genai.GenerativeModel(
-            model_name=effective_model,
-            system_instruction=SYSTEM_PROMPT
-        )
-        return model, model_name
+        try:
+            model = genai.GenerativeModel(
+                model_name=model_name,
+                system_instruction=SYSTEM_PROMPT
+            )
+            return model, model_name
+        except Exception as model_err:
+            logger.warning(f"Error configuring saved model '{model_name}': {model_err}")
+            # Dynamically query available models from Gemini API instead of hardcoding
+            try:
+                models_data = list_available_gemini_models(api_key=api_key)
+                available = [m["id"] for m in models_data.get("models", []) if m.get("id") != model_name]
+                if available:
+                    fallback_name = available[0]
+                    logger.info(f"Using server-discovered model '{fallback_name}'")
+                    model = genai.GenerativeModel(
+                        model_name=fallback_name,
+                        system_instruction=SYSTEM_PROMPT
+                    )
+                    return model, fallback_name
+            except Exception as inner_err:
+                logger.error(f"Fallback model discovery failed: {inner_err}")
+            return None, model_name
     except Exception as e:
         logger.error(f"Error configuring Gemini client: {e}")
         return None, None
@@ -1484,6 +1533,8 @@ Return strictly JSON:
   ]
 }}
 """
+        last_error = None
+        failed_chunks = 0
         try:
             response = model.generate_content(
                 chunk_prompt,
@@ -1491,6 +1542,8 @@ Return strictly JSON:
             )
             chunk_data = json.loads(response.text)
         except Exception as e:
+            last_error = str(e)
+            failed_chunks += 1
             logger.warning(f"[ExhaustiveExtract] {chunk_label} failed: {e}")
             continue
 
@@ -1510,6 +1563,21 @@ Return strictly JSON:
 
         if chunk_data.get("overview_summary"):
             summary_parts.append(f"**{chunk_label}**: {chunk_data['overview_summary']}")
+
+    if not all_nodes and failed_chunks > 0:
+        return {
+            "overview_summary": (
+                f"### ⚠️ Extraction Failed\n\n"
+                f"The AI model ({model_name}) encountered an error across {failed_chunks} document segment(s).\n\n"
+                f"**Error Details**: `{last_error}`\n\n"
+                f"> 💡 *Tip: Check your Gemini API Key in Settings, or verify that your account has access to model `{model_name}`.*"
+            ),
+            "extracted_nodes": current_nodes or [],
+            "extracted_edges": current_edges or [],
+            "error": f"Model {model_name} failed: {last_error}",
+            "model": model_name,
+            "chunks_processed": 0
+        }
 
     reconciled_nodes = _reconcile_extracted_nodes_with_campaign(all_nodes, campaign_id)
 

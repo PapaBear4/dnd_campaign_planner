@@ -236,7 +236,9 @@ def apply_extracted(data: Dict[str, Any]):
                     summary=merged_summary,
                     subtitle=merged_subtitle,
                     content_markdown=merged_content,
-                    data_json=merged_data
+                    data_json=merged_data,
+                    confidence=n.get("confidence") if n.get("confidence") is not None else target_node.confidence,
+                    lore_status=n.get("lore_status") or target_node.lore_status
                 )
             )
             merged_nodes.append(updated_node or target_node)
@@ -260,7 +262,9 @@ def apply_extracted(data: Dict[str, Any]):
                     summary=n.get("summary", ""),
                     content_markdown=n.get("content_markdown", ""),
                     data_json=n.get("data_json", {}),
-                    revealed_to_players=n.get("revealed_to_players", False)
+                    revealed_to_players=n.get("revealed_to_players", False),
+                    confidence=n.get("confidence", 1.0),
+                    lore_status=n.get("lore_status", "fact")
                 ),
                 default_campaign_id=cid
             )
@@ -284,7 +288,9 @@ def apply_extracted(data: Dict[str, Any]):
                     target_id=tgt_id,
                     relation_type=e.get("relation_type", "located_at"),
                     label=e.get("label", ""),
-                    metadata_json=e.get("metadata_json", {})
+                    metadata_json=e.get("metadata_json", {}),
+                    confidence=e.get("confidence", 1.0),
+                    lore_status=e.get("lore_status", "fact")
                 ),
                 default_campaign_id=cid
             )

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { Key, Sparkles, Server, Check, X, ShieldAlert, RefreshCw, AlertCircle, Cpu } from 'lucide-react';
 import { getSettings, queryAvailableModels, updateSettings } from '../api';
 import { AppSettings, GeminiModelInfo } from '../types';
@@ -9,50 +10,94 @@ interface SettingsModalProps {
   onSettingsSaved?: () => void;
 }
 
-const DEFAULT_MODELS: GeminiModelInfo[] = [
-  { id: 'gemini-2.5-flash', display_name: 'Gemini 2.5 Flash', description: 'Fastest response time, 1M context' },
-  { id: 'gemini-2.5-pro', display_name: 'Gemini 2.5 Pro', description: 'Deep worldbuilding, complex reasoning' },
-  { id: 'gemini-2.0-flash', display_name: 'Gemini 2.0 Flash', description: 'Next-generation fast model' },
-  { id: 'gemini-1.5-flash', display_name: 'Gemini 1.5 Flash', description: 'Standard fast generation' },
-  { id: 'gemini-1.5-pro', display_name: 'Gemini 1.5 Pro', description: 'Standard reasoning model' },
-];
-
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onSettingsSaved }) => {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [apiKey, setApiKey] = useState('');
-  const [model, setModel] = useState('gemini-2.5-flash');
+  const [model, setModel] = useState('');
   const [customModel, setCustomModel] = useState('');
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
-  // Dynamic models state
-  const [availableModels, setAvailableModels] = useState<GeminiModelInfo[]>(DEFAULT_MODELS);
+  // Dynamic models state — always pulled from server
+  const [availableModels, setAvailableModels] = useState<GeminiModelInfo[]>([]);
   const [isFetchingModels, setIsFetchingModels] = useState(false);
   const [modelQuerySource, setModelQuerySource] = useState<'api' | 'fallback' | 'error'>('fallback');
   const [modelQueryError, setModelQueryError] = useState<string | null>(null);
 
   const debounceTimerRef = useRef<any>(null);
 
+  const loadSettingsAndModels = async () => {
+    setIsFetchingModels(true);
+    setModelQueryError(null);
+    try {
+      // 1. Fetch current settings from server (includes saved model)
+      const currentSettings = await getSettings();
+      setSettings(currentSettings);
+      const savedModel = (currentSettings.gemini_model || '').trim();
+
+      // 2. Fetch live available models list from server
+      const modelsRes = await queryAvailableModels();
+      const serverModels: GeminiModelInfo[] = [...(modelsRes.models || [])];
+
+      // 3. Ensure the saved model is preserved in the dropdown options
+      if (savedModel && !serverModels.some((m) => m.id === savedModel)) {
+        serverModels.unshift({
+          id: savedModel,
+          display_name: `${savedModel} (Saved)`,
+          description: 'Currently configured model on server',
+        });
+      }
+
+      setAvailableModels(serverModels);
+      const src = (modelsRes.source as 'api' | 'fallback' | 'error') || (modelsRes.error ? 'error' : 'api');
+      setModelQuerySource(src);
+      if (modelsRes.error) {
+        setModelQueryError(modelsRes.error);
+      } else {
+        setModelQueryError(null);
+      }
+
+      // 4. Whatever model the user saved is the one that loads up
+      if (savedModel) {
+        setModel(savedModel);
+      } else if (serverModels.length > 0) {
+        setModel(serverModels[0].id);
+      }
+    } catch (err: any) {
+      console.error('Failed to load settings or models from server:', err);
+      setModelQueryError(err.message || 'Failed to query models from server');
+      setModelQuerySource('error');
+    } finally {
+      setIsFetchingModels(false);
+    }
+  };
+
   const fetchModels = async (keyToUse?: string) => {
     setIsFetchingModels(true);
     setModelQueryError(null);
     try {
       const res = await queryAvailableModels(keyToUse);
-      if (res.models && res.models.length > 0) {
-        setAvailableModels(res.models);
+      const serverModels: GeminiModelInfo[] = [...(res.models || [])];
+
+      // Keep currently selected model represented in options so user's choice isn't wiped
+      if (model && !serverModels.some((m) => m.id === model) && model !== 'custom') {
+        serverModels.unshift({
+          id: model,
+          display_name: `${model} (Selected)`,
+          description: 'Currently selected model',
+        });
       }
+
+      setAvailableModels(serverModels);
       if (res.error) {
         setModelQueryError(res.error);
         setModelQuerySource('error');
-      } else if (res.source === 'api') {
-        setModelQuerySource('api');
-        // If current model is not in the newly fetched models, keep current if valid or select top flash model
-        const modelExists = res.models.some((m) => m.id === model);
-        if (!modelExists && model !== 'custom') {
-          setModel(res.models[0].id);
-        }
       } else {
-        setModelQuerySource('fallback');
+        setModelQuerySource((res.source as 'api' | 'fallback' | 'error') || 'api');
+        // If no model currently selected, select top model from server
+        if (!model && serverModels.length > 0) {
+          setModel(serverModels[0].id);
+        }
       }
     } catch (err: any) {
       setModelQueryError(err.message || 'Failed to query models from server');
@@ -64,20 +109,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
 
   useEffect(() => {
     if (isOpen) {
-      getSettings().then((s) => {
-        setSettings(s);
-        if (s.gemini_model) {
-          setModel(s.gemini_model);
-        }
-        // If an API key is already configured on the server, query server for available models right away
-        if (s.gemini_api_key_configured) {
-          fetchModels();
-        }
-      });
+      loadSettingsAndModels();
     }
   }, [isOpen]);
 
-  // When the user enters an API key, automatically query the server for the model list (debounced)
+  // When user types an API key, automatically query server for models (debounced)
   const handleApiKeyChange = (val: string) => {
     setApiKey(val);
     if (debounceTimerRef.current) {
@@ -90,7 +126,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
       }, 600);
     } else if (!cleanKey) {
       setModelQueryError(null);
-      setModelQuerySource('fallback');
+      // Query models with existing server key if input cleared
+      fetchModels();
     }
   };
 
@@ -100,61 +137,81 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
     e.preventDefault();
     setIsSaving(true);
     try {
-      const selectedModel = model === 'custom' ? (customModel.trim() || 'gemini-2.5-flash') : model;
+      const selectedModel = (model === 'custom' ? customModel.trim() : model).trim();
+      if (!selectedModel) {
+        alert('Please select or specify a model.');
+        setIsSaving(false);
+        return;
+      }
       const payload: any = { gemini_model: selectedModel };
       if (apiKey.trim()) {
         payload.gemini_api_key = apiKey.trim();
       }
-      await updateSettings(payload);
+      const updated = await updateSettings(payload);
+      setSettings(updated);
+      setModel(updated.gemini_model);
       setSavedSuccess(true);
       if (onSettingsSaved) onSettingsSaved();
-      // Re-fetch models with newly saved key if not already done
-      fetchModels(apiKey.trim() || undefined);
       setTimeout(() => setSavedSuccess(false), 3000);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      alert('Failed to save settings: ' + (err.message || err));
     } finally {
       setIsSaving(false);
     }
   };
 
-  return (
-    <div style={{
-      position: 'fixed',
-      inset: 0,
-      background: 'rgba(5, 8, 14, 0.8)',
-      backdropFilter: 'blur(8px)',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      zIndex: 1000,
-      padding: '20px'
-    }}>
-      <div className="glass-panel animate-fade-in" style={{
-        width: '100%',
-        maxWidth: '580px',
-        borderRadius: '16px',
-        padding: '28px',
-        boxShadow: '0 20px 50px rgba(0,0,0,0.8)',
-        border: '1px solid var(--border-medium)'
-      }}>
+  return createPortal(
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        backgroundColor: 'rgba(5, 8, 16, 0.85)',
+        backdropFilter: 'blur(8px)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 9999,
+        padding: '24px',
+        overflowY: 'auto',
+      }}
+      onClick={onClose}
+    >
+      <div
+        className="glass-panel animate-fade-in"
+        style={{
+          width: '100%',
+          maxWidth: '580px',
+          maxHeight: 'min(90vh, 780px)',
+          borderRadius: '16px',
+          padding: '28px',
+          boxShadow: '0 24px 60px rgba(0,0,0,0.85)',
+          border: '1px solid var(--border-medium)',
+          background: 'var(--bg-card)',
+          margin: 'auto',
+          overflowY: 'auto',
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <div style={{
-              width: '36px',
-              height: '36px',
-              borderRadius: '8px',
-              background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: '#0f1420'
-            }}>
+            <div
+              style={{
+                width: '36px',
+                height: '36px',
+                borderRadius: '8px',
+                background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#0f1420',
+              }}
+            >
               <Sparkles size={20} />
             </div>
             <div>
-              <h3 style={{ fontSize: '1.25rem' }}>Campaign Settings &amp; AI Engine</h3>
-              <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Configure Gemini Co-DM and Local Network sharing</p>
+              <h3 style={{ fontSize: '1.25rem', margin: 0, fontWeight: 700 }}>Campaign Settings &amp; AI Engine</h3>
+              <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', margin: 0 }}>Configure Gemini Co-DM and Local Network sharing</p>
             </div>
           </div>
           <button onClick={onClose} className="btn btn-ghost" style={{ padding: '6px' }}>
@@ -177,7 +234,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                 style={{ fontSize: '0.75rem', padding: '2px 8px', color: 'var(--color-gold)' }}
                 title="Query server to fetch available models for this key"
               >
-                <RefreshCw size={13} className={isFetchingModels ? 'pulse-gold' : ''} />
+                <RefreshCw size={13} className={isFetchingModels ? 'animate-spin' : ''} />
                 {isFetchingModels ? 'Querying...' : 'Query Models'}
               </button>
             </div>
@@ -196,7 +253,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                   borderRadius: '8px',
                   color: 'var(--text-primary)',
                   fontSize: '0.9rem',
-                  outline: 'none'
+                  outline: 'none',
                 }}
               />
               <Key size={16} style={{ position: 'absolute', left: '12px', top: '13px', color: 'var(--text-muted)' }} />
@@ -206,8 +263,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
             <div style={{ marginTop: '8px', fontSize: '0.78rem' }}>
               {isFetchingModels && (
                 <span style={{ color: 'var(--color-gold)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <RefreshCw size={13} style={{ animation: 'spin 1s linear infinite' }} />
-                  Querying Gemini server for available models...
+                  <RefreshCw size={13} className="animate-spin" />
+                  Querying server for available models...
                 </span>
               )}
               {!isFetchingModels && modelQuerySource === 'api' && (
@@ -226,11 +283,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                 <span style={{ color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '6px' }}>
                   {settings?.gemini_api_key_configured ? (
                     <span style={{ color: 'var(--color-emerald)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <Check size={14} /> Key saved. Enter new key or click Query Models to refresh.
+                      <Check size={14} /> Key configured on server.
                     </span>
                   ) : (
                     <span style={{ color: 'var(--color-gold)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <ShieldAlert size={14} /> Offline guidance mode is active until key is entered.
+                      <ShieldAlert size={14} /> Enter key to unlock live Gemini models and Co-DM features.
                     </span>
                   )}
                 </span>
@@ -247,7 +304,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
               </label>
               {modelQuerySource === 'api' && (
                 <span style={{ fontSize: '0.72rem', background: 'var(--status-completed-bg)', color: 'var(--status-completed-text)', padding: '2px 6px', borderRadius: '4px', border: '1px solid var(--status-completed-border)' }}>
-                  Live API List
+                  Server Model List
                 </span>
               )}
             </div>
@@ -255,6 +312,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
             <select
               value={model}
               onChange={(e) => setModel(e.target.value)}
+              disabled={isFetchingModels && availableModels.length === 0}
               style={{
                 width: '100%',
                 padding: '10px 14px',
@@ -263,12 +321,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                 borderRadius: '8px',
                 color: 'var(--text-primary)',
                 fontSize: '0.9rem',
-                outline: 'none'
+                outline: 'none',
               }}
             >
+              {availableModels.length === 0 && !model && (
+                <option value="">Fetching models from server...</option>
+              )}
               {availableModels.map((m) => (
                 <option key={m.id} value={m.id}>
-                  {m.display_name} ({m.id}) {m.description ? `• ${m.description.slice(0, 45)}...` : ''}
+                  {m.display_name} ({m.id}) {m.description ? `• ${m.description.slice(0, 50)}...` : ''}
                 </option>
               ))}
               <option value="custom">Custom Model Identifier...</option>
@@ -277,7 +338,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
             {model === 'custom' && (
               <input
                 type="text"
-                placeholder="e.g. gemini-3.8-flash or custom endpoint name"
+                placeholder="Enter model identifier (e.g. gemini-2.5-flash or custom endpoint)"
                 value={customModel}
                 onChange={(e) => setCustomModel(e.target.value)}
                 style={{
@@ -289,37 +350,41 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                   borderRadius: '8px',
                   color: 'var(--text-primary)',
                   fontSize: '0.9rem',
-                  outline: 'none'
+                  outline: 'none',
                 }}
               />
             )}
           </div>
 
           {/* Local LAN Sharing Info */}
-          <div style={{
-            background: 'var(--bg-surface)',
-            border: '1px solid var(--border-medium)',
-            borderRadius: '10px',
-            padding: '14px',
-            marginBottom: '24px'
-          }}>
+          <div
+            style={{
+              background: 'var(--bg-surface)',
+              border: '1px solid var(--border-medium)',
+              borderRadius: '10px',
+              padding: '14px',
+              marginBottom: '24px',
+            }}
+          >
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
               <Server size={16} style={{ color: 'var(--color-arcane-cyan)' }} />
               <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>Local Network (LAN) Player Access</span>
             </div>
-            <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+            <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.5, margin: 0 }}>
               The server listens on all interfaces (<code>0.0.0.0</code>). Players on your Wi-Fi can open:
             </p>
-            <div style={{
-              background: 'var(--bg-card)',
-              border: '1px solid var(--border-subtle)',
-              padding: '6px 10px',
-              borderRadius: '6px',
-              fontFamily: 'var(--font-mono)',
-              fontSize: '0.8rem',
-              color: 'var(--text-gold)',
-              marginTop: '6px'
-            }}>
+            <div
+              style={{
+                background: 'var(--bg-card)',
+                border: '1px solid var(--border-subtle)',
+                padding: '6px 10px',
+                borderRadius: '6px',
+                fontFamily: 'var(--font-mono)',
+                fontSize: '0.8rem',
+                color: 'var(--text-gold)',
+                marginTop: '6px',
+              }}
+            >
               http://&lt;your-local-ip&gt;:3000/player
             </div>
           </div>
@@ -339,6 +404,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
           </div>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };

@@ -3,7 +3,9 @@ import {
   BookOpen,
   Compass,
   Download,
+  Edit2,
   Eye,
+  FolderOpen,
   Moon,
   Palette,
   Plus,
@@ -17,7 +19,8 @@ import {
   X,
 } from 'lucide-react';
 import { Campaign, NodeItem } from '../types';
-import { exportCampaign, importCampaign, searchNodes } from '../api';
+import { exportCampaign, importCampaign, searchNodes, updateCampaign } from '../api';
+import { CampaignManagerModal } from './CampaignManagerModal';
 
 export type AppTheme = 'obsidian' | 'sunlight' | 'parchment' | 'underdark';
 
@@ -33,6 +36,7 @@ interface NavbarProps {
   activeCampaignId: string;
   onSelectCampaign: (id: string) => void;
   onCreateCampaign: () => void;
+  onRefreshCampaigns: () => void;
   isPlayerMode: boolean;
   onTogglePlayerMode: () => void;
   onOpenSettings: () => void;
@@ -46,6 +50,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   activeCampaignId,
   onSelectCampaign,
   onCreateCampaign,
+  onRefreshCampaigns,
   isPlayerMode,
   onTogglePlayerMode,
   onOpenSettings,
@@ -75,6 +80,19 @@ export const Navbar: React.FC<NavbarProps> = ({
   };
 
   const activeCampaign = campaigns.find((c) => c.id === activeCampaignId);
+  const [isCampaignManagerOpen, setIsCampaignManagerOpen] = useState(false);
+
+  const handleQuickRename = async () => {
+    if (!activeCampaign) return;
+    const newName = window.prompt(`Rename campaign "${activeCampaign.name}":`, activeCampaign.name);
+    if (!newName || !newName.trim() || newName.trim() === activeCampaign.name) return;
+    try {
+      await updateCampaign(activeCampaign.id, { name: newName.trim() });
+      onRefreshCampaigns();
+    } catch (err) {
+      alert('Failed to rename campaign: ' + err);
+    }
+  };
 
   const handleSearch = async (q: string) => {
     setSearchQuery(q);
@@ -187,11 +205,25 @@ export const Navbar: React.FC<NavbarProps> = ({
             ))}
           </select>
           <button
+            onClick={handleQuickRename}
+            title="Rename Active Campaign"
+            style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', display: 'flex', padding: '2px' }}
+          >
+            <Edit2 size={13} />
+          </button>
+          <button
             onClick={onCreateCampaign}
             title="Create New Campaign"
-            style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', display: 'flex' }}
+            style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', display: 'flex', padding: '2px' }}
           >
-            <Plus size={16} />
+            <Plus size={15} />
+          </button>
+          <button
+            onClick={() => setIsCampaignManagerOpen(true)}
+            title="Manage All Campaigns (CRUD, Rename, Delete, Switch)"
+            style={{ background: 'none', border: 'none', color: 'var(--color-gold)', cursor: 'pointer', display: 'flex', padding: '2px' }}
+          >
+            <FolderOpen size={14} />
           </button>
         </div>
       </div>
@@ -408,6 +440,16 @@ export const Navbar: React.FC<NavbarProps> = ({
           <Settings size={18} />
         </button>
       </div>
+
+      {/* Campaign Manager Modal */}
+      <CampaignManagerModal
+        isOpen={isCampaignManagerOpen}
+        onClose={() => setIsCampaignManagerOpen(false)}
+        campaigns={campaigns}
+        activeCampaignId={activeCampaignId}
+        onSelectCampaign={onSelectCampaign}
+        onRefreshCampaigns={onRefreshCampaigns}
+      />
     </header>
   );
 };

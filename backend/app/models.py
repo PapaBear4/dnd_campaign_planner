@@ -57,6 +57,8 @@ class CampaignResponse(CampaignBase):
     created_at: str
     updated_at: str
 
+LoreStatus = Literal["fact", "suspicion", "rumor"]
+
 # --- Node Models ---
 class NodeBase(BaseModel):
     type: NodeType
@@ -67,6 +69,8 @@ class NodeBase(BaseModel):
     data_json: Optional[Dict[str, Any]] = Field(default_factory=dict)
     revealed_to_players: Optional[bool] = False
     is_canon: Optional[bool] = True
+    confidence: Optional[float] = Field(default=1.0, ge=0.0, le=1.0)
+    lore_status: Optional[LoreStatus] = "fact"
     tags: Optional[List[str]] = Field(default_factory=list)
     sort_order: Optional[int] = 0
 
@@ -82,6 +86,8 @@ class NodeUpdate(BaseModel):
     data_json: Optional[Dict[str, Any]] = None
     revealed_to_players: Optional[bool] = None
     is_canon: Optional[bool] = None
+    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    lore_status: Optional[LoreStatus] = None
     tags: Optional[List[str]] = None
     sort_order: Optional[int] = None
 
@@ -100,6 +106,8 @@ class EdgeBase(BaseModel):
     metadata_json: Optional[Dict[str, Any]] = Field(default_factory=dict)
     revealed_to_players: Optional[bool] = False
     is_canon: Optional[bool] = True
+    confidence: Optional[float] = Field(default=1.0, ge=0.0, le=1.0)
+    lore_status: Optional[LoreStatus] = "fact"
 
 class EdgeCreate(EdgeBase):
     campaign_id: Optional[str] = None
@@ -110,6 +118,8 @@ class EdgeUpdate(BaseModel):
     metadata_json: Optional[Dict[str, Any]] = None
     revealed_to_players: Optional[bool] = None
     is_canon: Optional[bool] = None
+    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    lore_status: Optional[LoreStatus] = None
 
 class EdgeResponse(EdgeBase):
     id: str

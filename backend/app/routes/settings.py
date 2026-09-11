@@ -1,13 +1,18 @@
 from fastapi import APIRouter
 from app.models import SettingsResponse, SettingsUpdate
-from app.services import graph_service
+from app.services import graph_service, ai_agent_service
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 @router.get("", response_model=SettingsResponse)
 def get_settings():
     api_key = graph_service.get_setting("gemini_api_key", "")
-    model = graph_service.get_setting("gemini_model", "gemini-2.5-flash")
+    model = graph_service.get_setting("gemini_model", "").strip()
+    if not model:
+        discovered = ai_agent_service.list_available_gemini_models(api_key=api_key or None)
+        if discovered.get("models") and len(discovered["models"]) > 0:
+            model = discovered["models"][0]["id"]
+            graph_service.set_setting("gemini_model", model)
     active_cid = graph_service.get_setting("active_campaign_id", "default-campaign")
 
     return SettingsResponse(

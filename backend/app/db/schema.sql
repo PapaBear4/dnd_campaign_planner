@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS nodes (
     data_json TEXT DEFAULT '{}',
     revealed_to_players INTEGER NOT NULL DEFAULT 0,
     is_canon INTEGER NOT NULL DEFAULT 1,
+    confidence REAL NOT NULL DEFAULT 1.0,
+    lore_status TEXT NOT NULL DEFAULT 'fact', -- fact, suspicion, rumor
     tags TEXT DEFAULT '[]',
     sort_order INTEGER DEFAULT 0,
     created_at TEXT NOT NULL,
@@ -30,6 +32,7 @@ CREATE INDEX IF NOT EXISTS idx_nodes_campaign ON nodes(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(campaign_id, type);
 CREATE INDEX IF NOT EXISTS idx_nodes_revealed ON nodes(campaign_id, revealed_to_players);
 CREATE INDEX IF NOT EXISTS idx_nodes_canon ON nodes(campaign_id, is_canon);
+CREATE INDEX IF NOT EXISTS idx_nodes_lore_status ON nodes(campaign_id, lore_status);
 
 CREATE TABLE IF NOT EXISTS edges (
     id TEXT PRIMARY KEY,
@@ -41,6 +44,8 @@ CREATE TABLE IF NOT EXISTS edges (
     metadata_json TEXT DEFAULT '{}',
     revealed_to_players INTEGER NOT NULL DEFAULT 0,
     is_canon INTEGER NOT NULL DEFAULT 1,
+    confidence REAL NOT NULL DEFAULT 1.0,
+    lore_status TEXT NOT NULL DEFAULT 'fact', -- fact, suspicion, rumor
     created_at TEXT NOT NULL
 );
 

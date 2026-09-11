@@ -94,6 +94,15 @@ const SAMPLE_SESSION_SUMMARY = `Session 1 Debrief & Summary:
 - Fallout & State Change: Meepo became a friendly guide, giving the party an old brass nursery key and agreeing to lead them safely past the trap hall to Queen Yusdrayl.
 - Stopping Point / Cliffhanger: The party completed a short rest in the guard post and stopped right outside the double doors of Queen Yusdrayl's throne chamber.`;
 
+const DECOMP_TIPS = [
+  'Arcane Weaver reads chapter PDFs in semantic chunks to thoroughly capture keyed rooms, secrets, and monster rosters.',
+  'Every extracted entity is classified by epistemic certainty: Fact (Canon), Suspicion (Clue/Deduction), or Rumor (Tavern Tale).',
+  'Lossless De-confliction cross-references existing campaign nodes so no canon lore or player notes get overwritten.',
+  'Deep LLM decomposition on multi-page chapters typically requires 20-50 seconds to complete all reasoning passes.',
+  'You can interactively steer the draft using the dialogue box to split quests, scale encounters, or modify lore before committing.',
+  'Extracted relationships are automatically mapped into graph edges linking quests, locations, factions, and creatures.',
+];
+
 export const IngestionHub: React.FC<IngestionHubProps> = ({
   campaignId,
   onRefresh,
@@ -164,6 +173,42 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
   const [feedbackInput, setFeedbackInput] = useState<string>('');
   const [isRefining, setIsRefining] = useState<boolean>(false);
   const chatBottomRef = useRef<HTMLDivElement | null>(null);
+
+  // Live Decomposition Progress Feedback
+  const [decompElapsedSeconds, setDecompElapsedSeconds] = useState<number>(0);
+  const [decompTipIndex, setDecompTipIndex] = useState<number>(0);
+  const [decompError, setDecompError] = useState<string | null>(null);
+  const [decompStep, setDecompStep] = useState<number>(1);
+
+  useEffect(() => {
+    let interval: any = null;
+    let tipInterval: any = null;
+    let stepInterval: any = null;
+
+    if (isDecomposing) {
+      setDecompElapsedSeconds(0);
+      setDecompError(null);
+      setDecompStep(1);
+
+      interval = setInterval(() => {
+        setDecompElapsedSeconds((prev) => prev + 1);
+      }, 1000);
+
+      tipInterval = setInterval(() => {
+        setDecompTipIndex((prev) => (prev + 1) % DECOMP_TIPS.length);
+      }, 4500);
+
+      stepInterval = setInterval(() => {
+        setDecompStep((prev) => (prev < 4 ? prev + 1 : 4));
+      }, 7000);
+    }
+
+    return () => {
+      if (interval) clearInterval(interval);
+      if (tipInterval) clearInterval(tipInterval);
+      if (stepInterval) clearInterval(stepInterval);
+    };
+  }, [isDecomposing]);
 
   // ==========================================
   // 2. SESSION TRANSCRIPT ADAPTATION STATE
@@ -434,6 +479,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
     setIsDecomposing(true);
     setCommitStatus('');
     setChunksProcessed(0);
+    setDecompError(null);
     try {
       const res = await agentDecomposeAdventure({
         filename: uploadedFilename || undefined,
@@ -446,9 +492,19 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
         exhaustive: exhaustiveMode,
       });
 
+      if (res.error) {
+        setDecompError(res.error);
+      }
+
       const rawNodes = res.extracted_nodes || [];
       const edges = res.extracted_edges || [];
       const processedNodes = processIncomingNodes(rawNodes);
+
+      if (rawNodes.length === 0 && !res.error) {
+        setDecompError(
+          `No entities were extracted from the document. This typically occurs if the selected page range (${startPage}-${endPage}) contains mostly artwork or tables without recognizable narrative text, or if the AI model encountered a temporary timeout. Try focusing on a specific 5-10 page chapter slice or checking your Gemini model in Settings.`
+        );
+      }
 
       setOverviewSummary(res.overview_summary || '');
       setExtractedNodes(processedNodes);
@@ -456,17 +512,19 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
       setSelectedNodeIndices(new Set(processedNodes.map((_: any, i: number) => i)));
       if (res.chunks_processed) setChunksProcessed(res.chunks_processed);
 
-      setSteeringConversation([
-        {
-          id: `msg-${Date.now()}`,
-          role: 'assistant',
-          content: res.overview_summary || 'I have decomposed the chapter into draft campaign nodes and relationships. Review below and reply to steer or refine any elements.',
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          nodeCount: processedNodes.length,
-        },
-      ]);
+      if (processedNodes.length > 0) {
+        setSteeringConversation([
+          {
+            id: `msg-${Date.now()}`,
+            role: 'assistant',
+            content: res.overview_summary || 'I have decomposed the chapter into draft campaign nodes and relationships with epistemic confidence tags (Facts, Suspicions, Rumors). Review below and reply to steer or refine any elements.',
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            nodeCount: processedNodes.length,
+          },
+        ]);
+      }
     } catch (err: any) {
-      alert('Decomposition failed: ' + err.message);
+      setDecompError(`Decomposition failed: ${err.message || 'Unknown network or server error'}`);
     } finally {
       setIsDecomposing(false);
     }
@@ -486,7 +544,30 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
         ...n,
         action: defaultAction,
         merge_target_id: n.merge_target_id || n.matched_node_id || null,
+        lore_status: n.lore_status || 'fact',
+        confidence: n.confidence !== undefined ? n.confidence : (n.lore_status === 'rumor' ? 0.4 : n.lore_status === 'suspicion' ? 0.75 : 1.0),
       };
+    });
+  };
+
+  const handleCycleLoreStatus = (index: number) => {
+    setExtractedNodes((prev) => {
+      const next = [...prev];
+      const cur = next[index].lore_status || 'fact';
+      let nextStatus: 'fact' | 'suspicion' | 'rumor' = 'fact';
+      let nextConf = 1.0;
+      if (cur === 'fact') {
+        nextStatus = 'suspicion';
+        nextConf = 0.75;
+      } else if (cur === 'suspicion') {
+        nextStatus = 'rumor';
+        nextConf = 0.4;
+      } else {
+        nextStatus = 'fact';
+        nextConf = 1.0;
+      }
+      next[index] = { ...next[index], lore_status: nextStatus, confidence: nextConf };
+      return next;
     });
   };
 
@@ -1963,6 +2044,187 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                 background: 'var(--bg-card)',
               }}
             >
+              {/* Diagnostic Error Banner */}
+              {decompError && (
+                <div
+                  className="glass-panel animate-fade-in"
+                  style={{
+                    padding: '14px 16px',
+                    borderRadius: '8px',
+                    background: 'rgba(239, 68, 68, 0.12)',
+                    border: '1px solid rgba(239, 68, 68, 0.5)',
+                    marginBottom: '16px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '8px',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#f87171', fontWeight: 700, fontSize: '0.88rem' }}>
+                      <AlertTriangle size={18} />
+                      <span>Decomposition Diagnostics &amp; Feedback</span>
+                    </div>
+                    <button
+                      onClick={() => setDecompError(null)}
+                      className="btn btn-ghost"
+                      style={{ padding: '2px 6px', fontSize: '0.72rem', color: '#f87171' }}
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                  <p style={{ fontSize: '0.78rem', color: 'var(--text-primary)', margin: 0, lineHeight: 1.4 }}>
+                    {decompError}
+                  </p>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      onClick={handleRunDecomposition}
+                      className="btn btn-secondary"
+                      style={{ fontSize: '0.74rem', padding: '4px 10px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                    >
+                      <RefreshCw size={12} /> Retry Scan
+                    </button>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                      Note: The Gemini model has been set to <code>gemini-2.5-flash</code> in Settings. You can also try narrowing the page range to a 5-10 page section.
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Live Decomposition Progress Chamber */}
+              {isDecomposing && (
+                <div
+                  className="glass-panel animate-fade-in"
+                  style={{
+                    padding: '16px 18px',
+                    borderRadius: '10px',
+                    background: 'linear-gradient(180deg, rgba(245, 158, 11, 0.08) 0%, rgba(17, 24, 39, 0.6) 100%)',
+                    border: '1px solid var(--color-gold)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '12px',
+                    marginBottom: '16px',
+                    boxShadow: '0 0 25px rgba(245, 158, 11, 0.12)',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <div
+                        style={{
+                          width: '32px',
+                          height: '32px',
+                          borderRadius: '50%',
+                          background: 'rgba(245, 158, 11, 0.18)',
+                          border: '1px solid var(--color-gold)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          color: 'var(--color-gold)',
+                        }}
+                      >
+                        <Sparkles size={18} className="animate-spin" />
+                      </div>
+                      <div>
+                        <h4 style={{ fontSize: '0.92rem', fontWeight: 700, color: 'var(--color-gold)', margin: 0 }}>
+                          Arcane LLM Decomposing Document
+                        </h4>
+                        <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                          Extracting NPCs, encounters, quests, locations, and epistemic lore...
+                        </span>
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        background: 'rgba(0, 0, 0, 0.35)',
+                        padding: '4px 10px',
+                        borderRadius: '20px',
+                        border: '1px solid var(--border-medium)',
+                        fontSize: '0.76rem',
+                        color: 'var(--color-gold)',
+                        fontWeight: 700,
+                      }}
+                    >
+                      <Clock size={12} />
+                      <span>{Math.floor(decompElapsedSeconds / 60).toString().padStart(2, '0')}:{(decompElapsedSeconds % 60).toString().padStart(2, '0')}</span>
+                    </div>
+                  </div>
+
+                  {/* Stepper Pipeline */}
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(4, 1fr)',
+                      gap: '6px',
+                      padding: '8px',
+                      background: 'rgba(0, 0, 0, 0.3)',
+                      borderRadius: '8px',
+                      border: '1px solid var(--border-subtle)',
+                    }}
+                  >
+                    {[
+                      { step: 1, label: '1. Slicing Pages', detail: `pp. ${startPage}-${endPage}` },
+                      { step: 2, label: '2. Gemini Reasoning', detail: 'Entity Extraction' },
+                      { step: 3, label: '3. Epistemic Lore', detail: 'Fact / Suspicion / Rumor' },
+                      { step: 4, label: '4. De-confliction', detail: 'Lossless Merge' },
+                    ].map((s) => {
+                      const isActive = decompStep === s.step;
+                      const isDone = decompStep > s.step;
+                      return (
+                        <div
+                          key={s.step}
+                          style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '2px',
+                            padding: '5px 6px',
+                            borderRadius: '6px',
+                            background: isActive ? 'rgba(245, 158, 11, 0.15)' : isDone ? 'rgba(16, 185, 129, 0.12)' : 'transparent',
+                            border: `1px solid ${isActive ? 'var(--color-gold)' : isDone ? '#10b981' : 'transparent'}`,
+                            transition: 'all 0.3s ease',
+                          }}
+                        >
+                          <span
+                            style={{
+                              fontSize: '0.7rem',
+                              fontWeight: 700,
+                              color: isActive ? 'var(--color-gold)' : isDone ? '#34d399' : 'var(--text-muted)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                            }}
+                          >
+                            {isDone ? '✓' : isActive ? '⏳' : '○'} {s.label}
+                          </span>
+                          <span style={{ fontSize: '0.64rem', color: 'var(--text-muted)' }}>{s.detail}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Lore Tip Carousel */}
+                  <div
+                    style={{
+                      padding: '8px 12px',
+                      borderRadius: '6px',
+                      background: 'rgba(255, 255, 255, 0.03)',
+                      border: '1px solid var(--border-subtle)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                    }}
+                  >
+                    <Scroll size={14} style={{ color: 'var(--color-gold)', flexShrink: 0 }} />
+                    <div style={{ flex: 1, fontSize: '0.74rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                      <strong style={{ color: 'var(--color-gold)' }}>Lore Tip: </strong>
+                      <span>{DECOMP_TIPS[decompTipIndex]}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Action Bar */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
                 <div>
@@ -2321,24 +2583,47 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
               {/* Extracted Nodes List with Live Deconfliction & Selection Controls */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '440px', overflowY: 'auto' }}>
                 {extractedNodes.length === 0 ? (
-                  <div
-                    style={{
-                      height: '240px',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      color: 'var(--text-muted)',
-                      textAlign: 'center',
-                      gap: '8px',
-                    }}
-                  >
-                    <FileText size={36} style={{ color: 'var(--border-medium)' }} />
-                    <p style={{ fontSize: '0.85rem', color: 'var(--text-primary)' }}>No decomposition results yet.</p>
-                    <p style={{ fontSize: '0.75rem', maxWidth: '320px', color: 'var(--text-secondary)' }}>
-                      Upload an adventure chapter or stat sheet, choose your instructions, and click <strong>Decompose with Co-DM</strong>.
-                    </p>
-                  </div>
+                  isDecomposing ? (
+                    <div
+                      style={{
+                        height: '240px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: 'var(--text-muted)',
+                        textAlign: 'center',
+                        gap: '12px',
+                      }}
+                    >
+                      <Loader2 size={36} className="animate-spin" style={{ color: 'var(--color-gold)' }} />
+                      <p style={{ fontSize: '0.92rem', color: 'var(--text-primary)', fontWeight: 700, margin: 0 }}>
+                        Weaving Chapter Draft...
+                      </p>
+                      <p style={{ fontSize: '0.75rem', maxWidth: '340px', color: 'var(--text-secondary)', margin: 0 }}>
+                        Gemini is parsing adventure scenes, encounters, NPCs, and assigning epistemic certainty (Facts, Suspicions, Rumors).
+                      </p>
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        height: '240px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: 'var(--text-muted)',
+                        textAlign: 'center',
+                        gap: '8px',
+                      }}
+                    >
+                      <FileText size={36} style={{ color: 'var(--border-medium)' }} />
+                      <p style={{ fontSize: '0.85rem', color: 'var(--text-primary)' }}>No decomposition results yet.</p>
+                      <p style={{ fontSize: '0.75rem', maxWidth: '320px', color: 'var(--text-secondary)' }}>
+                        Upload an adventure chapter or stat sheet, choose your instructions, and click <strong>Decompose with Co-DM</strong>.
+                      </p>
+                    </div>
+                  )
                 ) : (() => {
                   const filteredList = extractedNodes
                     .map((n, idx) => ({ node: n, originalIdx: idx }))
@@ -2410,8 +2695,51 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                                 )}
                               </div>
 
-                              {/* Status Badge */}
-                              <div>
+                              {/* Status Badges & Lore Confidence */}
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                                {/* Epistemic Lore Status Pill */}
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleCycleLoreStatus(idx);
+                                  }}
+                                  title="Click to cycle Fact (100%) ➔ Suspicion (75%) ➔ Rumor (40%)"
+                                  className="btn btn-ghost"
+                                  style={{
+                                    padding: '2px 8px',
+                                    fontSize: '0.72rem',
+                                    fontWeight: 600,
+                                    borderRadius: '10px',
+                                    background:
+                                      n.lore_status === 'rumor'
+                                        ? 'rgba(236, 72, 153, 0.18)'
+                                        : n.lore_status === 'suspicion'
+                                        ? 'rgba(245, 158, 11, 0.18)'
+                                        : 'rgba(16, 185, 129, 0.18)',
+                                    color:
+                                      n.lore_status === 'rumor'
+                                        ? '#f472b6'
+                                        : n.lore_status === 'suspicion'
+                                        ? '#fbbf24'
+                                        : '#34d399',
+                                    border: `1px solid ${
+                                      n.lore_status === 'rumor'
+                                        ? '#ec4899'
+                                        : n.lore_status === 'suspicion'
+                                        ? '#f59e0b'
+                                        : '#10b981'
+                                    }`,
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  <span>{n.lore_status === 'rumor' ? '🗣️ Rumor' : n.lore_status === 'suspicion' ? '🔍 Suspicion' : '🔒 Fact'}</span>
+                                  <span style={{ opacity: 0.8 }}>({Math.round((n.confidence ?? 1.0) * 100)}%)</span>
+                                </button>
+
                                 {isExact && (
                                   <span
                                     style={{

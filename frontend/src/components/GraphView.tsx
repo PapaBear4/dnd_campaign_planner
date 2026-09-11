@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   Compass,
   Filter,
+  Layers,
   Link,
   Maximize,
   Minimize,
@@ -28,6 +29,7 @@ interface GraphViewProps {
   campaignId: string;
   onRefresh: () => void;
   onSelectNode: (node: NodeItem) => void;
+  onSwitchToBrowser?: () => void;
 }
 
 interface SimNode {
@@ -133,6 +135,7 @@ export const GraphView: React.FC<GraphViewProps> = ({
   campaignId,
   onRefresh,
   onSelectNode,
+  onSwitchToBrowser,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -156,10 +159,32 @@ export const GraphView: React.FC<GraphViewProps> = ({
     return () => ro.disconnect();
   }, []);
 
+  const ALL_GRAPH_TYPES: NodeType[] = [
+    'location',
+    'npc',
+    'monster',
+    'faction',
+    'item',
+    'clue',
+    'quest',
+    'pc',
+    'lore',
+  ];
+
   // Filter state
   const [selectedTypes, setSelectedTypes] = useState<Set<string>>(
-    new Set(['npc', 'location', 'monster', 'faction', 'item', 'clue', 'quest', 'pc', 'lore'])
+    new Set(ALL_GRAPH_TYPES)
   );
+
+  const handleSelectAllTypes = () => {
+    setSelectedTypes(new Set(ALL_GRAPH_TYPES));
+  };
+
+  const handleDeselectAllTypes = () => {
+    setSelectedTypes(new Set());
+    hoveredNodeRef.current = null;
+    draggedNodeRef.current = null;
+  };
 
   // Connect tool state
   const [showConnectModal, setShowConnectModal] = useState(false);
@@ -283,12 +308,24 @@ export const GraphView: React.FC<GraphViewProps> = ({
         const isConnectedToHover =
           hovered && (hovered.id === e.source.id || hovered.id === e.target.id);
 
+        const edgeLore = e.edge.lore_status || (e.edge.is_canon === false ? 'suspicion' : 'fact');
+        if (edgeLore === 'suspicion') {
+          ctx.setLineDash([5, 4]);
+        } else if (edgeLore === 'rumor') {
+          ctx.setLineDash([2, 4]);
+        } else {
+          ctx.setLineDash([]);
+        }
+
         ctx.beginPath();
         ctx.moveTo(e.source.x, e.source.y);
         ctx.lineTo(e.target.x, e.target.y);
-        ctx.strokeStyle = isConnectedToHover ? '#f59e0b' : 'rgba(100, 116, 139, 0.35)';
+        ctx.strokeStyle = isConnectedToHover
+          ? (edgeLore === 'rumor' ? '#fbbf24' : edgeLore === 'suspicion' ? '#c084fc' : '#f59e0b')
+          : (edgeLore === 'rumor' ? 'rgba(245, 158, 11, 0.45)' : edgeLore === 'suspicion' ? 'rgba(139, 92, 246, 0.45)' : 'rgba(100, 116, 139, 0.35)');
         ctx.lineWidth = isConnectedToHover ? 2.5 : 1.2;
         ctx.stroke();
+        ctx.setLineDash([]);
 
         // Edge label
         const mx = (e.source.x + e.target.x) / 2;
@@ -373,10 +410,11 @@ export const GraphView: React.FC<GraphViewProps> = ({
         ctx.stroke();
         ctx.setLineDash([]); // reset dash
 
-        // Canon status badge dot on top right
+        // Canon / Lore status badge dot on top right
+        const nodeLore = n.node.lore_status || (isCanon ? 'fact' : 'suspicion');
         ctx.beginPath();
         ctx.arc(n.x + n.radius * 0.72, n.y - n.radius * 0.72, 3.5, 0, Math.PI * 2);
-        ctx.fillStyle = isCanon ? '#f59e0b' : '#94a3b8';
+        ctx.fillStyle = nodeLore === 'fact' ? '#10b981' : nodeLore === 'suspicion' ? '#c084fc' : '#fbbf24';
         ctx.fill();
         ctx.lineWidth = 1;
         ctx.strokeStyle = '#0f172a';
@@ -547,6 +585,42 @@ export const GraphView: React.FC<GraphViewProps> = ({
 
         {/* Filter Pills - Single Line Tightened */}
         <div style={{ display: 'flex', gap: '3px', flexWrap: 'nowrap', alignItems: 'center', flexShrink: 0 }}>
+          {/* Quick Select All & Deselect All */}
+          <div style={{ display: 'flex', gap: '2px', marginRight: '4px' }}>
+            <button
+              onClick={handleSelectAllTypes}
+              title="Select All Entity Types"
+              style={{
+                background: selectedTypes.size === ALL_GRAPH_TYPES.length ? 'rgba(245, 158, 11, 0.2)' : 'var(--bg-surface)',
+                border: `1px solid ${selectedTypes.size === ALL_GRAPH_TYPES.length ? 'var(--color-gold)' : 'var(--border-subtle)'}`,
+                color: selectedTypes.size === ALL_GRAPH_TYPES.length ? 'var(--color-gold)' : 'var(--text-secondary)',
+                borderRadius: '4px',
+                padding: '2px 5px',
+                fontSize: '0.66rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              All
+            </button>
+            <button
+              onClick={handleDeselectAllTypes}
+              title="De-select All Entity Types (Clear Graph)"
+              style={{
+                background: selectedTypes.size === 0 ? 'rgba(239, 68, 68, 0.2)' : 'var(--bg-surface)',
+                border: `1px solid ${selectedTypes.size === 0 ? '#ef4444' : 'var(--border-subtle)'}`,
+                color: selectedTypes.size === 0 ? '#f87171' : 'var(--text-secondary)',
+                borderRadius: '4px',
+                padding: '2px 5px',
+                fontSize: '0.66rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              Clear
+            </button>
+          </div>
+
           {(['location', 'npc', 'monster', 'faction', 'item', 'clue', 'quest', 'pc', 'lore'] as NodeType[]).map((t) => {
             const isSelected = selectedTypes.has(t);
             return (
@@ -583,6 +657,16 @@ export const GraphView: React.FC<GraphViewProps> = ({
         <button onClick={() => setShowConnectModal(true)} className="btn btn-secondary" style={{ padding: '3px 8px', fontSize: '0.72rem', flexShrink: 0 }}>
           <Link size={12} /> Connect
         </button>
+        {onSwitchToBrowser && (
+          <button
+            onClick={onSwitchToBrowser}
+            className="btn btn-secondary"
+            title="Open Searchable Node Codex"
+            style={{ padding: '3px 8px', fontSize: '0.72rem', flexShrink: 0, display: 'flex', alignItems: 'center', gap: '4px' }}
+          >
+            <Layers size={12} /> Codex
+          </button>
+        )}
         <button onClick={handleResetView} className="btn btn-ghost" title="Reset View" style={{ padding: '4px', flexShrink: 0 }}>
           <RotateCcw size={14} />
         </button>

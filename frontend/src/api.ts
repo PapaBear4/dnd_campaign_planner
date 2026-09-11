@@ -35,6 +35,22 @@ export async function createCampaign(data: Partial<Campaign>): Promise<Campaign>
   return handleResponse<Campaign>(res);
 }
 
+export async function updateCampaign(campaignId: string, data: Partial<Campaign>): Promise<Campaign> {
+  const res = await fetch(`${BASE_URL}/api/campaigns/${campaignId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return handleResponse<Campaign>(res);
+}
+
+export async function deleteCampaign(campaignId: string): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/campaigns/${campaignId}`, {
+    method: 'DELETE',
+  });
+  return handleResponse<any>(res);
+}
+
 export async function exportCampaign(campaignId: string): Promise<any> {
   const res = await fetch(`${BASE_URL}/api/campaigns/${campaignId}/export`);
   return handleResponse<any>(res);
@@ -387,6 +403,7 @@ export async function agentDecomposeAdventure(data: {
   extracted_edges: any[];
   model: string;
   chunks_processed?: number;
+  error?: string;
 }> {
   const res = await fetch(`${BASE_URL}/api/agent/decompose`, {
     method: 'POST',

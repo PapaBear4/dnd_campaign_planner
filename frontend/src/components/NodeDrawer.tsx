@@ -14,7 +14,7 @@ import {
   X,
 } from 'lucide-react';
 import { deleteNode, toggleNodeCanon, toggleNodeReveal, updateNode } from '../api';
-import { NodeItem, NodeType } from '../types';
+import { NodeItem, NodeType, LoreStatus } from '../types';
 import {
   Alignment,
   CreatureRole,
@@ -59,6 +59,8 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
   const [content, setContent] = useState(node.content_markdown || '');
   const [revealed, setRevealed] = useState(node.revealed_to_players);
   const [isCanon, setIsCanon] = useState<boolean>(node.is_canon ?? true);
+  const [loreStatus, setLoreStatus] = useState<LoreStatus>(node.lore_status || 'fact');
+  const [confidence, setConfidence] = useState<number>(node.confidence ?? 1.0);
   const [isSaving, setIsSaving] = useState(false);
 
   // 5e Classification State
@@ -85,6 +87,8 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
     setContent(node.content_markdown || '');
     setRevealed(node.revealed_to_players);
     setIsCanon(node.is_canon ?? true);
+    setLoreStatus(node.lore_status || 'fact');
+    setConfidence(node.confidence ?? 1.0);
 
     setRole(getCreatureRole(node));
     setAlignment(getCreatureAlignment(node));
@@ -157,6 +161,8 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
         data_json: dataJson,
         revealed_to_players: revealed,
         is_canon: isCanon,
+        confidence,
+        lore_status: loreStatus,
       });
       setIsSaving(false);
       onRefresh();
@@ -265,6 +271,96 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
         </div>
 
         <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', flex: 1, gap: '14px' }}>
+          {/* Epistemic Lore Status & Confidence */}
+          <div
+            style={{
+              padding: '12px',
+              borderRadius: '8px',
+              background: 'rgba(255, 255, 255, 0.03)',
+              border: '1px solid var(--border-medium)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '10px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--color-gold)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                📜 Epistemic Status &amp; Confidence Factor
+              </span>
+              <span
+                style={{
+                  fontSize: '0.75rem',
+                  fontWeight: 700,
+                  color: loreStatus === 'fact' ? '#10b981' : loreStatus === 'suspicion' ? '#f59e0b' : '#ec4899',
+                }}
+              >
+                {Math.round(confidence * 100)}% Certainty
+              </span>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px' }}>
+              {(['fact', 'suspicion', 'rumor'] as const).map((s) => {
+                const active = loreStatus === s;
+                const meta = {
+                  fact: { label: 'Fact / Canon', icon: '🔒', color: '#10b981', defaultConf: 1.0 },
+                  suspicion: { label: 'Suspicion', icon: '🔍', color: '#f59e0b', defaultConf: 0.75 },
+                  rumor: { label: 'Rumor / Myth', icon: '🗣️', color: '#ec4899', defaultConf: 0.4 },
+                }[s];
+                return (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => {
+                      setLoreStatus(s);
+                      setConfidence(meta.defaultConf);
+                    }}
+                    className="btn"
+                    style={{
+                      padding: '6px 8px',
+                      fontSize: '0.74rem',
+                      fontWeight: active ? 700 : 500,
+                      background: active ? `${meta.color}25` : 'rgba(255, 255, 255, 0.04)',
+                      border: `1px solid ${active ? meta.color : 'var(--border-subtle)'}`,
+                      color: active ? meta.color : 'var(--text-secondary)',
+                      borderRadius: '6px',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '4px',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    <span>{meta.icon}</span>
+                    <span>{meta.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>Confidence:</span>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                value={confidence}
+                onChange={(e) => {
+                  const val = parseFloat(e.target.value);
+                  setConfidence(val);
+                  if (val >= 0.85) setLoreStatus('fact');
+                  else if (val >= 0.55) setLoreStatus('suspicion');
+                  else setLoreStatus('rumor');
+                }}
+                style={{ flex: 1, accentColor: 'var(--color-gold)', cursor: 'pointer' }}
+              />
+              <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', width: '36px', textAlign: 'right', fontWeight: 600 }}>
+                {Math.round(confidence * 100)}%
+              </span>
+            </div>
+          </div>
+
           <div>
             <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
               Title

@@ -41,6 +41,8 @@ export type RelationType =
   | 'recorded_in'
   | 'custom';
 
+export type LoreStatus = 'fact' | 'suspicion' | 'rumor';
+
 export interface Campaign {
   id: string;
   name: string;
@@ -61,6 +63,8 @@ export interface NodeItem {
   data_json?: Record<string, any>;
   revealed_to_players: boolean;
   is_canon?: boolean;
+  confidence?: number;
+  lore_status?: LoreStatus;
   tags?: string[];
   sort_order: number;
   created_at: string;
@@ -77,6 +81,8 @@ export interface EdgeItem {
   metadata_json?: Record<string, any>;
   revealed_to_players: boolean;
   is_canon?: boolean;
+  confidence?: number;
+  lore_status?: LoreStatus;
   created_at: string;
 }
 
@@ -154,6 +160,9 @@ export interface ExtractedDraftNode {
   content_markdown?: string;
   data_json?: Record<string, any>;
   revealed_to_players?: boolean;
+  is_canon?: boolean;
+  confidence?: number;
+  lore_status?: LoreStatus;
   match_status?: DeconflictMatchStatus;
   matched_node_id?: string | null;
   matched_node_title?: string | null;
@@ -172,4 +181,6 @@ export interface ExtractedDraftEdge {
   metadata_json?: Record<string, any>;
   source_id?: string;
   target_id?: string;
+  confidence?: number;
+  lore_status?: LoreStatus;
 }

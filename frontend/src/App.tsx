@@ -4,6 +4,7 @@ import {
   Calendar,
   Compass,
   FileText,
+  Layers,
   MapPin,
   Plus,
   Share2,
@@ -18,19 +19,51 @@ import { HierarchyPlanner } from './components/HierarchyPlanner';
 import { IngestionHub } from './components/IngestionHub';
 import { MapStudio } from './components/MapStudio';
 import { Navbar } from './components/Navbar';
+import { NodeBrowser } from './components/NodeBrowser';
 import { NodeDrawer } from './components/NodeDrawer';
 import { PlayerPortal } from './components/PlayerPortal';
 import { SettingsModal } from './components/SettingsModal';
 import { StatBlockLab } from './components/StatBlockLab';
 import { Campaign, GraphData, HierarchyItem, NodeItem } from './types';
 
+export type DMTab = 'hierarchy' | 'graph' | 'nodes' | 'ingestion' | 'statblock' | 'map';
+
 export function App() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
-  const [activeCampaignId, setActiveCampaignId] = useState<string>('default-campaign');
-  const [isPlayerMode, setIsPlayerMode] = useState<boolean>(false);
 
-  // DM Workspace Tabs: hierarchy | graph | ingestion | statblock | map
-  const [activeTab, setActiveTab] = useState<'hierarchy' | 'graph' | 'ingestion' | 'statblock' | 'map'>('hierarchy');
+  // State Persistence: initialize from localStorage
+  const [activeCampaignId, setActiveCampaignId] = useState<string>(() => {
+    return localStorage.getItem('dnd_active_campaign_id') || 'default-campaign';
+  });
+  const [isPlayerMode, setIsPlayerMode] = useState<boolean>(() => {
+    const saved = localStorage.getItem('dnd_player_mode');
+    if (saved !== null) return saved === 'true';
+    return window.location.pathname.includes('/player');
+  });
+
+  // DM Workspace Tabs: hierarchy | graph | nodes | ingestion | statblock | map
+  const [activeTab, setActiveTab] = useState<DMTab>(() => {
+    const saved = localStorage.getItem('dnd_active_tab') as DMTab;
+    if (saved && ['hierarchy', 'graph', 'nodes', 'ingestion', 'statblock', 'map'].includes(saved)) {
+      return saved;
+    }
+    return 'hierarchy';
+  });
+
+  // Sync to localStorage on change
+  useEffect(() => {
+    if (activeCampaignId) {
+      localStorage.setItem('dnd_active_campaign_id', activeCampaignId);
+    }
+  }, [activeCampaignId]);
+
+  useEffect(() => {
+    localStorage.setItem('dnd_player_mode', String(isPlayerMode));
+  }, [isPlayerMode]);
+
+  useEffect(() => {
+    localStorage.setItem('dnd_active_tab', activeTab);
+  }, [activeTab]);
 
   // Co-DM Studio width (docked split-pane)
   const [coDmWidth, setCoDmWidth] = useState<number>(440);
@@ -46,13 +79,6 @@ export function App() {
   const [selectedNode, setSelectedNode] = useState<NodeItem | null>(null);
   const [focusedCoDMNode, setFocusedCoDMNode] = useState<NodeItem | null>(null);
 
-  // Check URL path on mount (e.g. /player route)
-  useEffect(() => {
-    if (window.location.pathname.includes('/player')) {
-      setIsPlayerMode(true);
-    }
-  }, []);
-
   const loadData = async (cid?: string) => {
     const targetCid = cid || activeCampaignId;
     try {
@@ -63,7 +89,7 @@ export function App() {
         getHierarchy(targetCid, false),
       ]);
       setCampaigns(cList);
-      if (cList.length > 0 && !cid) {
+      if (cList.length > 0) {
         const found = cList.find((c) => c.id === targetCid) || cList[0];
         setActiveCampaignId(found.id);
       }
@@ -131,6 +157,7 @@ export function App() {
         activeCampaignId={activeCampaignId}
         onSelectCampaign={handleSelectCampaign}
         onCreateCampaign={handleCreateCampaign}
+        onRefreshCampaigns={() => loadData()}
         isPlayerMode={isPlayerMode}
         onTogglePlayerMode={() => setIsPlayerMode(!isPlayerMode)}
         onOpenSettings={() => setIsSettingsOpen(true)}
@@ -187,6 +214,20 @@ export function App() {
                   }}
                 >
                   <Share2 size={16} /> Entity Knowledge Web
+                </button>
+
+                <button
+                  onClick={() => setActiveTab('nodes')}
+                  className={`btn ${activeTab === 'nodes' ? 'btn-primary' : 'btn-ghost'}`}
+                  style={{
+                    borderRadius: '0',
+                    borderBottom: activeTab === 'nodes' ? '2px solid var(--color-gold)' : '2px solid transparent',
+                    padding: '12px 16px',
+                    fontSize: '0.85rem',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  <Layers size={16} /> Node Codex ({graphData.nodes.length})
                 </button>
 
                 <button
@@ -255,6 +296,17 @@ export function App() {
                     campaignId={activeCampaignId}
                     onRefresh={loadData}
                     onSelectNode={(n) => setSelectedNode(n)}
+                    onSwitchToBrowser={() => setActiveTab('nodes')}
+                  />
+                )}
+
+                {activeTab === 'nodes' && (
+                  <NodeBrowser
+                    nodes={graphData.nodes}
+                    campaignId={activeCampaignId}
+                    onRefresh={loadData}
+                    onSelectNode={(n) => setSelectedNode(n)}
+                    onFocusCoDM={handleFocusCoDM}
                   />
                 )}
 
