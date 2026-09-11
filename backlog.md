@@ -1,0 +1,7 @@
+- Voice input
+- Different "modes" or views for the player portal (e.g. story view, map view, character view, etc.)
+-
+- different way to visualize the arcs and quests
+- remove monsters and items from the tiemline
+- need a better way to handle quest lines (and branches)
+- need to be able to nest locations like called out locations in a dungeon.

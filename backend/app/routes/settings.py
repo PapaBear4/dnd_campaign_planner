@@ -13,6 +13,9 @@ def get_settings():
         if discovered.get("models") and len(discovered["models"]) > 0:
             model = discovered["models"][0]["id"]
             graph_service.set_setting("gemini_model", model)
+        else:
+            model = "gemini-flash-latest"
+            graph_service.set_setting("gemini_model", model)
     active_cid = graph_service.get_setting("active_campaign_id", "default-campaign")
 
     return SettingsResponse(

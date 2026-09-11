@@ -39,6 +39,56 @@ def _init_uploads_table_if_needed():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_uploads_category ON uploaded_documents(category);")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_uploads_original_name ON uploaded_documents(campaign_id, original_name);")
 
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS uploaded_document_sections (
+                id TEXT PRIMARY KEY,
+                document_id TEXT NOT NULL REFERENCES uploaded_documents(id) ON DELETE CASCADE,
+                campaign_id TEXT,
+                section_title TEXT,
+                page_number INTEGER DEFAULT 1,
+                raw_text TEXT NOT NULL,
+                chunk_index INTEGER DEFAULT 0,
+                created_at TEXT NOT NULL
+            );
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_doc_sections_doc ON uploaded_document_sections(document_id);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_doc_sections_campaign ON uploaded_document_sections(campaign_id);")
+
+        try:
+            conn.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS fts_document_sections USING fts5(
+                    id UNINDEXED,
+                    document_id UNINDEXED,
+                    campaign_id UNINDEXED,
+                    section_title,
+                    raw_text,
+                    content='uploaded_document_sections',
+                    content_rowid='rowid'
+                );
+            """)
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS trg_doc_sections_insert AFTER INSERT ON uploaded_document_sections BEGIN
+                    INSERT INTO fts_document_sections(rowid, id, document_id, campaign_id, section_title, raw_text)
+                    VALUES (new.rowid, new.id, new.document_id, new.campaign_id, new.section_title, new.raw_text);
+                END;
+            """)
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS trg_doc_sections_delete AFTER DELETE ON uploaded_document_sections BEGIN
+                    INSERT INTO fts_document_sections(fts_document_sections, rowid, id, document_id, campaign_id, section_title, raw_text)
+                    VALUES ('delete', old.rowid, old.id, old.document_id, old.campaign_id, old.section_title, old.raw_text);
+                END;
+            """)
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS trg_doc_sections_update AFTER UPDATE ON uploaded_document_sections BEGIN
+                    INSERT INTO fts_document_sections(fts_document_sections, rowid, id, document_id, campaign_id, section_title, raw_text)
+                    VALUES ('delete', old.rowid, old.id, old.document_id, old.campaign_id, old.section_title, old.raw_text);
+                    INSERT INTO fts_document_sections(rowid, id, document_id, campaign_id, section_title, raw_text)
+                    VALUES (new.rowid, new.id, new.document_id, new.campaign_id, new.section_title, new.raw_text);
+                END;
+            """)
+        except Exception:
+            pass
+
 # Initialize table on import
 _init_uploads_table_if_needed()
 

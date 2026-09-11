@@ -150,7 +150,7 @@ export interface ChatThread {
 }
 
 export type DeconflictMatchStatus = 'new' | 'exact_match' | 'potential_match' | 'conflict';
-export type DeconflictAction = 'merge' | 'create';
+export type DeconflictAction = 'merge' | 'create' | 'skip' | 'other';
 
 export interface ExtractedDraftNode {
   type: NodeType;
@@ -168,6 +168,17 @@ export interface ExtractedDraftNode {
   matched_node_title?: string | null;
   match_confidence?: number;
   conflict_reason?: string | null;
+  dilemma_explanation?: string | null;
+  review_options?: string[];
+  needs_statblock?: boolean;
+  needs_statblock_prompt?: string;
+  base_template_title?: string | null;
+  inherited_template?: boolean;
+  source_page?: number | null;
+  source_doc?: string | null;
+  source_section?: string | null;
+  custom_directive?: string;
+  show_other_input?: boolean;
   merge_notes?: string | null;
   action?: DeconflictAction;
   merge_target_id?: string | null;
@@ -184,3 +195,77 @@ export interface ExtractedDraftEdge {
   confidence?: number;
   lore_status?: LoreStatus;
 }
+
+export interface DecompositionCluster {
+  id?: string;
+  cluster_index?: number;
+  start_page: number;
+  end_page: number;
+  worker_name?: string;
+  subagent_name?: string;
+  num_pages?: number;
+  label?: string;
+  status?: 'pending' | 'running' | 'completed' | 'failed' | string;
+  error?: string | null;
+}
+
+export interface SubAgentManifestItem {
+  id?: string;
+  name: string;
+  role: string;
+  target?: string;
+  assigned_scope?: string;
+  status: 'pending' | 'running' | 'completed' | 'failed' | string;
+  items_found?: number;
+  error?: string | null;
+}
+
+export interface AgentScratchpad {
+  agent_name: string;
+  role: string;
+  assigned_pages?: string;
+  rooms_inventoried?: string[];
+  npcs_identified?: string[];
+  monsters_spotted?: string[];
+  sidebars_captured?: string[];
+  traps_secrets?: string[];
+  notes?: string[];
+  timestamp?: string;
+}
+
+export interface DecompositionJob {
+  id: string;
+  campaign_id: string;
+  filename: string;
+  page_range: string;
+  status: string;
+  current_step: number;
+  clusters: DecompositionCluster[];
+  subagents: SubAgentManifestItem[];
+  scratchpads: Record<string, AgentScratchpad>;
+  draft_nodes: ExtractedDraftNode[];
+  draft_edges: ExtractedDraftEdge[];
+  qa_results?: any;
+  overview_summary?: string;
+  model_name?: string;
+  error_message?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DecomposeAdventureResponse {
+  job_id?: string;
+  clusters?: DecompositionCluster[];
+  subagents?: SubAgentManifestItem[];
+  scratchpads?: Record<string, AgentScratchpad>;
+  current_step?: number;
+  status?: string;
+  overview_summary?: string;
+  extracted_nodes: any[];
+  extracted_edges: any[];
+  qa_results?: any;
+  model?: string;
+  chunks_processed?: number;
+  error?: string;
+}
+

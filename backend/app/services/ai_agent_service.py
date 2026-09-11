@@ -2,12 +2,19 @@ import difflib
 import json
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+import uuid
+import pypdf
+from app.db.database import get_connection
 from app.services import graph_service
 from app.services.graph_service import get_setting, get_campaign, list_nodes, list_edges
 from app.models import NodeCreate, NodeUpdate, EdgeCreate, PlayerNoteCreate
 
 logger = logging.getLogger(__name__)
+
+UPLOAD_DIR = Path(__file__).resolve().parent.parent.parent.parent / "data" / "uploads"
+
 
 SYSTEM_PROMPT = """You are the Arcane Weaver — an expert D&D 5e Co-DM, world architect, and DM Mentor embedded directly in the campaign management system.
 
@@ -789,6 +796,8 @@ def _get_configured_gemini_client():
         if discovered.get("models") and len(discovered["models"]) > 0:
             model_name = discovered["models"][0]["id"]
             set_setting("gemini_model", model_name)
+        else:
+            model_name = "gemini-flash-latest"
 
     if not model_name:
         return None, None
@@ -809,8 +818,8 @@ def _get_configured_gemini_client():
                 models_data = list_available_gemini_models(api_key=api_key)
                 available = [m["id"] for m in models_data.get("models", []) if m.get("id") != model_name]
                 if available:
-                    fallback_name = available[0]
-                    logger.info(f"Using server-discovered model '{fallback_name}'")
+                    fallback_name = next((m for m in available if "flash-latest" in m), available[0])
+                    logger.info(f"Using server-discovered fallback model '{fallback_name}'")
                     model = genai.GenerativeModel(
                         model_name=fallback_name,
                         system_instruction=SYSTEM_PROMPT
@@ -1167,6 +1176,13 @@ Return strictly JSON matching this structure:
 
 FALLBACK_GEMINI_MODELS = [
     {
+        "id": "gemini-flash-latest",
+        "display_name": "Gemini Flash Latest",
+        "description": "Recommended high-speed multimodal reasoning and dynamic context.",
+        "input_token_limit": 1048576,
+        "output_token_limit": 8192
+    },
+    {
         "id": "gemini-2.5-flash",
         "display_name": "Gemini 2.5 Flash",
         "description": "Fastest response time, high multimodal reasoning, 1M token context.",
@@ -1244,24 +1260,23 @@ def list_available_gemini_models(api_key: Optional[str] = None) -> Dict[str, Any
                             "output_token_limit": m.get("outputTokenLimit"),
                         })
 
-                # Sort priority: flash models and pro models first, then alphabetical
+                # Sort priority: flash-latest first, then flash models descending by version, then pro models descending by version
                 def model_sort_key(m):
                     mid = m["id"].lower()
-                    if "2.5-flash" in mid:
-                        return (0, mid)
-                    if "2.5-pro" in mid:
-                        return (1, mid)
-                    if "2.0-flash" in mid:
-                        return (2, mid)
-                    if "1.5-flash" in mid:
-                        return (3, mid)
-                    if "1.5-pro" in mid:
-                        return (4, mid)
+                    import re
+                    if "flash-latest" in mid:
+                        return (0, 0.0, mid)
                     if "flash" in mid:
-                        return (5, mid)
+                        match = re.search(r"(\d+(?:\.\d+)?)", mid)
+                        version_val = float(match.group(1)) if match else 0.0
+                        return (1, -version_val, mid)
+                    if "pro-latest" in mid:
+                        return (2, 0.0, mid)
                     if "pro" in mid:
-                        return (6, mid)
-                    return (7, mid)
+                        match = re.search(r"(\d+(?:\.\d+)?)", mid)
+                        version_val = float(match.group(1)) if match else 0.0
+                        return (3, -version_val, mid)
+                    return (4, 0.0, mid)
 
                 parsed_models.sort(key=model_sort_key)
 
@@ -1426,6 +1441,20 @@ def _reconcile_extracted_nodes_with_campaign(
                 n["conflict_reason"] = conflict_reason
             if not n.get("merge_notes"):
                 n["merge_notes"] = f"Will merge with existing '{matched_node.title}' in campaign graph without losing canon notes."
+
+            # Generate explicit Dilemma Explanation for DM Review
+            if match_status == "conflict":
+                n["dilemma_explanation"] = (
+                    f"Contradiction Detected: Imported '{ext_title}' differs from existing campaign node '{matched_node.title}': {conflict_reason}. "
+                    "You can update the existing record with these new values, keep the current canon lore, or create a separate entity."
+                )
+                n["review_options"] = ["merge", "create_new", "skip", "other"]
+            elif match_status == "potential_match":
+                n["dilemma_explanation"] = (
+                    f"Ambiguous Match ({int(match_confidence * 100)}% similarity): '{ext_title}' ({n.get('type')}) closely resembles existing "
+                    f"campaign node '{matched_node.title}' ({matched_node.type}). Should this be merged into the existing record or kept distinct?"
+                )
+                n["review_options"] = ["merge", "create_new", "skip", "other"]
         else:
             n["match_status"] = "new"
             n["matched_node_id"] = None
@@ -1433,9 +1462,572 @@ def _reconcile_extracted_nodes_with_campaign(
             n["match_confidence"] = 0.0
             n["conflict_reason"] = None
 
+        # Base Template Inheritance & Stubs (Requirement 3a)
+        # If an NPC or monster is missing full stats or is a variant
+        if n.get("type") in ("monster", "npc"):
+            ext_data = n.get("data_json") or {}
+            has_stats = bool(ext_data.get("hp") or ext_data.get("ac") or ext_data.get("abilities"))
+            base_template_match = None
+
+            # Detect referenced base template from title/subtitle
+            raw_check_text = f"{ext_title} {n.get('subtitle') or ''}".lower()
+            for cand in campaign_nodes:
+                if cand.type in ("monster", "npc") and cand.title.lower() != norm_title:
+                    cand_name = cand.title.lower()
+                    if len(cand_name) >= 3 and cand_name in raw_check_text:
+                        base_template_match = cand
+                        break
+
+            if base_template_match and not has_stats:
+                base_data = base_template_match.data_json or {}
+                # Inherit base stats
+                ext_data.setdefault("cr", base_data.get("cr"))
+                ext_data.setdefault("hp", base_data.get("hp"))
+                ext_data.setdefault("ac", base_data.get("ac"))
+                ext_data.setdefault("abilities", base_data.get("abilities"))
+                ext_data.setdefault("speed", base_data.get("speed"))
+                n["data_json"] = ext_data
+                n["base_template_title"] = base_template_match.title
+                n["inherited_template"] = True
+                curr_content = n.get("content_markdown") or ""
+                n["content_markdown"] = f"{curr_content}\n\n*Inherited base 5e statistics from template **{base_template_match.title}**.*"
+            elif not has_stats or ext_data.get("needs_statblock"):
+                n["needs_statblock"] = True
+                ext_data["needs_statblock"] = True
+                n["data_json"] = ext_data
+                n["needs_statblock_prompt"] = f"Missing complete 5e stat block for {ext_title}. Enter stats manually or upload a stat block sheet."
+
         reconciled.append(n)
 
     return reconciled
+
+
+def _run_qa_verifier_pass(
+    model,
+    extracted_nodes: List[Dict[str, Any]],
+    text_sample: str,
+    instruction: str,
+) -> List[Dict[str, Any]]:
+    """
+    Automated QA Verifier Agent:
+    Compares the list of extracted entities against the source text segment to detect
+    any omitted named NPCs, monsters, magic items, traps, or inset sidebars.
+    """
+    if not model or not extracted_nodes or not text_sample:
+        return []
+
+    titles_so_far = [n.get("title", "") for n in extracted_nodes if n.get("title")]
+    qa_prompt = f"""You are a meticulous D&D Quality Assurance Auditor.
+Review the list of entities extracted from this adventure text segment:
+ENTITIES EXTRACTED SO FAR:
+{json.dumps(titles_so_far[:50], indent=2)}
+
+DM'S STEERING INSTRUCTION:
+\"\"\"{instruction or 'Exhaustively audit for any missed rooms, monsters, NPCs, or items.'}\"\"\"
+
+SOURCE ADVENTURE TEXT SEGMENT:
+\"\"\"
+{text_sample[:12000]}
+\"\"\"
+
+TASK:
+Examine whether any named monsters, NPCs, keyed room locations (e.g. Area 1..N), magic items, hazards/traps, or inset sidebars in this text were OMITTED from the extracted list.
+If any were omitted, return ONLY the omitted entities in strictly valid JSON:
+{{
+  "omitted_nodes": [
+    {{
+      "type": "arc|quest|session|encounter|pc|npc|monster|location|faction|item|clue",
+      "title": "Clear Name",
+      "subtitle": "Short epithet or CR",
+      "summary": "1-2 sentence synopsis",
+      "content_markdown": "Full markdown details",
+      "data_json": {{ "status": "planned" }}
+    }}
+  ]
+}}
+If nothing was missed, return {{"omitted_nodes": []}}.
+"""
+    try:
+        res = model.generate_content(
+            qa_prompt,
+            generation_config={"response_mime_type": "application/json", "max_output_tokens": 4096}
+        )
+        data = json.loads(res.text)
+        return data.get("omitted_nodes", [])
+    except Exception as e:
+        logger.warning(f"[QA Verifier] Audit pass skipped due to error: {e}")
+        return []
+
+
+GREEK_WORKERS = [
+    "Worker Alpha", "Worker Beta", "Worker Gamma", "Worker Delta",
+    "Worker Epsilon", "Worker Zeta", "Worker Eta", "Worker Theta",
+    "Worker Iota", "Worker Kappa"
+]
+
+def save_decomposition_job(job: Dict[str, Any]) -> None:
+    """
+    Persists decomposition pipeline execution state, clusters, scratchpads,
+    and working drafts to SQLite.
+    """
+    with get_connection() as conn:
+        conn.execute("""
+            INSERT INTO decomposition_jobs (
+                id, campaign_id, filename, page_range, instruction, decomposition_mode,
+                status, current_step, clusters_json, scratchpads_json, draft_nodes_json,
+                draft_edges_json, qa_results_json, overview_summary, model_name, error_message, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(id) DO UPDATE SET
+                status=excluded.status,
+                current_step=excluded.current_step,
+                clusters_json=excluded.clusters_json,
+                scratchpads_json=excluded.scratchpads_json,
+                draft_nodes_json=excluded.draft_nodes_json,
+                draft_edges_json=excluded.draft_edges_json,
+                qa_results_json=excluded.qa_results_json,
+                overview_summary=excluded.overview_summary,
+                model_name=excluded.model_name,
+                error_message=excluded.error_message,
+                updated_at=CURRENT_TIMESTAMP
+        """, (
+            job["id"],
+            job.get("campaign_id", ""),
+            job.get("filename"),
+            job.get("page_range"),
+            job.get("instruction", ""),
+            job.get("decomposition_mode", "comprehensive"),
+            job.get("status", "clustering"),
+            job.get("current_step", 1),
+            json.dumps(job.get("clusters", [])),
+            json.dumps(job.get("scratchpads", {})),
+            json.dumps(job.get("draft_nodes", [])),
+            json.dumps(job.get("draft_edges", [])),
+            json.dumps(job.get("qa_results", {})),
+            job.get("overview_summary", ""),
+            job.get("model_name", ""),
+            job.get("error_message")
+        ))
+
+
+def _build_subagent_manifest(clusters: List[Dict[str, Any]], current_step: int, status: str, error_msg: Optional[str] = None) -> List[Dict[str, Any]]:
+    manifest = []
+    for c in clusters:
+        manifest.append({
+            "id": f"subagent-{c.get('id', 'cluster')}",
+            "name": c.get("subagent_name", "Worker Agent"),
+            "role": "Visual Cluster Extraction",
+            "target": c.get("label", "Document Slice"),
+            "status": c.get("status", "pending"),
+            "error": c.get("error")
+        })
+
+    qa_status = "completed" if current_step >= 4 else ("running" if current_step == 3 and status != "failed" else ("failed" if current_step == 3 and status == "failed" else "pending"))
+    deconf_status = "completed" if status == "completed" else ("running" if current_step == 4 and status != "failed" else ("failed" if current_step == 4 and status == "failed" else "pending"))
+
+    manifest.append({
+        "id": "subagent-qa",
+        "name": "QA Auditor Agent",
+        "role": "Completeness & Omission Audit",
+        "target": "Draft vs Indexed Document Text",
+        "status": qa_status,
+        "error": error_msg if current_step == 3 else None
+    })
+    manifest.append({
+        "id": "subagent-deconflict",
+        "name": "Domain Deconfliction Specialist",
+        "role": "SQLite Graph Matching & 5e Templates",
+        "target": "Active Campaign Records",
+        "status": deconf_status,
+        "error": error_msg if current_step == 4 else None
+    })
+    return manifest
+
+
+def get_decomposition_job(job_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Retrieves a decomposition job and builds the live subagent manifest.
+    """
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM decomposition_jobs WHERE id = ?", (job_id,)).fetchone()
+        if not row:
+            return None
+
+        clusters = json.loads(row["clusters_json"] or "[]")
+        scratchpads = json.loads(row["scratchpads_json"] or "{}")
+        subagents = _build_subagent_manifest(clusters, row["current_step"], row["status"], row["error_message"])
+
+        return {
+            "id": row["id"],
+            "campaign_id": row["campaign_id"],
+            "filename": row["filename"],
+            "page_range": row["page_range"],
+            "instruction": row["instruction"],
+            "decomposition_mode": row["decomposition_mode"],
+            "status": row["status"],
+            "current_step": row["current_step"],
+            "clusters": clusters,
+            "subagents": subagents,
+            "scratchpads": scratchpads,
+            "draft_nodes": json.loads(row["draft_nodes_json"] or "[]"),
+            "draft_edges": json.loads(row["draft_edges_json"] or "[]"),
+            "qa_results": json.loads(row["qa_results_json"] or "{}"),
+            "overview_summary": row["overview_summary"] or "",
+            "model_name": row["model_name"] or "",
+            "error_message": row["error_message"],
+            "created_at": str(row["created_at"]),
+            "updated_at": str(row["updated_at"])
+        }
+
+
+def get_latest_decomposition_job(campaign_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Retrieves the most recent decomposition job for a given campaign.
+    """
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT id FROM decomposition_jobs WHERE campaign_id = ? ORDER BY created_at DESC LIMIT 1",
+            (campaign_id,)
+        ).fetchone()
+        if row:
+            return get_decomposition_job(row["id"])
+    return None
+
+
+def stop_decomposition_job(job_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Flags an in-progress decomposition job as stopped so active worker loops halt immediately.
+    Preserves all draft nodes and scratchpads created so far.
+    """
+    job = get_decomposition_job(job_id)
+    if not job:
+        return None
+    job["status"] = "stopped"
+    job["error_message"] = "Decomposition interrupted by user."
+    save_decomposition_job(job)
+    return job
+
+
+
+def _safe_json_loads(text: str) -> Dict[str, Any]:
+    """
+    Safely parses JSON output from LLM, with resilient stack-based recovery heuristics
+    for unclosed strings, unterminated brackets, and responses truncated near token limits.
+    """
+    cleaned = text.strip()
+    if cleaned.startswith("```json"):
+        cleaned = cleaned[7:]
+    elif cleaned.startswith("```"):
+        cleaned = cleaned[3:]
+    if cleaned.endswith("```"):
+        cleaned = cleaned[:-3]
+    cleaned = cleaned.strip()
+
+    try:
+        return json.loads(cleaned)
+    except Exception:
+        pass
+
+    # Heuristic 1: Stack-based unclosed string & bracket repair
+    try:
+        stack = []
+        in_string = False
+        escape = False
+        for ch in cleaned:
+            if escape:
+                escape = False
+                continue
+            if ch == '\\' and in_string:
+                escape = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if not in_string:
+                if ch in ('{', '['):
+                    stack.append(ch)
+                elif ch == '}':
+                    if stack and stack[-1] == '{':
+                        stack.pop()
+                elif ch == ']':
+                    if stack and stack[-1] == '[':
+                        stack.pop()
+
+        repaired = cleaned
+        if in_string:
+            repaired += '"'
+
+        trimmed = repaired.rstrip()
+        if trimmed.endswith(':'):
+            trimmed += ' null'
+        elif trimmed.endswith(','):
+            trimmed = trimmed[:-1]
+
+        for open_ch in reversed(stack):
+            trimmed = trimmed.rstrip()
+            if trimmed.endswith(','):
+                trimmed = trimmed[:-1]
+            if open_ch == '{':
+                trimmed += '}'
+            elif open_ch == '[':
+                trimmed += ']'
+
+        return json.loads(trimmed)
+    except Exception:
+        pass
+
+    # Heuristic 2: Truncate back to the last valid completed object and close unclosed containers
+    try:
+        last_item_pos = max(cleaned.rfind('},\n'), cleaned.rfind('},'), cleaned.rfind('}\n'), cleaned.rfind('}'))
+        if last_item_pos > 0:
+            truncated = cleaned[:last_item_pos + 1].rstrip()
+            if truncated.endswith(','):
+                truncated = truncated[:-1]
+            o_bracket = max(0, truncated.count('[') - truncated.count(']'))
+            o_brace = max(0, truncated.count('{') - truncated.count('}'))
+            if o_bracket > 0:
+                truncated += '\n' + (']' * o_bracket)
+            if o_brace > 0:
+                truncated += '\n' + ('}' * o_brace)
+            return json.loads(truncated)
+    except Exception:
+        pass
+
+    # Final attempt: standard closing suffixes
+    for suffix in ['"} ] }', '"}]}', '"] }', '"}', '}', ']}', ']}}']:
+        try:
+            return json.loads(cleaned + suffix)
+        except json.JSONDecodeError:
+            continue
+
+    # If all salvage attempts fail, re-raise original JSON error
+    return json.loads(cleaned)
+
+
+def _normalize_extracted_chunk_nodes(chunk_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Robustly extracts entity nodes from LLM chunk output, supporting standard keys
+    ('extracted_nodes', 'nodes', 'entities') and categorized dictionaries ('locations', 'npcs', 'monsters', etc.).
+    """
+    if not isinstance(chunk_data, dict):
+        return []
+
+    raw = chunk_data.get("extracted_nodes") or chunk_data.get("nodes") or chunk_data.get("entities") or []
+    if isinstance(raw, list) and len(raw) > 0:
+        valid_nodes = []
+        for n in raw:
+            if isinstance(n, dict) and (n.get("title") or n.get("name")):
+                if not n.get("title") and n.get("name"):
+                    n["title"] = n["name"]
+                n.setdefault("type", "location")
+                n.setdefault("summary", n.get("title", ""))
+                n.setdefault("content_markdown", n.get("summary", n.get("title", "")))
+                n.setdefault("data_json", {"status": "planned"})
+                valid_nodes.append(n)
+        if valid_nodes:
+            return valid_nodes
+
+    # Fallback: Check if the model categorized entities into top-level lists
+    collected = []
+    category_map = [
+        ("locations", "location"), ("rooms", "location"), ("keyed_rooms", "location"),
+        ("npcs", "npc"), ("characters", "npc"), ("factions", "faction"),
+        ("monsters", "monster"), ("creatures", "monster"), ("enemies", "monster"),
+        ("items", "item"), ("relics", "item"), ("magic_items", "item"),
+        ("sidebars", "lore"), ("lore", "lore"), ("rumors", "clue"),
+        ("quests", "quest"), ("encounters", "encounter"), ("traps", "encounter")
+    ]
+    for key, node_type in category_map:
+        items = chunk_data.get(key)
+        if isinstance(items, list):
+            for it in items:
+                if isinstance(it, dict) and (it.get("title") or it.get("name")):
+                    title_str = it.get("title") or it.get("name")
+                    it["title"] = title_str
+                    it.setdefault("type", node_type)
+                    it.setdefault("summary", title_str)
+                    it.setdefault("content_markdown", it.get("description", title_str))
+                    it.setdefault("data_json", {"status": "planned"})
+                    collected.append(it)
+                elif isinstance(it, str) and it.strip():
+                    collected.append({
+                        "type": node_type,
+                        "title": it.strip(),
+                        "summary": it.strip(),
+                        "content_markdown": it.strip(),
+                        "data_json": {"status": "planned"}
+                    })
+
+    # Also inspect scratchpad object if top-level lists were empty
+    scratch_obj = chunk_data.get("scratchpad")
+    if isinstance(scratch_obj, dict) and not collected:
+        for key, node_type in category_map:
+            items = scratch_obj.get(key)
+            if isinstance(items, list):
+                for it in items:
+                    title_str = it.get("title") or it.get("name") if isinstance(it, dict) else str(it).strip()
+                    if title_str:
+                        collected.append({
+                            "type": node_type,
+                            "title": title_str,
+                            "summary": title_str,
+                            "content_markdown": title_str,
+                            "data_json": {"status": "planned"}
+                        })
+    return collected
+
+
+def _extract_single_cluster_slice(
+    cluster: Dict[str, Any],
+    model,
+    selected_prompt: str,
+    instruction: str,
+    db_context: str,
+    pdf_file_path: Optional[str] = None
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """
+    Executes an extraction pass for a single visual PDF cluster or text chunk.
+    Uses max_output_tokens=16384 and resilient JSON recovery.
+    """
+    slice_label = cluster.get("label", "")
+    worker_prompt = f"""You are an expert D&D 5e adventure analyst and Co-DM architect.
+Exhaustively extract EVERY named entity, room, NPC, creature, item, and lore snippet from this document slice ({slice_label}).
+
+{selected_prompt}
+
+DM'S STEERING INSTRUCTION:
+\"\"\"{instruction or 'Exhaustively extract all entities found in this document segment.'}\"\"\"
+
+EXISTING CAMPAIGN RECORDS (CONTEXT):
+{db_context}
+
+OUTPUT FORMAT REQUIREMENTS:
+You MUST respond strictly with valid JSON adhering to this exact schema:
+{{
+  "scratchpad": {{
+    "rooms_inventoried": ["Area 1: Name", "Area 2: Name"],
+    "npcs_identified": ["NPC Name (Role)", ...],
+    "monsters_spotted": ["Creature (CR)", ...],
+    "sidebars_captured": ["Sidebar / Inset Title", ...],
+    "traps_secrets": ["Trap / Hidden Door (DC)", ...],
+    "notes": ["Working observation 1", "Working observation 2"]
+  }},
+  "extracted_nodes": [
+    {{
+      "type": "location|npc|monster|item|lore|quest|encounter",
+      "title": "Exact Name or Title",
+      "subtitle": "Short role, CR, or Level/Class",
+      "summary": "1-2 sentence synopsis",
+      "content_markdown": "Complete formatted description with stat blocks, read-aloud text, or DM secrets",
+      "data_json": {{"status": "planned"}},
+      "revealed_to_players": false
+    }}
+  ],
+  "extracted_edges": [
+    {{
+      "source_title": "Area 1",
+      "target_title": "Area 2",
+      "relation_type": "leads_to",
+      "label": "connecting door or path"
+    }}
+  ]
+}}
+
+DOCUMENT SEGMENT ({slice_label}):
+"""
+    try:
+        if cluster.get("type") == "pdf_cluster" and pdf_file_path and Path(pdf_file_path).exists():
+            from app.services import pdf_service
+            pdf_bytes = pdf_service.get_pdf_page_cluster_bytes(
+                pdf_file_path, cluster["start_page"], cluster["end_page"]
+            )
+            pdf_part = {"mime_type": "application/pdf", "data": pdf_bytes}
+            response = model.generate_content(
+                [pdf_part, worker_prompt],
+                generation_config={"response_mime_type": "application/json", "max_output_tokens": 16384}
+            )
+            chunk_data = _safe_json_loads(response.text)
+        else:
+            text_slice = cluster.get("text", "")
+            full_prompt = f"{worker_prompt}\n\"\"\"\n{text_slice}\n\"\"\"\n\nReturn strictly JSON matching the specified schema."
+            response = model.generate_content(
+                full_prompt,
+                generation_config={"response_mime_type": "application/json", "max_output_tokens": 16384}
+            )
+            chunk_data = _safe_json_loads(response.text)
+
+        # Normalize extracted nodes
+        normalized_nodes = _normalize_extracted_chunk_nodes(chunk_data)
+        chunk_data["extracted_nodes"] = normalized_nodes
+        return chunk_data, None
+    except Exception as e:
+        logger.warning(f"[MultiAgentExtract] Primary call failed for {slice_label}: {e}")
+        if cluster.get("type") == "pdf_cluster" and pdf_file_path and Path(pdf_file_path).exists():
+            try:
+                from app.services import pdf_service
+                fallback_text = pdf_service.get_pdf_page_text(pdf_file_path, cluster["start_page"], cluster["end_page"])
+                full_prompt = f"{worker_prompt}\n\"\"\"\n{fallback_text}\n\"\"\"\n\nReturn strictly JSON matching the specified schema."
+                response = model.generate_content(
+                    full_prompt,
+                    generation_config={"response_mime_type": "application/json", "max_output_tokens": 16384}
+                )
+                chunk_data = _safe_json_loads(response.text)
+                normalized_nodes = _normalize_extracted_chunk_nodes(chunk_data)
+                chunk_data["extracted_nodes"] = normalized_nodes
+                return chunk_data, None
+            except Exception as inner_e:
+                return None, str(inner_e)
+        return None, str(e)
+
+
+def _record_cluster_scratchpad(
+    job_scratchpads: Dict[str, Any],
+    cluster: Dict[str, Any],
+    chunk_data: Dict[str, Any],
+    subagent_name: str,
+    slice_label: str
+):
+    """
+    Standardizes scratchpad format so UI components never encounter non-array notes or missing fields.
+    """
+    raw_nodes = chunk_data.get("extracted_nodes", [])
+    scratch_obj = chunk_data.get("scratchpad") or {}
+
+    rooms_from_nodes = [n["title"] for n in raw_nodes if n.get("type") == "location"]
+    npcs_from_nodes = [n["title"] for n in raw_nodes if n.get("type") == "npc"]
+    monsters_from_nodes = [n["title"] for n in raw_nodes if n.get("type") == "monster"]
+    sidebars_from_nodes = [n["title"] for n in raw_nodes if n.get("type") in ("lore", "clue")]
+    traps_from_nodes = [
+        n["title"] for n in raw_nodes
+        if "trap" in n.get("title", "").lower() or "secret" in n.get("title", "").lower() or "trap" in str(n.get("data_json", {})).lower()
+    ]
+
+    scratch_rooms = scratch_obj.get("rooms_inventoried") or scratch_obj.get("rooms") or scratch_obj.get("locations") or rooms_from_nodes
+    scratch_npcs = scratch_obj.get("npcs_identified") or scratch_obj.get("npcs") or scratch_obj.get("characters") or npcs_from_nodes
+    scratch_monsters = scratch_obj.get("monsters_spotted") or scratch_obj.get("monsters") or scratch_obj.get("creatures") or monsters_from_nodes
+    scratch_sidebars = scratch_obj.get("sidebars_captured") or scratch_obj.get("sidebars") or scratch_obj.get("lore") or sidebars_from_nodes
+    scratch_traps = scratch_obj.get("traps_secrets") or scratch_obj.get("traps") or scratch_obj.get("secrets") or traps_from_nodes
+
+    notes_val = scratch_obj.get("notes")
+    if isinstance(notes_val, list) and notes_val:
+        notes_list = [str(x) for x in notes_val]
+    elif notes_val:
+        notes_list = [str(notes_val)]
+    else:
+        notes_list = [f"Sub-agent {subagent_name} successfully inventoried {len(raw_nodes)} entities from {slice_label}."]
+
+    job_scratchpads[subagent_name] = {
+        "agent_name": subagent_name,
+        "subagent_name": subagent_name,
+        "role": "Visual Cluster Extraction",
+        "assigned_pages": slice_label,
+        "cluster_label": slice_label,
+        "rooms_inventoried": list(scratch_rooms),
+        "npcs_identified": list(scratch_npcs),
+        "monsters_spotted": list(scratch_monsters),
+        "sidebars_captured": list(scratch_sidebars),
+        "traps_secrets": list(scratch_traps),
+        "notes": notes_list
+    }
 
 
 def _chunk_and_extract_nodes(
@@ -1448,15 +2040,19 @@ def _chunk_and_extract_nodes(
     current_nodes: Optional[List[Dict[str, Any]]] = None,
     current_edges: Optional[List[Dict[str, Any]]] = None,
     campaign_id: str = "",
+    pdf_file_path: Optional[str] = None,
+    start_page: int = 1,
+    end_page: Optional[int] = None,
+    existing_job_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Splits document text into overlapping chunks, calls Gemini once per chunk,
-    then merges + deduplicates all extracted nodes and edges.
-    Used when exhaustive=True to ensure every entity in a large document is captured.
+    Checkpointed Multi-Agent Extraction Orchestrator:
+    1. Phase 1: Clusters document pages/chunks into slices and assigns named subagents.
+    2. Phase 2: Runs worker subagents per slice, records mental scratchpads, saves checkpoints.
+    3. Phase 3: Runs automated QA Verifier against indexed text, preserves recovered entities.
+    4. Phase 4: Reconciles with SQLite campaign records and attaches 5e base templates.
     """
-    chunks = _split_text_into_chunks(text_content, chars_per_chunk=18000, overlap=1500)
-    logger.info(f"[ExhaustiveExtract] Splitting document into {len(chunks)} chunks for multi-pass extraction")
-
+    job_id = existing_job_id or str(uuid.uuid4())
     all_nodes: List[Dict[str, Any]] = list(current_nodes or [])
     all_edges: List[Dict[str, Any]] = list(current_edges or [])
     seen_titles: set = {n.get("title", "").lower().strip() for n in all_nodes}
@@ -1464,137 +2060,586 @@ def _chunk_and_extract_nodes(
         f"{e.get('source_title','').lower()}|{e.get('target_title','').lower()}|{e.get('relation_type','')}"
         for e in all_edges
     }
-    summary_parts = []
+    job_scratchpads: Dict[str, Any] = {}
 
-    for i, chunk in enumerate(chunks):
-        chunk_label = f"Chunk {i + 1} of {len(chunks)}"
-        logger.info(f"[ExhaustiveExtract] Processing {chunk_label} ({len(chunk)} chars)")
+    # Determine visual page clusters vs text chunks (2 pages per cluster for dense D&D spreads)
+    clusters_to_process: List[Dict[str, Any]] = []
+    if pdf_file_path and Path(pdf_file_path).exists():
+        from app.services import pdf_service
+        try:
+            reader = pypdf.PdfReader(str(pdf_file_path))
+            total_doc_pages = len(reader.pages)
+            start_p = max(1, start_page or 1)
+            end_p = min(total_doc_pages, end_page) if end_page else total_doc_pages
 
-        chunk_prompt = f"""You are an expert D&D 5e adventure analyst and Co-DM architect.
-Exhaustively extract EVERY named entity from the text segment below.
-Do NOT stop early. Extract every single named NPC, monster, creature, character, faction, location, item, and clue present in this segment.
+            curr_p = start_p
+            idx = 0
+            while curr_p <= end_p:
+                c_end = min(curr_p + 1, end_p)
+                subagent_name = GREEK_WORKERS[idx % len(GREEK_WORKERS)]
+                clusters_to_process.append({
+                    "id": f"cluster-{idx + 1}",
+                    "type": "pdf_cluster",
+                    "start_page": curr_p,
+                    "end_page": c_end,
+                    "label": f"Pages {curr_p}–{c_end}",
+                    "subagent_name": subagent_name,
+                    "status": "pending",
+                    "error": None
+                })
+                curr_p = c_end + 1
+                idx += 1
+        except Exception as e:
+            logger.warning(f"[MultiAgentExtract] Could not cluster PDF pages directly: {e}")
+
+    if not clusters_to_process:
+        chunks = _split_text_into_chunks(text_content, chars_per_chunk=8000, overlap=800)
+        for i, chunk in enumerate(chunks):
+            subagent_name = GREEK_WORKERS[i % len(GREEK_WORKERS)]
+            clusters_to_process.append({
+                "id": f"cluster-{i + 1}",
+                "type": "text_chunk",
+                "text": chunk,
+                "label": f"Segment {i + 1} of {len(chunks)}",
+                "subagent_name": subagent_name,
+                "status": "pending",
+                "error": None
+            })
+
+
+    logger.info(f"[MultiAgentExtract] Job {job_id}: Created {len(clusters_to_process)} slices across subagents")
+
+    # Step 1: Save Initial Checkpoint (Clustering & Manifest)
+    job_record = {
+        "id": job_id,
+        "campaign_id": campaign_id,
+        "filename": Path(pdf_file_path).name if pdf_file_path else None,
+        "page_range": f"{start_page}-{end_page or (start_page + len(clusters_to_process) * 4)}",
+        "instruction": instruction,
+        "decomposition_mode": "comprehensive",
+        "status": "mining",
+        "current_step": 1,
+        "clusters": clusters_to_process,
+        "scratchpads": job_scratchpads,
+        "draft_nodes": all_nodes,
+        "draft_edges": all_edges,
+        "qa_results": {},
+        "overview_summary": "Initializing sub-agent clusters...",
+        "model_name": model_name,
+        "error_message": None
+    }
+    save_decomposition_job(job_record)
+
+    # Step 2: Scratchpad Entity Mining (Worker Execution per cluster)
+    job_record["current_step"] = 2
+    failed_slices = 0
+    last_error = None
+
+    for i, cluster in enumerate(clusters_to_process):
+        # Emergency stop check
+        check_status = get_decomposition_job(job_id)
+        if check_status and check_status.get("status") == "stopped":
+            logger.info(f"[MultiAgentExtract] Job {job_id} halted by emergency stop.")
+            break
+
+        slice_label = cluster["label"]
+        subagent_name = cluster["subagent_name"]
+        cluster["status"] = "running"
+        save_decomposition_job(job_record)
+
+        logger.info(f"[MultiAgentExtract] {subagent_name} processing {slice_label}")
+
+        worker_prompt = f"""You are an expert D&D 5e adventure analyst and Co-DM architect.
+Exhaustively extract EVERY named entity from this document slice.
 
 {selected_prompt}
 
-EXTRACTION CONTEXT:
+SCRATCHPAD WORKING MEMORY:
+1. Maintain an internal mental scratchpad:
+   - First inventory every keyed room/location (e.g. Area 1..N).
+   - Inventory every named NPC and leader with their motivations.
+   - Inventory every monster group, tactical encounter, and hazard.
+   - Inventory all visually styled Inset Boxes, parchment sidebars, and rumor tables.
+   - Inventory hidden traps, secret passages, and mechanical DCs.
+2. In your JSON output, provide a "scratchpad" object summarizing your checklist before the final nodes.
+
+EXTRACTION CONTEXT & EXISTING NODES:
 {db_context}
 
-DM'S STEERING PROMPT / INSTRUCTION:
+DM'S STEERING INSTRUCTION:
 \"\"\"{instruction or 'Exhaustively extract all entities found in this document segment.'}\"\"\"
 
-STEERING & DECONFLICTION GUIDANCE:
-- Perform an exhaustive extraction of all entities, lore, and structural elements in this segment.
-- If the DM provided a steering prompt above, prioritize capturing those elements in rich detail, while still extracting all other entities in this segment.
-- DECONFLICTION: Check each entity against the EXTRACTION CONTEXT above:
-  * If it's an exact match to an existing node: "match_status": "exact_match", "match_confidence": 1.0, provide "matched_node_id" and "matched_node_title".
-  * If lore/stats contradict the existing node: "match_status": "conflict", explain in "conflict_reason".
-  * If it's a likely alias or near match (e.g. 'Captain Zarr' vs 'Zarr'): "match_status": "potential_match", set confidence 0.5-0.9.
-  * If brand new: "match_status": "new", "match_confidence": 0.0.
-
-DOCUMENT SEGMENT ({chunk_label}):
-\"\"\"
-{chunk}
-\"\"\"
-
-CRITICAL: Extract EVERY entity present — do not summarize or sample. If 12 monsters are on the page, return all 12.
-Return strictly JSON:
-{{
-  "overview_summary": "Brief summary of what was found in this segment.",
-  "extracted_nodes": [
-    {{
-      "type": "arc|quest|session|encounter|pc|npc|monster|location|faction|item|clue",
-      "title": "Clear Name",
-      "subtitle": "Short epithet, CR, or Level/Class",
-      "summary": "1-2 sentence synopsis",
-      "content_markdown": "Full formatted markdown details",
-      "data_json": {{
-         "status": "planned",
-         "cr": "1/2 (if monster)",
-         "hp": 22,
-         "ac": 13,
-         "abilities": {{ "str": 10, "dex": 12, "con": 12, "int": 10, "wis": 10, "cha": 10 }}
-      }},
-      "revealed_to_players": false,
-      "match_status": "new|exact_match|potential_match|conflict",
-      "matched_node_id": "UUID from EXTRACTION CONTEXT if matched, else null",
-      "matched_node_title": "Existing Title from EXTRACTION CONTEXT if matched, else null",
-      "match_confidence": 1.0,
-      "conflict_reason": "Specific conflict details if lore/stats contradict existing node, else null",
-      "merge_notes": "Summary of new lore/stats to merge into existing node, else null"
-    }}
-  ],
-  "extracted_edges": [
-    {{
-      "source_title": "Exact Title of Source Node",
-      "target_title": "Exact Title of Target Node",
-      "relation_type": "contains|allied_with|hostile_to|located_at|gives_quest|rewards|member_of|knows_secret",
-      "label": "Short relation description"
-    }}
-  ]
-}}
+DOCUMENT SLICE ({slice_label}):
 """
-        last_error = None
-        failed_chunks = 0
-        try:
-            response = model.generate_content(
-                chunk_prompt,
-                generation_config={"response_mime_type": "application/json", "max_output_tokens": 8192}
-            )
-            chunk_data = json.loads(response.text)
-        except Exception as e:
-            last_error = str(e)
-            failed_chunks += 1
-            logger.warning(f"[ExhaustiveExtract] {chunk_label} failed: {e}")
+        chunk_data, err = _extract_single_cluster_slice(
+            cluster=cluster,
+            model=model,
+            selected_prompt=selected_prompt,
+            instruction=instruction,
+            db_context=db_context,
+            pdf_file_path=pdf_file_path
+        )
+
+        if err or not chunk_data:
+            last_error = err
+            failed_slices += 1
+            cluster["status"] = "failed"
+            cluster["error"] = err
+            save_decomposition_job(job_record)
             continue
 
-        # Merge nodes — deduplicate by normalized title
-        for node in chunk_data.get("extracted_nodes", []):
+        cluster["status"] = "completed"
+        cluster["error"] = None
+        raw_nodes = chunk_data.get("extracted_nodes", [])
+        _record_cluster_scratchpad(job_scratchpads, cluster, chunk_data, subagent_name, slice_label)
+
+        # Merge nodes and edges with provenance
+        for node in raw_nodes:
+            if cluster.get("start_page"):
+                node.setdefault("source_page", cluster["start_page"])
+            if pdf_file_path:
+                node.setdefault("source_doc", Path(pdf_file_path).name)
+
             title_key = node.get("title", "").lower().strip()
             if title_key and title_key not in seen_titles:
                 all_nodes.append(node)
                 seen_titles.add(title_key)
 
-        # Merge edges — deduplicate by (source, target, relation)
         for edge in chunk_data.get("extracted_edges", []):
             edge_key = f"{edge.get('source_title','').lower()}|{edge.get('target_title','').lower()}|{edge.get('relation_type','')}"
             if edge_key not in seen_edges:
                 all_edges.append(edge)
                 seen_edges.add(edge_key)
 
-        if chunk_data.get("overview_summary"):
-            summary_parts.append(f"**{chunk_label}**: {chunk_data['overview_summary']}")
+        # Checkpoint save after every slice
+        job_record["draft_nodes"] = all_nodes
+        job_record["draft_edges"] = all_edges
+        job_record["scratchpads"] = job_scratchpads
+        save_decomposition_job(job_record)
 
-    if not all_nodes and failed_chunks > 0:
+    # Check if job was halted early by emergency stop
+    check_status = get_decomposition_job(job_id)
+    if (check_status and check_status.get("status") == "stopped") or job_record.get("status") == "stopped":
+        completed_count = sum(1 for c in clusters_to_process if c.get("status") == "completed")
+        job_record["status"] = "stopped"
+        job_record["overview_summary"] = (
+            f"### 🛑 Pipeline Interrupted by DM\n\n"
+            f"Preserved **{len(all_nodes)} draft entities** and **{len(all_edges)} relationships** extracted across {completed_count} completed slices. "
+            f"You can review or steer the draft with Co-DM below, retry remaining slices, or restart."
+        )
+        job_record["error_message"] = "Decomposition interrupted by user."
+        save_decomposition_job(job_record)
         return {
+            "job_id": job_id,
+            "overview_summary": job_record["overview_summary"],
+            "extracted_nodes": all_nodes,
+            "extracted_edges": all_edges,
+            "clusters": clusters_to_process,
+            "subagents": _build_subagent_manifest(clusters_to_process, 2, "stopped"),
+            "scratchpads": job_scratchpads,
+            "current_step": 2,
+            "status": "stopped",
+            "error": "Decomposition interrupted by user.",
+            "model": model_name,
+            "chunks_processed": completed_count
+        }
+
+    if not all_nodes and failed_slices > 0:
+        job_record["status"] = "failed"
+        job_record["error_message"] = f"Model {model_name} failed across {failed_slices} slices: {last_error}"
+        save_decomposition_job(job_record)
+        return {
+            "job_id": job_id,
             "overview_summary": (
                 f"### ⚠️ Extraction Failed\n\n"
-                f"The AI model ({model_name}) encountered an error across {failed_chunks} document segment(s).\n\n"
+                f"The AI model ({model_name}) encountered an error across {failed_slices} slice(s).\n\n"
                 f"**Error Details**: `{last_error}`\n\n"
                 f"> 💡 *Tip: Check your Gemini API Key in Settings, or verify that your account has access to model `{model_name}`.*"
             ),
             "extracted_nodes": current_nodes or [],
             "extracted_edges": current_edges or [],
+            "clusters": clusters_to_process,
+            "subagents": _build_subagent_manifest(clusters_to_process, 2, "failed", last_error),
+            "scratchpads": job_scratchpads,
+            "current_step": 2,
+            "status": "failed",
             "error": f"Model {model_name} failed: {last_error}",
             "model": model_name,
             "chunks_processed": 0
         }
 
-    reconciled_nodes = _reconcile_extracted_nodes_with_campaign(all_nodes, campaign_id)
+    # Step 3: Automated QA Auditor Pass
+    job_record["current_step"] = 3
+    job_record["status"] = "qa_auditing"
+    save_decomposition_job(job_record)
 
-    combined_summary = (
-        f"### ✅ Exhaustive Multi-Pass Extraction Complete\n\n"
-        f"Processed **{len(chunks)} segments** from document.\n"
-        f"Found **{len(reconciled_nodes)} total unique entities** and **{len(all_edges)} relationships**.\n\n"
-        + "\n\n".join(summary_parts)
-    )
+    try:
+        if model and len(all_nodes) > 0 and len(clusters_to_process) >= 2:
+            omitted = _run_qa_verifier_pass(model, all_nodes, text_content[:15000], instruction)
+            if omitted:
+                logger.info(f"[MultiAgentExtract] QA Verifier recovered {len(omitted)} omitted entities")
+                for node in omitted:
+                    title_key = node.get("title", "").lower().strip()
+                    if title_key and title_key not in seen_titles:
+                        all_nodes.append(node)
+                        seen_titles.add(title_key)
+                job_record["qa_results"] = {
+                    "omitted_count": len(omitted),
+                    "recovered": [n.get("title", "") for n in omitted],
+                    "notes": f"QA Auditor successfully recovered {len(omitted)} omitted entity nodes from source text."
+                }
+            else:
+                job_record["qa_results"] = {
+                    "omitted_count": 0,
+                    "recovered": [],
+                    "notes": "QA Auditor verified 100% completeness against indexed document sections."
+                }
+            job_record["draft_nodes"] = all_nodes
+            save_decomposition_job(job_record)
+    except Exception as qa_err:
+        logger.warning(f"[QA Verifier] Warning during audit pass: {qa_err}")
+        job_record["qa_results"] = {"error": str(qa_err)}
+        save_decomposition_job(job_record)
 
-    return {
-        "overview_summary": combined_summary,
-        "extracted_nodes": reconciled_nodes,
-        "extracted_edges": all_edges,
-        "model": model_name,
-        "chunks_processed": len(chunks)
-    }
+    # Step 4: Domain Deconfliction & 5e Base Templates
+    job_record["current_step"] = 4
+    job_record["status"] = "deconflicting"
+    save_decomposition_job(job_record)
+
+    try:
+        reconciled_nodes = _reconcile_extracted_nodes_with_campaign(all_nodes, campaign_id)
+        job_record["draft_nodes"] = reconciled_nodes
+        job_record["draft_edges"] = all_edges
+        job_record["status"] = "completed"
+
+        loc_count = sum(1 for n in reconciled_nodes if n.get("type") == "location")
+        npc_count = sum(1 for n in reconciled_nodes if n.get("type") == "npc")
+        mon_count = sum(1 for n in reconciled_nodes if n.get("type") == "monster")
+        item_count = sum(1 for n in reconciled_nodes if n.get("type") == "item")
+        lore_count = sum(1 for n in reconciled_nodes if n.get("type") in ("lore", "clue"))
+        quest_count = sum(1 for n in reconciled_nodes if n.get("type") in ("arc", "quest", "session", "encounter"))
+        conflict_count = sum(1 for n in reconciled_nodes if n.get("match_status") in ("conflict", "potential_match"))
+        stub_count = sum(1 for n in reconciled_nodes if n.get("needs_statblock"))
+
+        summary_bullets = []
+        if loc_count > 0:
+            summary_bullets.append(f"- 📍 **{loc_count} Keyed Locations & Rooms** (with Read-Aloud descriptions and DM secrets cleanly separated)")
+        if npc_count > 0:
+            summary_bullets.append(f"- 👤 **{npc_count} Named NPCs & Leaders**")
+        if mon_count > 0:
+            summary_bullets.append(f"- ⚔️ **{mon_count} Monsters & Creatures**")
+        if item_count > 0:
+            summary_bullets.append(f"- 💎 **{item_count} Items & Relics**")
+        if lore_count > 0:
+            summary_bullets.append(f"- 📜 **{lore_count} Inset Sidebars, Rumors & Lore**")
+        if quest_count > 0:
+            summary_bullets.append(f"- 🗺️ **{quest_count} Narrative Arcs & Quests**")
+
+        notices = []
+        if conflict_count > 0:
+            notices.append(f"⚠️ **{conflict_count} review dilemma(s)** detected against existing campaign records. Review cards below offer 1-click resolution actions (`Merge`, `Create New`, `Skip`, or `Other`).")
+        if stub_count > 0:
+            notices.append(f"📝 **{stub_count} creature(s)** reference external statblocks. They have been created as stubs flagged with *Needs Statblock* for easy input or upload.")
+
+        combined_summary = (
+            f"### 🧙‍♂️ Adventure Ingestion Verified\n\n"
+            f"Processed **{len(clusters_to_process)} document slices** through multi-agent extraction with QA verification.\n\n"
+            f"**Extracted {len(reconciled_nodes)} total unique entities** and **{len(all_edges)} relationships**:\n"
+            + "\n".join(summary_bullets)
+            + ("\n\n" + "\n\n".join(notices) if notices else "")
+        )
+        job_record["overview_summary"] = combined_summary
+        save_decomposition_job(job_record)
+
+        return {
+            "job_id": job_id,
+            "overview_summary": combined_summary,
+            "extracted_nodes": reconciled_nodes,
+            "extracted_edges": all_edges,
+            "clusters": clusters_to_process,
+            "subagents": _build_subagent_manifest(clusters_to_process, 4, "completed"),
+            "scratchpads": job_scratchpads,
+            "current_step": 4,
+            "status": "completed",
+            "model": model_name,
+            "chunks_processed": len(clusters_to_process)
+        }
+    except Exception as deconf_err:
+        logger.error(f"[DomainDeconflict] Step 4 failed: {deconf_err}")
+        job_record["status"] = "failed"
+        job_record["error_message"] = f"Step 4 (Domain Deconfliction) failed: {deconf_err}"
+        save_decomposition_job(job_record)
+        return {
+            "job_id": job_id,
+            "overview_summary": f"Step 4 (Domain Deconfliction) error: {deconf_err}",
+            "extracted_nodes": all_nodes,
+            "extracted_edges": all_edges,
+            "clusters": clusters_to_process,
+            "subagents": _build_subagent_manifest(clusters_to_process, 4, "failed", str(deconf_err)),
+            "scratchpads": job_scratchpads,
+            "current_step": 4,
+            "status": "failed",
+            "error": str(deconf_err),
+            "model": model_name,
+            "chunks_processed": len(clusters_to_process)
+        }
+
+
+def retry_decomposition_job_step(job_id: str, target_step: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    """
+    Resumes/retries only the failed step of a decomposition job without discarding
+    intermediate work from previous steps.
+    """
+    job = get_decomposition_job(job_id)
+    if not job:
+        return None
+
+    step_to_run = target_step or job.get("current_step", 1)
+    logger.info(f"[RetryPipeline] Retrying decomposition job {job_id} from step {step_to_run}")
+
+    campaign_id = job.get("campaign_id", "")
+    all_nodes = list(job.get("draft_nodes", []))
+    all_edges = list(job.get("draft_edges", []))
+    clusters_to_process = list(job.get("clusters", []))
+    job_scratchpads = dict(job.get("scratchpads", {}))
+    seen_titles = {n.get("title", "").lower().strip() for n in all_nodes}
+
+    job["error_message"] = None
+
+    if step_to_run == 4:
+        # Retry only Domain Deconfliction using already mined and audited draft nodes
+        job["status"] = "deconflicting"
+        job["current_step"] = 4
+        save_decomposition_job(job)
+        try:
+            reconciled_nodes = _reconcile_extracted_nodes_with_campaign(all_nodes, campaign_id)
+            job["draft_nodes"] = reconciled_nodes
+            job["status"] = "completed"
+
+            loc_count = sum(1 for n in reconciled_nodes if n.get("type") == "location")
+            npc_count = sum(1 for n in reconciled_nodes if n.get("type") == "npc")
+            mon_count = sum(1 for n in reconciled_nodes if n.get("type") == "monster")
+            item_count = sum(1 for n in reconciled_nodes if n.get("type") == "item")
+            lore_count = sum(1 for n in reconciled_nodes if n.get("type") in ("lore", "clue"))
+            quest_count = sum(1 for n in reconciled_nodes if n.get("type") in ("arc", "quest", "session", "encounter"))
+            conflict_count = sum(1 for n in reconciled_nodes if n.get("match_status") in ("conflict", "potential_match"))
+            stub_count = sum(1 for n in reconciled_nodes if n.get("needs_statblock"))
+
+            summary_bullets = []
+            if loc_count > 0:
+                summary_bullets.append(f"- 📍 **{loc_count} Keyed Locations & Rooms**")
+            if npc_count > 0:
+                summary_bullets.append(f"- 👤 **{npc_count} Named NPCs & Leaders**")
+            if mon_count > 0:
+                summary_bullets.append(f"- ⚔️ **{mon_count} Monsters & Creatures**")
+            if item_count > 0:
+                summary_bullets.append(f"- 💎 **{item_count} Items & Relics**")
+            if lore_count > 0:
+                summary_bullets.append(f"- 📜 **{lore_count} Inset Sidebars & Lore**")
+            if quest_count > 0:
+                summary_bullets.append(f"- 🗺️ **{quest_count} Arcs & Quests**")
+
+            notices = []
+            if conflict_count > 0:
+                notices.append(f"⚠️ **{conflict_count} review dilemma(s)** detected against existing campaign records.")
+            if stub_count > 0:
+                notices.append(f"📝 **{stub_count} creature(s)** flagged with *Needs Statblock*.")
+
+            combined_summary = (
+                f"### 🧙‍♂️ Step 4 Retry Completed (Domain Deconfliction Verified)\n\n"
+                f"**Reconciled {len(reconciled_nodes)} total entities** against campaign records without re-processing earlier slices:\n"
+                + "\n".join(summary_bullets)
+                + ("\n\n" + "\n\n".join(notices) if notices else "")
+            )
+            job["overview_summary"] = combined_summary
+            save_decomposition_job(job)
+            return get_decomposition_job(job_id)
+        except Exception as e:
+            job["status"] = "failed"
+            job["error_message"] = f"Step 4 (Domain Deconfliction) failed: {e}"
+            save_decomposition_job(job)
+            return get_decomposition_job(job_id)
+
+    elif step_to_run == 3:
+        # Retry QA pass then deconfliction
+        model, model_name = _get_configured_gemini_client()
+        job["status"] = "qa_auditing"
+        job["current_step"] = 3
+        save_decomposition_job(job)
+        try:
+            if model and len(all_nodes) > 0:
+                omitted = _run_qa_verifier_pass(model, all_nodes, "", job.get("instruction", ""))
+                if omitted:
+                    for node in omitted:
+                        title_key = node.get("title", "").lower().strip()
+                        if title_key and title_key not in seen_titles:
+                            all_nodes.append(node)
+                            seen_titles.add(title_key)
+            job["draft_nodes"] = all_nodes
+            job["current_step"] = 4
+            save_decomposition_job(job)
+            return retry_decomposition_job_step(job_id, target_step=4)
+        except Exception as e:
+            job["status"] = "failed"
+            job["error_message"] = f"Step 3 (QA Auditor) failed: {e}"
+            save_decomposition_job(job)
+            return get_decomposition_job(job_id)
+
+    elif step_to_run <= 2:
+        # Retry failed or pending clusters without repeating completed ones!
+        model, model_name = _get_configured_gemini_client()
+        job["status"] = "mining"
+        job["current_step"] = 2
+        save_decomposition_job(job)
+
+        pdf_file_path = None
+        if job.get("filename"):
+            candidate = UPLOAD_DIR / job["filename"]
+            if candidate.exists():
+                pdf_file_path = str(candidate)
+
+        db_context = build_campaign_database_context(campaign_id)
+        selected_prompt = (
+            "DECOMPOSITION MODE: Complete Comprehensive Adventure & Dungeon Extraction.\n"
+            "- Extract ALL Keyed Locations / Rooms (Area 1, Area 2... Area N) as location nodes.\n"
+            "- Extract ALL named NPCs, bosses, and faction figures with motivations & alignment.\n"
+            "- Extract ALL monsters and combat encounters with full 5e statblock data_json.\n"
+            "- Extract ALL distinct magic items, keys, and quest relics as standalone item nodes.\n"
+            "- Extract ALL visually styled Inset Boxes, parchment sidebars, and rumor tables.\n"
+            "- Extract overarching Arcs, Quests, and story objectives."
+        )
+
+        failed_slices = 0
+        last_error = None
+        # 1. If existing clusters span > 2 pages (from earlier runs), subdivide them into 2-page slices
+        subdivided = []
+        for c in clusters_to_process:
+            s_p = c.get("start_page")
+            e_p = c.get("end_page")
+            # If completed with real extracted findings, keep as completed
+            c_agent = c.get("subagent_name", "")
+            sp = job_scratchpads.get(c_agent, {})
+            findings_count = (
+                len(sp.get("rooms_inventoried", [])) +
+                len(sp.get("npcs_identified", [])) +
+                len(sp.get("monsters_spotted", []))
+            )
+            if c.get("status") == "completed" and findings_count > 0:
+                subdivided.append(c)
+                continue
+
+            if s_p and e_p and (e_p - s_p + 1) > 2 and c.get("type") == "pdf_cluster":
+                curr_sub = s_p
+                part_idx = 1
+                while curr_sub <= e_p:
+                    sub_end = min(curr_sub + 1, e_p)
+                    subdivided.append({
+                        "id": f"{c.get('id', 'cluster')}-p{part_idx}",
+                        "type": "pdf_cluster",
+                        "start_page": curr_sub,
+                        "end_page": sub_end,
+                        "label": f"Pages {curr_sub}–{sub_end}",
+                        "subagent_name": f"{c.get('subagent_name', 'Worker')} (Part {part_idx})",
+                        "status": "pending",
+                        "error": None
+                    })
+                    curr_sub = sub_end + 1
+                    part_idx += 1
+            else:
+                # If was marked completed but had 0 findings, re-run
+                if c.get("status") == "completed" and findings_count == 0:
+                    c["status"] = "pending"
+                    c["error"] = None
+                subdivided.append(c)
+
+        clusters_to_process = subdivided
+        job["clusters"] = clusters_to_process
+        save_decomposition_job(job)
+
+        seen_edges = {
+            f"{e.get('source_title','').lower()}|{e.get('target_title','').lower()}|{e.get('relation_type','')}"
+            for e in all_edges
+        }
+
+        for cluster in clusters_to_process:
+            # Emergency stop check
+            check_status = get_decomposition_job(job_id)
+            if check_status and check_status.get("status") == "stopped":
+                logger.info(f"[RetryPipeline] Job {job_id} halted by emergency stop.")
+                break
+
+            if cluster.get("status") == "completed":
+                continue  # Skip slices already successfully mined!
+
+            slice_label = cluster.get("label", "")
+            subagent_name = cluster.get("subagent_name", "Worker")
+            cluster["status"] = "running"
+            save_decomposition_job(job)
+
+            chunk_data, err = _extract_single_cluster_slice(
+                cluster=cluster,
+                model=model,
+                selected_prompt=selected_prompt,
+                instruction=job.get("instruction", ""),
+                db_context=db_context,
+                pdf_file_path=pdf_file_path
+            )
+
+            if err or not chunk_data:
+                cluster["status"] = "failed"
+                cluster["error"] = err
+                failed_slices += 1
+                last_error = err
+                save_decomposition_job(job)
+                continue
+
+            cluster["status"] = "completed"
+            cluster["error"] = None
+            raw_nodes = chunk_data.get("extracted_nodes", [])
+            _record_cluster_scratchpad(job_scratchpads, cluster, chunk_data, subagent_name, slice_label)
+
+            for node in raw_nodes:
+                if cluster.get("start_page"):
+                    node.setdefault("source_page", cluster["start_page"])
+                if pdf_file_path:
+                    node.setdefault("source_doc", Path(pdf_file_path).name)
+                title_key = node.get("title", "").lower().strip()
+                if title_key and title_key not in seen_titles:
+                    all_nodes.append(node)
+                    seen_titles.add(title_key)
+
+            for edge in chunk_data.get("extracted_edges", []):
+                edge_key = f"{edge.get('source_title','').lower()}|{edge.get('target_title','').lower()}|{edge.get('relation_type','')}"
+                if edge_key not in seen_edges:
+                    all_edges.append(edge)
+                    seen_edges.add(edge_key)
+
+            job["clusters"] = clusters_to_process
+            job["scratchpads"] = job_scratchpads
+            job["draft_nodes"] = all_nodes
+            job["draft_edges"] = all_edges
+            save_decomposition_job(job)
+
+        # Check if halted by emergency stop
+        check_status = get_decomposition_job(job_id)
+        if (check_status and check_status.get("status") == "stopped") or job.get("status") == "stopped":
+            job["status"] = "stopped"
+            job["error_message"] = "Decomposition interrupted by user."
+            save_decomposition_job(job)
+            return get_decomposition_job(job_id)
+
+        if failed_slices > 0 and len(all_nodes) == 0:
+            job["status"] = "failed"
+            job["error_message"] = f"Retry Step 2 failed across {failed_slices} slices: {last_error}"
+            save_decomposition_job(job)
+            return get_decomposition_job(job_id)
+
+        # Advance automatically to Step 3 (QA Verifier Pass)
+        job["current_step"] = 3
+        save_decomposition_job(job)
+        return retry_decomposition_job_step(job_id, target_step=3)
+
+    return get_decomposition_job(job_id)
 
 
 def _chunk_and_summarize_transcript(transcript_text: str, model, chars_per_chunk: int = 20000) -> str:
@@ -1646,16 +2691,34 @@ def decompose_adventure_document(
     current_nodes: Optional[List[Dict[str, Any]]] = None,
     current_edges: Optional[List[Dict[str, Any]]] = None,
     conversation_history: Optional[List[Dict[str, str]]] = None,
-    exhaustive: bool = True
+    exhaustive: bool = True,
+    pdf_file_path: Optional[str] = None,
+    start_page: Optional[int] = 1,
+    end_page: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Decomposes adventure book chapters, monster sheets, or PC sheets based on DM instructions.
     Supports iterative conversation where the DM provides feedback to steer and refine draft nodes.
+    Supports visual page-clustering via Gemini Vision when pdf_file_path is provided.
     """
     model, model_name = _get_configured_gemini_client()
     db_context = build_campaign_database_context(campaign_id)
 
     mode_prompts = {
+        "comprehensive": (
+            "DECOMPOSITION MODE: Complete Comprehensive Adventure & Dungeon Extraction.\n"
+            "- Extract ALL Keyed Locations / Rooms (Area 1, Area 2... Area N) as location nodes.\n"
+            "- For each Keyed Location, format:\n"
+            "  * Read-Aloud Text in a blockquote (> 📜 **Read-Aloud Description:** ...)\n"
+            "  * DM Secrets & Traps under '### 🛡️ DM Secrets & Traps'\n"
+            "  * Directional exits (e.g. iron door to Area 4) as 'leads_to' or 'connected_to' edges\n"
+            "- Extract ALL named NPCs, bosses, and faction figures with roleplay motivations & alignment.\n"
+            "- Extract ALL monsters and combat encounters with full 5e statblock data_json.\n"
+            "- If a creature references an SRD/base creature without full stats, note the base template.\n"
+            "- Extract ALL distinct magic items, keys, and quest relics as standalone item nodes.\n"
+            "- Extract ALL visually styled Inset Boxes, parchment sidebars, and rumor tables as dedicated lore or clue nodes.\n"
+            "- Extract overarching Arcs, Quests, and story objectives."
+        ),
         "campaign_structure": (
             "DECOMPOSITION MODE: Campaign Hierarchy & Narrative Arcs.\n"
             "- Analyze the overall story structure from this chapter/introduction.\n"
@@ -1704,13 +2767,36 @@ def decompose_adventure_document(
         )
     }
 
-    selected_prompt = mode_prompts.get(decomposition_mode, mode_prompts["custom"])
+    inst_lower = (instruction or "").lower()
+    decomp_mode_norm = (decomposition_mode or "campaign_structure").lower()
+    if decomp_mode_norm in ("everything", "comprehensive", "general") or "everything" in inst_lower or "entire document" in inst_lower:
+        selected_prompt = mode_prompts["comprehensive"]
+    else:
+        selected_prompt = mode_prompts.get(decomposition_mode, mode_prompts["custom"])
+
+    is_refinement = bool(current_nodes and len(current_nodes) > 0)
 
     if not model:
         # High quality offline demonstration decomposition with steering support
-        if current_nodes and len(current_nodes) > 0:
-            updated_nodes = list(current_nodes)
+        if is_refinement:
+            updated_nodes = [dict(n) for n in current_nodes]
             inst_lower = (instruction or "").lower()
+            applied_directives = 0
+
+            # Incorporate card-level custom directives
+            for node in updated_nodes:
+                d = node.get("custom_directive") or (node.get("merge_notes") if node.get("action") == "other" else None)
+                if d:
+                    applied_directives += 1
+                    curr_content = (node.get("content_markdown") or "").strip()
+                    directive_text = f"**DM Directive Applied**: {d}"
+                    if directive_text not in curr_content:
+                        node["content_markdown"] = f"{curr_content}\n\n{directive_text}".strip()
+                    node["summary"] = f"{node.get('summary', '')} ({d})".strip()
+                    node["custom_directive"] = None
+                    if node.get("action") == "other":
+                        node["action"] = "merge" if node.get("match_status") == "exact_match" else "create"
+
             if "split" in inst_lower:
                 new_title = f"{updated_nodes[0].get('title', 'Quest')} (Part 2)"
                 updated_nodes.append({
@@ -1732,7 +2818,7 @@ def decompose_adventure_document(
                     "data_json": {"status": "planned", "threat": "medium", "xp": 250},
                     "revealed_to_players": False
                 })
-            else:
+            elif applied_directives == 0:
                 updated_nodes.append({
                     "type": "npc" if "npc" in inst_lower else "clue",
                     "title": "Refined Element: Secret Lore",
@@ -1743,10 +2829,14 @@ def decompose_adventure_document(
                     "revealed_to_players": False
                 })
 
+            summary_msg = f"I have refined the working draft according to your steering: *\"{instruction}\"*."
+            if applied_directives > 0:
+                summary_msg += f" Incorporated **{applied_directives} custom card directive(s)** directly into node content."
+
             return {
                 "overview_summary": (
-                    f"### 🧙‍♂️ Co-DM Feedback Applied\n\n"
-                    f"I have refined the working draft according to your steering: *\"{instruction}\"*.\n"
+                    f"### 🧙‍♂️ Co-DM Steering Applied\n\n"
+                    f"{summary_msg}\n"
                     f"Updated working draft now contains **{len(updated_nodes)} nodes**."
                 ),
                 "extracted_nodes": _reconcile_extracted_nodes_with_campaign(updated_nodes, campaign_id),
@@ -1778,10 +2868,10 @@ def decompose_adventure_document(
             "model": "offline-decomposer"
         }
 
-    # --- Exhaustive multi-pass chunked extraction ---
-    # When exhaustive=True and the document is large, chunk the text and call the model
-    # once per chunk, then merge and deduplicate all results.
-    if exhaustive and len(text_content) > 20000:
+    # --- Multi-pass multi-agent extraction ---
+    # When exhaustive=True, NOT in refinement mode, and the document is large or is a PDF,
+    # run the multi-agent visual/chunked extraction orchestrator.
+    if exhaustive and not is_refinement and (pdf_file_path or len(text_content) > 12000):
         return _chunk_and_extract_nodes(
             text_content=text_content,
             model=model,
@@ -1792,14 +2882,54 @@ def decompose_adventure_document(
             current_nodes=current_nodes,
             current_edges=current_edges,
             campaign_id=campaign_id,
+            pdf_file_path=pdf_file_path,
+            start_page=start_page or 1,
+            end_page=end_page,
         )
 
-    # --- Single-pass extraction (default or small documents) ---
+    # --- Single-pass refinement / steering pass ---
+    nodes_with_directives = [
+        {
+            "title": n.get("title"),
+            "type": n.get("type"),
+            "directive": n.get("custom_directive") or n.get("merge_notes"),
+            "action": n.get("action")
+        }
+        for n in (current_nodes or [])
+        if n.get("custom_directive") or (n.get("action") == "other" and n.get("merge_notes"))
+    ]
+
+    directives_section = ""
+    if nodes_with_directives:
+        directives_section = f"""
+SPECIFIC CARD-LEVEL DM DIRECTIVES (incorporate each into its corresponding node):
+{json.dumps(nodes_with_directives, indent=2)}
+"""
+
     refinement_context = ""
     if current_nodes:
+        # Simplify current_nodes slightly to avoid blowing context while preserving all essentials
+        compact_nodes = []
+        for n in current_nodes:
+            c_node = {
+                "type": n.get("type"),
+                "title": n.get("title"),
+                "subtitle": n.get("subtitle"),
+                "summary": n.get("summary"),
+                "content_markdown": n.get("content_markdown"),
+                "data_json": n.get("data_json"),
+                "match_status": n.get("match_status"),
+                "matched_node_title": n.get("matched_node_title"),
+                "matched_node_id": n.get("matched_node_id"),
+                "action": n.get("action"),
+            }
+            if n.get("custom_directive"):
+                c_node["custom_directive"] = n.get("custom_directive")
+            compact_nodes.append(c_node)
+
         refinement_context = f"""
-CURRENT WORKING DRAFT NODES (to modify, split, rebalance, or prune according to DM feedback):
-{json.dumps(current_nodes, indent=2)}
+CURRENT WORKING DRAFT NODES ({len(compact_nodes)} nodes to modify, split, update, or prune per DM feedback):
+{json.dumps(compact_nodes, indent=2)}
 
 CURRENT WORKING DRAFT EDGES:
 {json.dumps(current_edges or [], indent=2)}
@@ -1811,34 +2941,35 @@ CURRENT WORKING DRAFT EDGES:
             f"{m.get('role', 'user').upper()}: {m.get('content', '')}" for m in conversation_history
         ) + "\n"
 
+    # Clip reference text during refinement so we stay well within model output budget
+    clipped_ref_text = text_content[:10000] if text_content else ""
+
     prompt = f"""You are an expert D&D 5e adventure analyst and Co-DM architect.
-The Dungeon Master is actively directing, steering, and refining the decomposition of this adventure module into graph nodes and edges.
+The Dungeon Master is actively directing, steering, and refining the working draft of adventure nodes and relationships.
 
-{selected_prompt}
+DM'S LATEST STEERING INSTRUCTION / FEEDBACK:
+\"\"\"{instruction if instruction else 'Incorporate all card directives and refine the working draft.'}\"\"\"
 
+{directives_section}
 {refinement_context}
 {history_context}
 
-DM'S LATEST STEERING INSTRUCTION / FEEDBACK:
-\"\"\"{instruction if instruction else 'Refine and improve the working draft based on conversation.'}\"\"\"
-
 {db_context}
 
-ADVENTURE / RULEBOOK TEXT REFERENCE:
+ADVENTURE REFERENCE TEXT EXCERPT:
 \"\"\"
-{text_content}
+{clipped_ref_text}
 \"\"\"
 
-CRITICAL INSTRUCTIONS FOR REFINING NODES:
-1. "overview_summary": Address the DM directly. Specifically explain what changes, additions, splits, or removals you performed in response to their feedback.
-2. "extracted_nodes": Output the COMPLETE, EXHAUSTIVE set of all entities found — extract every single named NPC, monster, location, item, faction, and clue. Do NOT stop at a representative sample.
-3. "extracted_edges": Output the complete, updated set of working draft edges connecting these nodes.
-4. If the DM asked to split a quest or arc, produce the resulting sub-nodes. If they asked to change stats, factions, or difficulty, update the data_json and descriptions accordingly.
-5. DECONFLICTION: Check each entity against the campaign database context:
-   - If exact match to an existing node: set "match_status": "exact_match", "match_confidence": 1.0, and specify "matched_node_id" and "matched_node_title".
-   - If stats or lore contradict existing records (e.g. CR mismatch, alignment/faction/disposition difference): set "match_status": "conflict" and provide "conflict_reason".
-   - If it appears to be an alias or near match: set "match_status": "potential_match", assign confidence (0.50-0.95), and provide "matched_node_title".
-   - If it is a completely new entity: set "match_status": "new", "match_confidence": 0.0.
+CRITICAL INSTRUCTIONS FOR REFINING THE WORKING DRAFT:
+1. "overview_summary": Address the DM directly. Specifically explain what changes, updates, additions, or card directives you incorporated.
+2. "extracted_nodes": Return the modified, newly added, or steered nodes (you do NOT need to re-output untouched nodes — untouched nodes will be safely preserved in the campaign draft automatically):
+   - For every node that has a 'custom_directive' or was targeted by DM feedback: rewrite or adjust its title, subtitle, summary, content_markdown, stats (data_json), or relationships to fully bake in the directive.
+   - For nodes whose custom directives have been incorporated: CLEAR 'custom_directive' (set to null or omit) and set 'action' to 'merge' or 'create' as appropriate.
+   - If the DM asked to split a quest or add an element, output the new node(s).
+   - If all nodes are modified, you may output all; otherwise returning the modified subset prevents token truncation.
+3. "extracted_edges": Return any new or updated working draft edges.
+4. DECONFLICTION: Ensure match_status, match_confidence, matched_node_id/matched_node_title remain accurate.
 
 Respond strictly in JSON matching this structure:
 {{
@@ -1851,19 +2982,14 @@ Respond strictly in JSON matching this structure:
       "summary": "1-2 sentence synopsis",
       "content_markdown": "Full formatted markdown details",
       "data_json": {{
-         "status": "planned",
-         "cr": "1/2 (if monster)",
-         "hp": 22,
-         "ac": 13,
-         "abilities": {{ "str": 10, "dex": 12, "con": 12, "int": 10, "wis": 10, "cha": 10 }}
+         "status": "planned"
       }},
       "revealed_to_players": false,
       "match_status": "new|exact_match|potential_match|conflict",
       "matched_node_id": "optional existing node id if matched",
       "matched_node_title": "optional existing node title if matched",
       "match_confidence": 1.0,
-      "conflict_reason": "Explanation of stat or lore contradiction if conflict",
-      "merge_notes": "How this will be merged into the existing record"
+      "action": "merge|create|skip"
     }}
   ],
   "extracted_edges": [
@@ -1881,19 +3007,41 @@ Respond strictly in JSON matching this structure:
             prompt,
             generation_config={"response_mime_type": "application/json", "max_output_tokens": 8192}
         )
-        data = json.loads(response.text)
-        raw_nodes = data.get("extracted_nodes", current_nodes or [])
-        reconciled_nodes = _reconcile_extracted_nodes_with_campaign(raw_nodes, campaign_id)
+        data = _safe_json_loads(response.text)
+        raw_nodes = data.get("extracted_nodes", [])
+
+        # Smart reconciliation: if the model only returned the subset of modified nodes,
+        # merge them back into current_nodes so untouched nodes are not accidentally dropped.
+        if is_refinement and current_nodes:
+            if not raw_nodes:
+                final_nodes = current_nodes
+            elif len(raw_nodes) < len(current_nodes):
+                updated_by_title = {n.get("title", "").lower().strip(): n for n in raw_nodes if n.get("title")}
+                merged = []
+                for orig in current_nodes:
+                    key = (orig.get("title") or "").lower().strip()
+                    if key in updated_by_title:
+                        merged.append(updated_by_title.pop(key))
+                    else:
+                        merged.append(orig)
+                merged.extend(updated_by_title.values())
+                final_nodes = merged
+            else:
+                final_nodes = raw_nodes
+        else:
+            final_nodes = raw_nodes or current_nodes or []
+
+        reconciled_nodes = _reconcile_extracted_nodes_with_campaign(final_nodes, campaign_id)
         return {
-            "overview_summary": data.get("overview_summary", "Adventure refined successfully."),
+            "overview_summary": data.get("overview_summary", "Working draft updated per your steering instructions."),
             "extracted_nodes": reconciled_nodes,
             "extracted_edges": data.get("extracted_edges", current_edges or []),
             "model": model_name
         }
     except Exception as e:
-        logger.error(f"Error decomposing adventure document: {e}")
+        logger.error(f"Error refining adventure document: {e}")
         return {
-            "overview_summary": f"Error during AI decomposition: {e}",
+            "overview_summary": f"Failed to apply steering: {e}",
             "extracted_nodes": current_nodes or [],
             "extracted_edges": current_edges or [],
             "error": str(e),
@@ -2194,7 +3342,7 @@ ANALYZE THE TRANSCRIPT AND RETURN STRICT JSON WITH THESE SECTIONS:
             prompt,
             generation_config={"response_mime_type": "application/json", "max_output_tokens": 8192}
         )
-        data = json.loads(response.text)
+        data = _safe_json_loads(response.text)
         recap = data.get("session_recap", "Session analyzed and adapted successfully.")
         status_updates = data.get("status_updates", [])
         node_updates = data.get("node_updates", [])

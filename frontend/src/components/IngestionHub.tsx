@@ -7,7 +7,9 @@ import {
   Calendar,
   Check,
   CheckCircle,
+  CheckCircle2,
   ChevronRight,
+  ClipboardList,
   Clock,
   Compass,
   FileText,
@@ -15,6 +17,7 @@ import {
   GitMerge,
   HelpCircle,
   Layers,
+  ListChecks,
   Loader2,
   MessageSquare,
   Mic,
@@ -23,6 +26,7 @@ import {
   Scroll,
   Send,
   Shield,
+  ShieldCheck,
   Sparkles,
   Split,
   Square,
@@ -32,7 +36,9 @@ import {
   FolderOpen,
   Upload,
   User,
+  Users,
   Wand2,
+  X,
 } from 'lucide-react';
 import {
   agentAdaptSession,
@@ -42,15 +48,30 @@ import {
   checkDuplicateUpload,
   createNode,
   deleteUploadedFile,
+  getDecompositionJob,
+  getLatestDecompositionJob,
+  getSettings,
   listUploads,
   parsePdfDocument,
+  retryDecompositionJob,
+  stopDecompositionJob,
   uploadFile,
   UploadedDoc,
 } from '../api';
 import { DocumentLibraryModal } from './DocumentLibraryModal';
 import { DuplicateUploadModal } from './DuplicateUploadModal';
+import { AgentScratchpadModal } from './AgentScratchpadModal';
 import { MarkdownView } from './MarkdownView';
-import { ExtractedDraftEdge, ExtractedDraftNode, NodeItem, NodeType } from '../types';
+import {
+  AgentScratchpad,
+  DecompositionCluster,
+  DecompositionJob,
+  ExtractedDraftEdge,
+  ExtractedDraftNode,
+  NodeItem,
+  NodeType,
+  SubAgentManifestItem,
+} from '../types';
 
 interface IngestionHubProps {
   campaignId: string;
@@ -68,6 +89,42 @@ interface SteeringMessage {
   timestamp: string;
   nodeCount?: number;
 }
+
+// Preset steering options for the adventure decomposer
+const bookPresets = [
+  { label: 'Comprehensive Chapter', prompt: 'Decompose this entire adventure chapter. Extract all keyed locations, encounters, traps, NPCs, factions, quests, secrets, and treasures. Maintain full epistemic confidence ratings.', mode: 'comprehensive' as const },
+  { label: 'Encounters & Roster', prompt: 'Focus on combat and social encounters. Extract enemy groups, monster stats, tactics, environmental hazards, and potential negotiations.', mode: 'monsters' as const },
+  { label: 'Quests & Objectives', prompt: 'Focus on campaign progression. Extract main and side quests, milestones, hooks, objectives, NPC patrons, and rewards.', mode: 'campaign_structure' as const },
+  { label: 'Keyed Locations & Lore', prompt: 'Focus on worldbuilding and map keys. Extract all numbered/lettered rooms, geographical features, historical lore, and hidden secrets.', mode: 'world_lore' as const },
+];
+
+const monsterPresets = [
+  { label: 'Monster / Boss Focus', prompt: 'Extract all creatures, monsters, bosses, and stat block references with CR, abilities, and loot.', mode: 'monsters' as const },
+  { label: 'Lair & Ecology', prompt: 'Extract creature habitats, environmental effects, lair actions, and regional effects.', mode: 'world_lore' as const },
+];
+
+const characterPresets = [
+  { label: 'NPC Roster & Dialog', prompt: 'Extract all NPCs, personalities, physical descriptions, roleplay guidance, and voiced quotes.', mode: 'characters' as const },
+  { label: 'Factions & Allegiances', prompt: 'Extract all faction leaders, agents, rivalries, and disposition toward the party.', mode: 'campaign_structure' as const },
+];
+
+const lorePresets = [
+  { label: 'World History & Rumors', prompt: 'Extract ancient history, forgotten pantheons, local legends, and tavern rumors with reliability tags.', mode: 'world_lore' as const },
+  { label: 'Magic Items & Artifacts', prompt: 'Extract unique relics, magical items, curses, and identification lore.', mode: 'world_lore' as const },
+];
+
+const SAMPLE_VTT_CHAT_TRANSCRIPT = `[00:15:22] DM: The heavy iron door grinds open, revealing a sunken chamber slick with moss. Water drips from the vaulted ceiling into a circular stone well at the center. Two alcoves flank the north wall.
+[00:18:45] Elora (Ranger): I hold up my torch and examine the perimeter. Rolling Perception... that's a 17.
+[00:19:10] DM: With a 17, Elora, you spot drag marks leading toward the well, and a discarded bronze nursery key resting near the western pillar.
+[00:22:30] Torvin (Paladin): I step forward toward the well with my warhammer drawn. "Stay alert, friends."
+[00:25:00] DM: As Torvin approaches the well, three Dire Rats scurry out of the northern alcove, chittering aggressively! Roll for initiative!
+[00:28:15] Combat Round 1: Torvin smites the lead rat for 14 damage (destroyed). Elora fires two arrows, killing the second rat. The final rat flees into a drainage grate. Combat ends.
+[00:34:20] Meepo: "Meepo fails! Calcryx is gone! Dragon stolen by vile goblins! Yusdrayl will feed Meepo to the beasts!"
+[00:38:00] Elora: "Wait! We aren't here to hurt you. Who stole your dragon?"
+[00:41:15] Meepo: "Goblins! Under chief Durnn! They crept through the dry moat and snatched Calcryx from Meepo's nursery cage!"
+[00:44:00] Torvin: Persuasion check... 19! "Meepo, take us to your leader Yusdrayl. We will retrieve your dragon if you grant us safe passage and share what you know of the citadel."
+[00:46:30] Meepo: "You speak truth?! Big soft-skins help Meepo?! Meepo takes you to Yusdrayl! But beware, the trap hall has a secret trigger!"
+[00:52:10] DM: Meepo hands you an old brass key—the nursery key—and agrees to guide you through Kobold territory safely. You take a short rest in the guard room. We will pick up right outside the throne room of Kobold Queen Yusdrayl next week!`;
 
 const SAMPLE_ACTUAL_PLAY_TRANSCRIPT = `[00:02:15] DM: You descend the treacherous ravine using the old knotted rope. The damp air smells of sulfur and old dust. Before you is the cracked courtyard of the sunken Sunless Citadel.
 [00:08:40] Elora (Rogue): I'm checking the cracked masonry for traps. Rolling Investigation... 18!
@@ -95,12 +152,13 @@ const SAMPLE_SESSION_SUMMARY = `Session 1 Debrief & Summary:
 - Stopping Point / Cliffhanger: The party completed a short rest in the guard post and stopped right outside the double doors of Queen Yusdrayl's throne chamber.`;
 
 const DECOMP_TIPS = [
-  'Arcane Weaver reads chapter PDFs in semantic chunks to thoroughly capture keyed rooms, secrets, and monster rosters.',
-  'Every extracted entity is classified by epistemic certainty: Fact (Canon), Suspicion (Clue/Deduction), or Rumor (Tavern Tale).',
-  'Lossless De-confliction cross-references existing campaign nodes so no canon lore or player notes get overwritten.',
-  'Deep LLM decomposition on multi-page chapters typically requires 20-50 seconds to complete all reasoning passes.',
-  'You can interactively steer the draft using the dialogue box to split quests, scale encounters, or modify lore before committing.',
-  'Extracted relationships are automatically mapped into graph edges linking quests, locations, factions, and creatures.',
+  'Multi-Agent Orchestration: Autonomous sub-agents collaborate to cluster visual pages, mine keyed rooms, audit completeness, and de-conflict campaign lore.',
+  'Visual Page-Cluster Workers: Sub-agents inspect multi-page visual PDF clusters directly, preserving two-column layouts, keyed map callouts, sidebar insets, and tactical statblocks without text scrambling.',
+  'Worker Scratchpad Mining: Extraction agents maintain internal scratchpads to inventory every keyed location, monster group, hidden trap, and NPC alias before constructing graph nodes.',
+  'Automated QA Auditor: A dedicated verification sub-agent cross-checks the extracted entity inventory against indexed document text to detect and recover any omitted rooms or encounters.',
+  'Domain Deconfliction & Inheritance: Specialists query your SQLite campaign graph to identify lore dilemmas and automatically inherit base 5e monster templates for custom stat variants.',
+  'Epistemic Certainty Classification: Every node is tagged as Fact (Canon), Suspicion (Clue/Deduction), or Rumor (Tavern Tale) with precise source page citations for full provenance.',
+  'Interactive Dilemma Resolution: When lore ambiguities arise, review cards let you 1-click Merge with existing lore, Create New, Skip, or provide custom instructions via the Other directive.',
 ];
 
 export const IngestionHub: React.FC<IngestionHubProps> = ({
@@ -140,7 +198,16 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
 
   useEffect(() => {
     refreshLibraryCount();
+    getSettings()
+      .then((s) => {
+        if (s?.gemini_model) {
+          setActiveModel(s.gemini_model);
+        }
+      })
+      .catch((err) => console.error('Error loading settings in IngestionHub:', err));
   }, [campaignId]);
+
+  const [activeModel, setActiveModel] = useState<string>('');
 
   // ==========================================
   // 1. ADVENTURE DECOMPOSER STATE
@@ -156,7 +223,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
   const [instruction, setInstruction] = useState<string>(
     'Decompose this entire document into all overarching Campaign Arcs, primary Quests, key Sessions, Encounters, named NPCs, monsters, locations, items, and factions.'
   );
-  const [decompMode, setDecompMode] = useState<'campaign_structure' | 'monsters' | 'characters' | 'world_lore' | 'general'>('campaign_structure');
+  const [decompMode, setDecompMode] = useState<'comprehensive' | 'campaign_structure' | 'monsters' | 'characters' | 'world_lore' | 'general'>('comprehensive');
   const [exhaustiveMode, setExhaustiveMode] = useState<boolean>(true);
   const [chunksProcessed, setChunksProcessed] = useState<number>(0);
 
@@ -174,21 +241,28 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
   const [isRefining, setIsRefining] = useState<boolean>(false);
   const chatBottomRef = useRef<HTMLDivElement | null>(null);
 
-  // Live Decomposition Progress Feedback
+  // Live Decomposition Progress Feedback & Multi-Agent Manifest
   const [decompElapsedSeconds, setDecompElapsedSeconds] = useState<number>(0);
   const [decompTipIndex, setDecompTipIndex] = useState<number>(0);
   const [decompError, setDecompError] = useState<string | null>(null);
   const [decompStep, setDecompStep] = useState<number>(1);
+  const [failedStep, setFailedStep] = useState<number | null>(null);
+  const [currentJobId, setCurrentJobId] = useState<string | null>(null);
+  const [jobClusters, setJobClusters] = useState<DecompositionCluster[]>([]);
+  const [jobSubagents, setJobSubagents] = useState<SubAgentManifestItem[]>([]);
+  const [jobScratchpads, setJobScratchpads] = useState<Record<string, AgentScratchpad>>({});
+  const [showScratchpadModal, setShowScratchpadModal] = useState<boolean>(false);
+  const [selectedScratchpadAgent, setSelectedScratchpadAgent] = useState<string>('');
+  const [isStopping, setIsStopping] = useState<boolean>(false);
 
   useEffect(() => {
     let interval: any = null;
     let tipInterval: any = null;
-    let stepInterval: any = null;
+    let pollInterval: any = null;
 
     if (isDecomposing) {
       setDecompElapsedSeconds(0);
       setDecompError(null);
-      setDecompStep(1);
 
       interval = setInterval(() => {
         setDecompElapsedSeconds((prev) => prev + 1);
@@ -198,17 +272,58 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
         setDecompTipIndex((prev) => (prev + 1) % DECOMP_TIPS.length);
       }, 4500);
 
-      stepInterval = setInterval(() => {
-        setDecompStep((prev) => (prev < 4 ? prev + 1 : 4));
-      }, 7000);
+      const pollLiveJob = async () => {
+        if (!campaignId) return;
+        try {
+          const job = await getLatestDecompositionJob(campaignId);
+          if (job) {
+            if (job.id) setCurrentJobId(job.id);
+            if (job.clusters && job.clusters.length > 0) setJobClusters(job.clusters);
+            if (job.subagents && job.subagents.length > 0) setJobSubagents(job.subagents);
+            if (job.scratchpads && Object.keys(job.scratchpads).length > 0) setJobScratchpads(job.scratchpads);
+            if (job.current_step) setDecompStep(job.current_step);
+            if (job.status === 'failed') {
+              setFailedStep(job.current_step);
+              if (job.error_message) setDecompError(job.error_message);
+            }
+          }
+        } catch {
+          // ignore poll error
+        }
+      };
+
+      pollLiveJob();
+      pollInterval = setInterval(pollLiveJob, 1500);
     }
 
     return () => {
       if (interval) clearInterval(interval);
       if (tipInterval) clearInterval(tipInterval);
-      if (stepInterval) clearInterval(stepInterval);
+      if (pollInterval) clearInterval(pollInterval);
     };
-  }, [isDecomposing]);
+  }, [isDecomposing, campaignId]);
+
+  // Reconnect to latest saved decomposition job for this campaign if available
+  useEffect(() => {
+    if (campaignId && extractedNodes.length === 0 && !currentJobId) {
+      getLatestDecompositionJob(campaignId)
+        .then((job) => {
+          if (job) {
+            setCurrentJobId(job.id);
+            if (job.clusters) setJobClusters(job.clusters);
+            if (job.subagents) setJobSubagents(job.subagents);
+            if (job.scratchpads) setJobScratchpads(job.scratchpads);
+            if (job.current_step) setDecompStep(job.current_step);
+            if (job.status === 'failed') {
+              setFailedStep(job.current_step);
+              if (job.error_message) setDecompError(job.error_message);
+            }
+          }
+        })
+        .catch(() => {});
+    }
+  }, [campaignId]);
+
 
   // ==========================================
   // 2. SESSION TRANSCRIPT ADAPTATION STATE
@@ -252,7 +367,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
     {
       label: 'Everything',
       prompt: 'Decompose this entire document into all overarching Campaign Arcs, primary Quests, key Sessions, Encounters, named NPCs, monsters, locations, items, and factions.',
-      mode: 'campaign_structure' as const,
+      mode: 'comprehensive' as const,
     },
     {
       label: 'Arc & Quests',
@@ -262,7 +377,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
     {
       label: 'Dungeon & Rooms',
       prompt: 'Extract keyed rooms as location nodes, with monster encounter rosters, hazards, and treasure items.',
-      mode: 'campaign_structure' as const,
+      mode: 'comprehensive' as const,
     },
     {
       label: 'Factions & Secrets',
@@ -272,7 +387,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
     {
       label: 'Section or Pages',
       prompt: 'Focus specifically on the section or chapter titled "[Insert Chapter or Section Title]" (or approx. physical PDF pp. [X-Y] / book page [Z]). Extract all keyed encounters, room descriptions, NPCs, monsters, and treasure within this section.',
-      mode: 'campaign_structure' as const,
+      mode: 'comprehensive' as const,
     },
   ];
 
@@ -480,6 +595,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
     setCommitStatus('');
     setChunksProcessed(0);
     setDecompError(null);
+    setFailedStep(null);
     try {
       const res = await agentDecomposeAdventure({
         filename: uploadedFilename || undefined,
@@ -492,8 +608,21 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
         exhaustive: exhaustiveMode,
       });
 
+      if (res.job_id) setCurrentJobId(res.job_id);
+      if (res.clusters) setJobClusters(res.clusters);
+      if (res.subagents) setJobSubagents(res.subagents);
+      if (res.scratchpads) setJobScratchpads(res.scratchpads);
+      if (res.current_step) setDecompStep(res.current_step);
+
+      if (res.model && res.model !== 'fallback' && res.model !== 'error') {
+        setActiveModel(res.model);
+      }
+
       if (res.error) {
         setDecompError(res.error);
+        setFailedStep(res.current_step || 4);
+      } else {
+        setFailedStep(null);
       }
 
       const rawNodes = res.extracted_nodes || [];
@@ -524,9 +653,118 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
         ]);
       }
     } catch (err: any) {
+      const errData = err.data;
+      if (errData?.job_id) setCurrentJobId(errData.job_id);
+      if (errData?.clusters) setJobClusters(errData.clusters);
+      if (errData?.subagents) setJobSubagents(errData.subagents);
+      if (errData?.scratchpads) setJobScratchpads(errData.scratchpads);
+      if (errData?.current_step) {
+        setDecompStep(errData.current_step);
+        setFailedStep(errData.current_step);
+      } else {
+        setFailedStep(decompStep || 4);
+      }
       setDecompError(`Decomposition failed: ${err.message || 'Unknown network or server error'}`);
     } finally {
       setIsDecomposing(false);
+    }
+  };
+
+  const handleRetryStep = async (stepToRetry?: number) => {
+    if (!currentJobId) {
+      handleRunDecomposition();
+      return;
+    }
+    const targetStep = stepToRetry || failedStep || decompStep || 4;
+    setIsDecomposing(true);
+    setCommitStatus('');
+    setDecompError(null);
+    try {
+      const res = await retryDecompositionJob(currentJobId, targetStep);
+      if (res.job_id) setCurrentJobId(res.job_id);
+      if (res.clusters) setJobClusters(res.clusters);
+      if (res.subagents) setJobSubagents(res.subagents);
+      if (res.scratchpads) setJobScratchpads(res.scratchpads);
+      if (res.current_step) setDecompStep(res.current_step);
+
+      if (res.model && res.model !== 'fallback' && res.model !== 'error') {
+        setActiveModel(res.model);
+      }
+
+      if (res.error) {
+        setDecompError(res.error);
+        setFailedStep(res.current_step || targetStep);
+      } else {
+        setFailedStep(null);
+      }
+
+      const rawNodes = res.extracted_nodes || [];
+      const edges = res.extracted_edges || [];
+      const processedNodes = processIncomingNodes(rawNodes);
+
+      setOverviewSummary(res.overview_summary || '');
+      setExtractedNodes(processedNodes);
+      setExtractedEdges(edges);
+      setSelectedNodeIndices(new Set(processedNodes.map((_: any, i: number) => i)));
+      if (res.chunks_processed) setChunksProcessed(res.chunks_processed);
+
+      if (processedNodes.length > 0) {
+        setSteeringConversation([
+          {
+            id: `msg-${Date.now()}`,
+            role: 'assistant',
+            content: res.overview_summary || `Successfully resumed pipeline at Step ${targetStep} and completed decomposition.`,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            nodeCount: processedNodes.length,
+          },
+        ]);
+      }
+    } catch (err: any) {
+      const errData = err.data;
+      if (errData?.job_id) setCurrentJobId(errData.job_id);
+      if (errData?.current_step) setFailedStep(errData.current_step);
+      setDecompError(`Retry failed: ${err.message || 'Unknown network or server error'}`);
+    } finally {
+      setIsDecomposing(false);
+    }
+  };
+
+  const handleEmergencyStop = async () => {
+    if (!currentJobId) {
+      setIsDecomposing(false);
+      return;
+    }
+    setIsStopping(true);
+    try {
+      const res = await stopDecompositionJob(currentJobId);
+      setIsDecomposing(false);
+      if (res) {
+        if (res.clusters) setJobClusters(res.clusters);
+        if (res.scratchpads) setJobScratchpads(res.scratchpads);
+        const rawNodes = (res as any).extracted_nodes || (res as any).draft_nodes || [];
+        const edges = (res as any).extracted_edges || (res as any).draft_edges || [];
+        const processedNodes = processIncomingNodes(rawNodes);
+        setExtractedNodes(processedNodes);
+        setExtractedEdges(edges);
+        setSelectedNodeIndices(new Set(processedNodes.map((_: any, i: number) => i)));
+        setOverviewSummary(
+          `🛑 Decomposition paused by DM. Preserved ${processedNodes.length} entities and ${edges.length} relationships extracted across completed slices. You can steer the draft with Co-DM below or restart.`
+        );
+        setSteeringConversation((prev) => [
+          ...prev,
+          {
+            id: `msg-${Date.now()}`,
+            role: 'assistant',
+            content: `🛑 Pipeline halted by DM. Preserved ${processedNodes.length} entities and ${edges.length} relationships across completed slices. What would you like to refine, or should we resume or restart?`,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            nodeCount: processedNodes.length,
+          },
+        ]);
+      }
+    } catch {
+      setIsDecomposing(false);
+    } finally {
+      setIsStopping(false);
     }
   };
 
@@ -571,10 +809,46 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
     });
   };
 
-  const handleSetNodeAction = (index: number, action: 'merge' | 'create') => {
+  const handleSetNodeAction = (index: number, action: 'merge' | 'create' | 'skip' | 'other') => {
     setExtractedNodes((prev) => {
       const next = [...prev];
+      if (action === 'skip') {
+        setSelectedNodeIndices((prevSel) => {
+          const s = new Set(prevSel);
+          s.delete(index);
+          return s;
+        });
+      } else {
+        setSelectedNodeIndices((prevSel) => {
+          const s = new Set(prevSel);
+          s.add(index);
+          return s;
+        });
+      }
       next[index] = { ...next[index], action };
+      return next;
+    });
+  };
+
+  const handleToggleOtherInput = (index: number) => {
+    setExtractedNodes((prev) => {
+      const next = [...prev];
+      next[index] = { ...next[index], show_other_input: !next[index].show_other_input };
+      return next;
+    });
+  };
+
+  const handleSaveCustomDirective = (index: number, directive: string) => {
+    setExtractedNodes((prev) => {
+      const next = [...prev];
+      const trimmed = directive.trim();
+      next[index] = {
+        ...next[index],
+        custom_directive: trimmed,
+        show_other_input: false,
+        action: 'other',
+        merge_notes: trimmed ? `DM Directive: ${trimmed}` : next[index].merge_notes,
+      };
       return next;
     });
   };
@@ -585,6 +859,31 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
     } else {
       setSelectedNodeIndices(new Set());
     }
+  };
+
+  const handleBakeDirectivesLocally = (singleIdx?: number) => {
+    setExtractedNodes((prev) =>
+      prev.map((n, idx) => {
+        if (singleIdx !== undefined && idx !== singleIdx) return n;
+        const directive = (n.custom_directive || (n.action === 'other' ? n.merge_notes : '') || '').trim();
+        if (!directive) return n;
+        const existingContent = (n.content_markdown || '').trim();
+        const directiveHeader = `### 🎯 DM Directive\n${directive}`;
+        const newContent = existingContent.includes(directive)
+          ? existingContent
+          : existingContent
+          ? `${existingContent}\n\n${directiveHeader}`
+          : directiveHeader;
+        return {
+          ...n,
+          content_markdown: newContent,
+          summary: n.summary ? `${n.summary} (${directive})` : directive,
+          custom_directive: undefined,
+          show_other_input: false,
+          action: n.action === 'other' ? (n.match_status === 'exact_match' ? 'merge' : 'create') : n.action,
+        };
+      })
+    );
   };
 
   const handleSendFeedback = async (textOverride?: string) => {
@@ -615,7 +914,12 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
         current_nodes: extractedNodes,
         current_edges: extractedEdges,
         conversation_history: newHistory.map((m) => ({ role: m.role, content: m.content })),
+        exhaustive: false,
       });
+
+      if (res.error) {
+        alert('Co-DM Steering Notice: ' + res.error);
+      }
 
       const updatedRaw = res.extracted_nodes || extractedNodes;
       const updatedEdges = res.extracted_edges || extractedEdges;
@@ -1931,16 +2235,16 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                       style={{ accentColor: 'var(--color-gold)', width: '16px', height: '16px', cursor: 'pointer' }}
                     />
                     <label htmlFor="exhaustive-scan" style={{ fontSize: '0.86rem', fontWeight: 600, color: 'var(--text-primary)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      🔍 Exhaustive Decomposition (Multi-Pass)
+                      🔍 Multi-Agent Deep Pipeline (Visual Clustering, Scratchpads &amp; QA Audit)
                       <span style={{ fontSize: '0.72rem', color: exhaustiveMode ? 'var(--color-gold)' : 'var(--text-muted)', fontWeight: 600 }}>
-                        {exhaustiveMode ? '(Default: ON)' : '(Single-Pass Mode)'}
+                        {exhaustiveMode ? '(Default: ON)' : '(Fast Single-Pass)'}
                       </span>
                     </label>
                   </div>
                   <p style={{ fontSize: '0.74rem', color: 'var(--text-muted)', margin: '4px 0 0 24px', lineHeight: 1.4 }}>
                     {exhaustiveMode
-                      ? `Enabled by default. Chunks large documents and scans each segment to extract ALL entities without skipping or truncating.${totalPages > 5 ? ` Estimated: ~${Math.ceil(totalPages / 5)} AI passes.` : ''}`
-                      : 'Single-pass extraction active — fast, but long documents may truncate or miss entities. Re-enable for complete coverage.'}
+                      ? `Enabled by default. Orchestrates sub-agents across visual page clusters, worker scratchpad inventories, an automated QA verification pass, and SQLite lore deconfliction with 5e base template inheritance.${totalPages > 5 ? ` Estimated: ~${Math.ceil(totalPages / 5)} cluster worker passes.` : ''}`
+                      : 'Fast single-pass extraction active — rapid overview, but long chapters or complex keyed maps may omit sidebars and statblocks. Re-enable for multi-agent completeness.'}
                   </p>
                 </div>
               </div>
@@ -2017,13 +2321,13 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                   <>
                     <Loader2 size={18} className="animate-spin" />
                     {exhaustiveMode
-                      ? `Running Exhaustive Scan${totalPages > 5 ? ` (~${Math.ceil((endPage - startPage + 1) / 5)} passes)` : ''}...`
+                      ? `Running Multi-Agent Pipeline (Clusters, Scratchpads & QA)...`
                       : 'Decomposing with Co-DM Architect...'}
                   </>
                 ) : (
                   <>
                     <Wand2 size={18} />
-                    {exhaustiveMode ? '🔍 Exhaustive Scan & Decompose' : 'Decompose with Co-DM'}
+                    {exhaustiveMode ? '🔍 Multi-Agent Chapter Decomposition' : 'Fast Decompose with Co-DM'}
                   </>
                 )}
               </button>
@@ -2044,7 +2348,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                 background: 'var(--bg-card)',
               }}
             >
-              {/* Diagnostic Error Banner */}
+              {/* Diagnostic Error Banner with Step Persistence & Granular Retry */}
               {decompError && (
                 <div
                   className="glass-panel animate-fade-in"
@@ -2056,13 +2360,13 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                     marginBottom: '16px',
                     display: 'flex',
                     flexDirection: 'column',
-                    gap: '8px',
+                    gap: '10px',
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#f87171', fontWeight: 700, fontSize: '0.88rem' }}>
                       <AlertTriangle size={18} />
-                      <span>Decomposition Diagnostics &amp; Feedback</span>
+                      <span>Decomposition Diagnostics &amp; Step Recovery</span>
                     </div>
                     <button
                       onClick={() => setDecompError(null)}
@@ -2072,20 +2376,74 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                       Dismiss
                     </button>
                   </div>
+
                   <p style={{ fontSize: '0.78rem', color: 'var(--text-primary)', margin: 0, lineHeight: 1.4 }}>
                     {decompError}
                   </p>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px', flexWrap: 'wrap' }}>
+
+                  {currentJobId && (
+                    <div
+                      style={{
+                        fontSize: '0.74rem',
+                        color: 'var(--text-secondary)',
+                        background: 'rgba(0, 0, 0, 0.25)',
+                        padding: '8px 12px',
+                        borderRadius: '6px',
+                        borderLeft: '3px solid #34d399',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        flexWrap: 'wrap',
+                        gap: '6px',
+                      }}
+                    >
+                      <span>
+                        💾 <strong>Work Preserved:</strong> Intermediate drafts from earlier steps are saved in SQLite (Job: <code>{currentJobId.slice(0, 8)}</code>). You can retry only the failed step without restarting from scratch or losing previous cluster extracts.
+                      </span>
+                      {Object.keys(jobScratchpads).length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setShowScratchpadModal(true)}
+                          className="btn btn-ghost"
+                          style={{ fontSize: '0.72rem', padding: '2px 8px', color: 'var(--color-gold)', textDecoration: 'underline' }}
+                        >
+                          📋 Inspect Scratchpads ({Object.keys(jobScratchpads).length} active)
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '2px', flexWrap: 'wrap' }}>
+                    {currentJobId && (
+                      <button
+                        type="button"
+                        onClick={() => handleRetryStep(failedStep || decompStep)}
+                        className="btn btn-primary"
+                        style={{ fontSize: '0.76rem', padding: '5px 12px', display: 'flex', alignItems: 'center', gap: '5px' }}
+                      >
+                        <RefreshCw size={13} /> Retry Step {failedStep || decompStep}: {
+                          (failedStep || decompStep) === 1 ? 'Page Clusters' :
+                          (failedStep || decompStep) === 2 ? 'Scratchpad Mining' :
+                          (failedStep || decompStep) === 3 ? 'QA Gap Audit' : 'Domain Deconfliction'
+                        }
+                      </button>
+                    )}
+
                     <button
                       type="button"
                       onClick={handleRunDecomposition}
                       className="btn btn-secondary"
-                      style={{ fontSize: '0.74rem', padding: '4px 10px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                      style={{ fontSize: '0.74rem', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: '4px' }}
                     >
-                      <RefreshCw size={12} /> Retry Scan
+                      <RefreshCw size={12} /> {currentJobId ? 'Restart Full Scan' : 'Retry Scan'}
                     </button>
+
                     <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                      Note: The Gemini model has been set to <code>gemini-2.5-flash</code> in Settings. You can also try narrowing the page range to a 5-10 page section.
+                      {activeModel ? (
+                        <>Active engine: <code>{activeModel}</code> (configured in Settings).</>
+                      ) : (
+                        <>Configured engine: <code>gemini-flash-latest</code>.</>
+                      )}
                     </span>
                   </div>
                 </div>
@@ -2105,10 +2463,13 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                     gap: '12px',
                     marginBottom: '16px',
                     boxShadow: '0 0 25px rgba(245, 158, 11, 0.12)',
+                    maxWidth: '100%',
+                    boxSizing: 'border-box',
+                    overflow: 'hidden',
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: '1 1 280px' }}>
                       <div
                         style={{
                           width: '32px',
@@ -2120,35 +2481,80 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                           alignItems: 'center',
                           justifyContent: 'center',
                           color: 'var(--color-gold)',
+                          flexShrink: 0,
                         }}
                       >
                         <Sparkles size={18} className="animate-spin" />
                       </div>
-                      <div>
-                        <h4 style={{ fontSize: '0.92rem', fontWeight: 700, color: 'var(--color-gold)', margin: 0 }}>
-                          Arcane LLM Decomposing Document
+                      <div style={{ minWidth: 0 }}>
+                        <h4 style={{ fontSize: '0.92rem', fontWeight: 700, color: 'var(--color-gold)', margin: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          Multi-Agent Co-DM Pipeline Running
                         </h4>
                         <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-                          Extracting NPCs, encounters, quests, locations, and epistemic lore...
+                          Orchestrating visual cluster workers, scratchpad extraction, QA audit pass, and SQLite deconfliction...
                         </span>
                       </div>
                     </div>
-                    <div
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '6px',
-                        background: 'rgba(0, 0, 0, 0.35)',
-                        padding: '4px 10px',
-                        borderRadius: '20px',
-                        border: '1px solid var(--border-medium)',
-                        fontSize: '0.76rem',
-                        color: 'var(--color-gold)',
-                        fontWeight: 700,
-                      }}
-                    >
-                      <Clock size={12} />
-                      <span>{Math.floor(decompElapsedSeconds / 60).toString().padStart(2, '0')}:{(decompElapsedSeconds % 60).toString().padStart(2, '0')}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', flexShrink: 0 }}>
+                      <div
+                        style={{
+                          background: 'rgba(59, 130, 246, 0.15)',
+                          padding: '3px 8px',
+                          borderRadius: '12px',
+                          border: '1px solid rgba(59, 130, 246, 0.3)',
+                          fontSize: '0.7rem',
+                          color: '#93c5fd',
+                          fontWeight: 600,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                        }}
+                      >
+                        <span>🤖 {activeModel || 'gemini-flash-latest'}</span>
+                      </div>
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          background: 'rgba(0, 0, 0, 0.35)',
+                          padding: '4px 10px',
+                          borderRadius: '20px',
+                          border: '1px solid var(--border-medium)',
+                          fontSize: '0.76rem',
+                          color: 'var(--color-gold)',
+                          fontWeight: 700,
+                        }}
+                      >
+                        <Clock size={12} />
+                        <span>{Math.floor(decompElapsedSeconds / 60).toString().padStart(2, '0')}:{(decompElapsedSeconds % 60).toString().padStart(2, '0')}</span>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleEmergencyStop}
+                        disabled={isStopping}
+                        className="btn btn-danger"
+                        title="Interrupt LLM extraction and preserve all findings mined so far"
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '5px',
+                          fontSize: '0.72rem',
+                          fontWeight: 700,
+                          padding: '4px 10px',
+                          borderRadius: '16px',
+                          background: 'rgba(239, 68, 68, 0.2)',
+                          border: '1px solid rgba(239, 68, 68, 0.45)',
+                          color: '#fca5a5',
+                          cursor: isStopping ? 'not-allowed' : 'pointer',
+                          transition: 'all 0.2s ease',
+                          flexShrink: 0,
+                        }}
+                      >
+                        <Square size={10} fill="#ef4444" color="#ef4444" />
+                        <span>{isStopping ? 'Stopping...' : 'Emergency Stop'}</span>
+                      </button>
                     </div>
                   </div>
 
@@ -2156,7 +2562,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                   <div
                     style={{
                       display: 'grid',
-                      gridTemplateColumns: 'repeat(4, 1fr)',
+                      gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
                       gap: '6px',
                       padding: '8px',
                       background: 'rgba(0, 0, 0, 0.3)',
@@ -2165,10 +2571,10 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                     }}
                   >
                     {[
-                      { step: 1, label: '1. Slicing Pages', detail: `pp. ${startPage}-${endPage}` },
-                      { step: 2, label: '2. Gemini Reasoning', detail: 'Entity Extraction' },
-                      { step: 3, label: '3. Epistemic Lore', detail: 'Fact / Suspicion / Rumor' },
-                      { step: 4, label: '4. De-confliction', detail: 'Lossless Merge' },
+                      { step: 1, label: '1. Visual Page Clusters', detail: `Rendering pp. ${startPage}-${endPage}` },
+                      { step: 2, label: '2. Scratchpad Entity Mining', detail: 'Sub-agent room & NPC extraction' },
+                      { step: 3, label: '3. Automated QA Auditor', detail: 'Cross-checking omitted entities' },
+                      { step: 4, label: '4. Domain Deconfliction', detail: 'SQLite lore & 5e base templates' },
                     ].map((s) => {
                       const isActive = decompStep === s.step;
                       const isDone = decompStep > s.step;
@@ -2184,6 +2590,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                             background: isActive ? 'rgba(245, 158, 11, 0.15)' : isDone ? 'rgba(16, 185, 129, 0.12)' : 'transparent',
                             border: `1px solid ${isActive ? 'var(--color-gold)' : isDone ? '#10b981' : 'transparent'}`,
                             transition: 'all 0.3s ease',
+                            minWidth: 0,
                           }}
                         >
                           <span
@@ -2194,14 +2601,185 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                               display: 'flex',
                               alignItems: 'center',
                               gap: '4px',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
                             }}
                           >
                             {isDone ? '✓' : isActive ? '⏳' : '○'} {s.label}
                           </span>
-                          <span style={{ fontSize: '0.64rem', color: 'var(--text-muted)' }}>{s.detail}</span>
+                          <span
+                            style={{
+                              fontSize: '0.64rem',
+                              color: 'var(--text-muted)',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {s.detail}
+                          </span>
                         </div>
                       );
                     })}
+                  </div>
+
+                  {/* Page Chunks & Sub-Agents Manifest Block */}
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '8px',
+                      padding: '10px 12px',
+                      background: 'rgba(0, 0, 0, 0.35)',
+                      borderRadius: '8px',
+                      border: '1px solid var(--border-subtle)',
+                      maxWidth: '100%',
+                      boxSizing: 'border-box',
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        flexWrap: 'wrap',
+                        gap: '8px',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
+                        <Layers size={14} style={{ color: 'var(--color-gold)', flexShrink: 0 }} />
+                        <strong style={{ color: 'var(--text-primary)' }}>
+                          Document Chunks & Sub-Agents ({jobClusters.length}):
+                        </strong>
+                        <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                          (Click any worker to inspect intermediate scratchpad findings)
+                        </span>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setShowScratchpadModal(true)}
+                        className="btn btn-secondary"
+                        style={{
+                          fontSize: '0.72rem',
+                          padding: '4px 10px',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '5px',
+                          borderColor: 'var(--color-gold)',
+                          color: 'var(--color-gold)',
+                          whiteSpace: 'nowrap',
+                          flexShrink: 0,
+                        }}
+                      >
+                        <ClipboardList size={13} />
+                        Open Agent Scratchpad ({Object.keys(jobScratchpads).length || jobClusters.length || 1})
+                      </button>
+                    </div>
+
+                    <div
+                      style={{
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        gap: '6px',
+                        alignItems: 'center',
+                        width: '100%',
+                        maxWidth: '100%',
+                      }}
+                    >
+                      {jobClusters.length > 0 ? (
+                        jobClusters.map((c, idx) => {
+                          const name = c.subagent_name || c.worker_name || `Worker ${idx + 1}`;
+                          const isDone = c.status === 'completed';
+                          const isRunning = c.status === 'running';
+                          const isFailed = c.status === 'failed';
+
+                          const sp = jobScratchpads[name];
+                          const findingsCount = sp
+                            ? (sp.rooms_inventoried?.length || 0) +
+                              (sp.npcs_identified?.length || 0) +
+                              (sp.monsters_spotted?.length || 0) +
+                              (sp.sidebars_captured?.length || 0) +
+                              (sp.traps_secrets?.length || 0)
+                            : 0;
+
+                          return (
+                            <button
+                              key={c.id || `cluster-${idx}`}
+                              type="button"
+                              onClick={() => {
+                                setSelectedScratchpadAgent(name);
+                                setShowScratchpadModal(true);
+                              }}
+                              title={`Click to inspect ${name} scratchpad (${c.status || 'pending'})`}
+                              style={{
+                                fontSize: '0.68rem',
+                                padding: '3px 8px',
+                                borderRadius: '6px',
+                                background: isDone
+                                  ? 'rgba(16, 185, 129, 0.16)'
+                                  : isRunning
+                                  ? 'rgba(245, 158, 11, 0.22)'
+                                  : isFailed
+                                  ? 'rgba(239, 68, 68, 0.2)'
+                                  : 'rgba(255, 255, 255, 0.05)',
+                                color: isDone
+                                  ? '#34d399'
+                                  : isRunning
+                                  ? 'var(--color-gold)'
+                                  : isFailed
+                                  ? '#f87171'
+                                  : 'var(--text-muted)',
+                                border: `1px solid ${
+                                  isDone
+                                    ? 'rgba(16, 185, 129, 0.45)'
+                                    : isRunning
+                                    ? 'rgba(245, 158, 11, 0.65)'
+                                    : isFailed
+                                    ? 'rgba(239, 68, 68, 0.5)'
+                                    : 'rgba(255, 255, 255, 0.12)'
+                                }`,
+                                fontWeight: isDone || isRunning ? 700 : 500,
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                transition: 'all 0.2s ease',
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {isDone && <CheckCircle2 size={11} style={{ color: '#34d399' }} />}
+                              {isRunning && <Loader2 size={11} className="animate-spin" style={{ color: 'var(--color-gold)' }} />}
+                              {isFailed && <AlertCircle size={11} style={{ color: '#f87171' }} />}
+                              <span>
+                                pp. {c.start_page}–{c.end_page} ({name})
+                                {findingsCount > 0 && (
+                                  <span
+                                    style={{
+                                      marginLeft: '4px',
+                                      padding: '0 4px',
+                                      borderRadius: '8px',
+                                      background: 'rgba(16, 185, 129, 0.3)',
+                                      color: '#a7f3d0',
+                                      fontSize: '0.62rem',
+                                    }}
+                                  >
+                                    {findingsCount}
+                                  </span>
+                                )}
+                              </span>
+                            </button>
+                          );
+                        })
+                      ) : (
+                        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                          {startPage && endPage
+                            ? `${Math.ceil(((endPage || 30) - (startPage || 1) + 1) / 2)} slices queued (pp. ${startPage}–${endPage})`
+                            : 'Auto-slicing (2 pages per cluster)'}
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   {/* Lore Tip Carousel */}
@@ -2226,32 +2804,104 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
               )}
 
               {/* Action Bar */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
                 <div>
-                  <h3 style={{ fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <h3 style={{ fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
                     <Layers size={18} style={{ color: 'var(--color-gold)' }} />
                     Working Draft: {extractedNodes.length} Nodes, {extractedEdges.length} Edges
                   </h3>
-                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                    Chat with the Co-DM below to steer and refine before committing.
-                  </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '4px', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                      Chat with the Co-DM below to steer and refine before committing.
+                    </span>
+                    {(jobClusters.length > 0 || Object.keys(jobScratchpads).length > 0) && (
+                      <button
+                        type="button"
+                        onClick={() => setShowScratchpadModal(true)}
+                        className="btn btn-ghost"
+                        style={{
+                          fontSize: '0.72rem',
+                          padding: '2px 8px',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          color: 'var(--color-gold)',
+                          border: '1px solid rgba(245, 158, 11, 0.4)',
+                          borderRadius: '12px',
+                          background: 'rgba(245, 158, 11, 0.08)',
+                        }}
+                      >
+                        <ClipboardList size={12} />
+                        Inspect Sub-Agent Scratchpads ({jobClusters.length} chunks • {jobSubagents.length || Object.keys(jobScratchpads).length} agents)
+                      </button>
+                    )}
+                  </div>
                 </div>
 
-                {extractedNodes.length > 0 && (
-                  <button
-                    onClick={handleCommitToCampaign}
-                    disabled={commitStatus === 'committing' || selectedNodeIndices.size === 0}
-                    className="btn btn-primary"
-                    style={{ padding: '7px 14px', fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: '6px' }}
-                  >
-                    {commitStatus === 'committing' ? (
-                      <Loader2 size={14} className="animate-spin" />
-                    ) : (
-                      <Check size={14} />
-                    )}
-                    Apply to Campaign Graph
-                  </button>
-                )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  {(() => {
+                    const directivesCount = extractedNodes.filter((n) => n.custom_directive || (n.action === 'other' && n.merge_notes)).length;
+                    if (directivesCount === 0) return null;
+                    return (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => handleSendFeedback("Incorporate all card custom directives into the working draft nodes, update stats and text, and clear directive flags.")}
+                          disabled={isRefining}
+                          className="btn btn-secondary"
+                          style={{
+                            padding: '6px 12px',
+                            fontSize: '0.75rem',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            borderColor: 'var(--color-gold)',
+                            color: 'var(--color-gold)',
+                          }}
+                          title="Ask Co-DM to rewrite entities incorporating all custom directives"
+                        >
+                          <Sparkles size={13} className={isRefining ? 'animate-spin' : ''} />
+                          {isRefining ? 'Refining...' : `⚡ Co-DM: Incorporate ${directivesCount} Directives`}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleBakeDirectivesLocally()}
+                          className="btn btn-ghost"
+                          style={{
+                            padding: '6px 12px',
+                            fontSize: '0.75rem',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '5px',
+                            border: '1px solid var(--border-medium)',
+                            color: 'var(--text-secondary)',
+                          }}
+                          title="Instantly append all custom directives directly into the card text notes without calling the AI"
+                        >
+                          <CheckCircle2 size={13} style={{ color: '#34d399' }} />
+                          Bake into Notes (Instant)
+                        </button>
+                      </>
+                    );
+                  })()}
+
+                  {extractedNodes.length > 0 && (
+                    <button
+                      onClick={handleCommitToCampaign}
+                      disabled={commitStatus === 'committing' || selectedNodeIndices.size === 0}
+                      className="btn btn-primary"
+                      style={{ padding: '7px 14px', fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: '6px' }}
+                    >
+                      {commitStatus === 'committing' ? (
+                        <Loader2 size={14} className="animate-spin" />
+                      ) : (
+                        <Check size={14} />
+                      )}
+                      Apply to Campaign Graph
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Commit Success Banner with Detailed Metrics */}
@@ -2818,6 +3468,66 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                                     New Entity
                                   </span>
                                 )}
+
+                                {/* Source Provenance Badge */}
+                                {n.source_page && (
+                                  <span
+                                    style={{
+                                      fontSize: '0.70rem',
+                                      padding: '2px 7px',
+                                      borderRadius: '10px',
+                                      background: 'rgba(59, 130, 246, 0.15)',
+                                      color: '#60a5fa',
+                                      border: '1px solid rgba(59, 130, 246, 0.3)',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '3px',
+                                    }}
+                                    title={`Extracted from page ${n.source_page}`}
+                                  >
+                                    📍 Page {n.source_page}
+                                  </span>
+                                )}
+
+                                {/* Base Template Inherited Badge */}
+                                {n.inherited_template && n.base_template_title && (
+                                  <span
+                                    style={{
+                                      fontSize: '0.70rem',
+                                      padding: '2px 7px',
+                                      borderRadius: '10px',
+                                      background: 'rgba(16, 185, 129, 0.15)',
+                                      color: '#34d399',
+                                      border: '1px solid rgba(16, 185, 129, 0.3)',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '3px',
+                                    }}
+                                    title={`Inherited base 5e statistics from existing campaign node: ${n.base_template_title}`}
+                                  >
+                                    🧬 Base: {n.base_template_title}
+                                  </span>
+                                )}
+
+                                {/* Needs Statblock Stub Badge */}
+                                {n.needs_statblock && (
+                                  <span
+                                    style={{
+                                      fontSize: '0.70rem',
+                                      padding: '2px 7px',
+                                      borderRadius: '10px',
+                                      background: 'rgba(245, 158, 11, 0.2)',
+                                      color: '#fbbf24',
+                                      border: '1px solid #f59e0b',
+                                      fontWeight: 600,
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '3px',
+                                    }}
+                                  >
+                                    📝 Needs Stat Block
+                                  </span>
+                                )}
                               </div>
                             </div>
 
@@ -2833,7 +3543,30 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                               </div>
                             )}
 
-                            {/* Conflict Alert Box */}
+                            {/* Needs Statblock Stub Alert Box */}
+                            {n.needs_statblock && (
+                              <div
+                                style={{
+                                  padding: '7px 11px',
+                                  borderRadius: '6px',
+                                  background: 'rgba(245, 158, 11, 0.08)',
+                                  border: '1px solid rgba(245, 158, 11, 0.3)',
+                                  fontSize: '0.75rem',
+                                  color: '#fbbf24',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '7px',
+                                  marginBottom: '6px',
+                                }}
+                              >
+                                <Sparkles size={13} style={{ flexShrink: 0 }} />
+                                <div>
+                                  {n.needs_statblock_prompt || `Missing complete 5e statblock for "${n.title}". Created as a stub record ready for manual input or stat block upload.`}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Conflict Alert Box with Explicit Dilemma Card */}
                             {isConflict && (
                               <div
                                 style={{
@@ -2851,10 +3584,10 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                               >
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#f87171', fontWeight: 700 }}>
                                   <AlertTriangle size={13} />
-                                  Flagged for DM Review: Conflicting Lore / Stats with Existing Campaign Node
+                                  Flagged for DM Review: Contradiction Detected with Existing Campaign Node
                                 </div>
-                                <div style={{ color: 'var(--text-secondary)' }}>
-                                  {n.conflict_reason || 'Contradictory values detected between existing campaign record and imported document.'}
+                                <div style={{ color: 'var(--text-primary)', marginTop: '2px', lineHeight: 1.4 }}>
+                                  {n.dilemma_explanation || n.conflict_reason || 'Contradictory values detected between existing campaign record and imported document.'}
                                 </div>
                                 <div style={{ fontSize: '0.71rem', color: 'var(--text-muted)' }}>
                                   Existing Campaign Target: <strong>{n.matched_node_title}</strong> (ID: {n.matched_node_id})
@@ -2862,7 +3595,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                               </div>
                             )}
 
-                            {/* Potential Match Candidate Box */}
+                            {/* Potential Match Candidate Box with Explicit Dilemma Card */}
                             {isPotential && (
                               <div
                                 style={{
@@ -2880,17 +3613,61 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                               >
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#c084fc', fontWeight: 700 }}>
                                   <HelpCircle size={13} />
-                                  Confidence Rating: {Math.round((n.match_confidence || 0.8) * 100)}% Match with "{n.matched_node_title}"
+                                  Ambiguous Near-Match ({Math.round((n.match_confidence || 0.8) * 100)}% Similarity)
                                 </div>
-                                <div style={{ color: 'var(--text-secondary)' }}>
-                                  The agent suspects this entity matches existing node <strong>"{n.matched_node_title}"</strong>. Choose whether to confirm merging into that record or create a distinct record:
+                                <div style={{ color: 'var(--text-primary)', marginTop: '2px', lineHeight: 1.4 }}>
+                                  {n.dilemma_explanation || `The agent suspects this entity matches existing node "${n.matched_node_title}". Choose whether to merge or create a distinct record:`}
                                 </div>
                               </div>
                             )}
 
-                            {/* Interactive Action Controls (Confirm / New Record Buttons) */}
+                            {/* Custom Directive Banner */}
+                            {n.custom_directive && (
+                              <div
+                                style={{
+                                  padding: '6px 10px',
+                                  borderRadius: '6px',
+                                  background: 'rgba(234, 179, 8, 0.12)',
+                                  border: '1px solid rgba(234, 179, 8, 0.35)',
+                                  fontSize: '0.74rem',
+                                  color: 'var(--color-gold)',
+                                  marginBottom: '6px',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                }}
+                              >
+                                <span>🎯 <strong>Custom Directive:</strong> "{n.custom_directive}"</span>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleBakeDirectivesLocally(idx);
+                                  }}
+                                  className="btn btn-ghost"
+                                  style={{
+                                    fontSize: '0.68rem',
+                                    padding: '2px 8px',
+                                    borderRadius: '4px',
+                                    marginLeft: 'auto',
+                                    border: '1px solid rgba(234, 179, 8, 0.4)',
+                                    color: 'var(--color-gold)',
+                                    background: 'rgba(234, 179, 8, 0.15)',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                    cursor: 'pointer',
+                                  }}
+                                  title="Bake this directive directly into the card text notes now"
+                                >
+                                  <Check size={11} />
+                                  Bake into Note
+                                </button>
+                              </div>
+                            )}
+
+                            {/* Interactive Action Controls (Merge / Create / Skip / Other Buttons) */}
                             {(isConflict || isPotential || isExact) && (
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginTop: '4px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginTop: '4px' }}>
                                 <span style={{ fontSize: '0.71rem', color: 'var(--text-muted)', fontWeight: 600 }}>
                                   Action:
                                 </span>
@@ -2903,8 +3680,8 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                                   }}
                                   className="btn"
                                   style={{
-                                    padding: '3px 10px',
-                                    fontSize: '0.73rem',
+                                    padding: '3px 9px',
+                                    fontSize: '0.72rem',
                                     borderRadius: '6px',
                                     background: willMerge
                                       ? 'rgba(16, 185, 129, 0.25)'
@@ -2920,9 +3697,9 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                                     cursor: 'pointer',
                                   }}
                                 >
-                                  <GitMerge size={12} />
+                                  <GitMerge size={11} />
                                   {isConflict
-                                    ? 'Merge & Preserve Canon Lore'
+                                    ? 'Merge & Update'
                                     : isPotential
                                     ? `Confirm Merge with ${n.matched_node_title}`
                                     : `Auto-Merge into ${n.matched_node_title || 'Existing'}`}
@@ -2936,8 +3713,8 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                                   }}
                                   className="btn"
                                   style={{
-                                    padding: '3px 10px',
-                                    fontSize: '0.73rem',
+                                    padding: '3px 9px',
+                                    fontSize: '0.72rem',
                                     borderRadius: '6px',
                                     background: n.action === 'create'
                                       ? 'rgba(59, 130, 246, 0.25)'
@@ -2953,8 +3730,125 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                                     cursor: 'pointer',
                                   }}
                                 >
-                                  <Plus size={12} />
-                                  Create as New Record
+                                  <Plus size={11} />
+                                  Create as New
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleSetNodeAction(idx, 'skip');
+                                  }}
+                                  className="btn"
+                                  title="Skip this entity from being imported"
+                                  style={{
+                                    padding: '3px 9px',
+                                    fontSize: '0.72rem',
+                                    borderRadius: '6px',
+                                    background: n.action === 'skip' || !isChecked
+                                      ? 'rgba(107, 114, 128, 0.25)'
+                                      : 'var(--bg-surface)',
+                                    border: n.action === 'skip' || !isChecked
+                                      ? '1px solid #9ca3af'
+                                      : '1px solid var(--border-medium)',
+                                    color: n.action === 'skip' || !isChecked ? '#9ca3af' : 'var(--text-muted)',
+                                    fontWeight: 500,
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  <Square size={11} />
+                                  Skip
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleToggleOtherInput(idx);
+                                  }}
+                                  className="btn"
+                                  title="Provide custom instructions on how to handle this entity"
+                                  style={{
+                                    padding: '3px 9px',
+                                    fontSize: '0.72rem',
+                                    borderRadius: '6px',
+                                    background: n.show_other_input || n.custom_directive
+                                      ? 'rgba(234, 179, 8, 0.22)'
+                                      : 'var(--bg-surface)',
+                                    border: n.show_other_input || n.custom_directive
+                                      ? '1px solid var(--color-gold)'
+                                      : '1px solid var(--border-medium)',
+                                    color: n.show_other_input || n.custom_directive ? 'var(--color-gold)' : 'var(--text-secondary)',
+                                    fontWeight: n.custom_directive ? 700 : 500,
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  <MessageSquare size={11} />
+                                  Other...
+                                </button>
+                              </div>
+                            )}
+
+                            {/* Inline Other / Custom Instruction Input */}
+                            {n.show_other_input && (
+                              <div
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '6px',
+                                  marginTop: '8px',
+                                  padding: '6px 8px',
+                                  borderRadius: '6px',
+                                  background: 'var(--bg-surface)',
+                                  border: '1px solid var(--border-medium)',
+                                }}
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <input
+                                  type="text"
+                                  id={`custom-directive-${idx}`}
+                                  defaultValue={n.custom_directive || ''}
+                                  placeholder='E.g. "Merge with Braford, but mark him as missing in action..."'
+                                  style={{
+                                    flex: 1,
+                                    background: 'transparent',
+                                    border: 'none',
+                                    color: 'var(--text-primary)',
+                                    fontSize: '0.75rem',
+                                    outline: 'none',
+                                  }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      handleSaveCustomDirective(idx, (e.target as HTMLInputElement).value);
+                                    }
+                                  }}
+                                />
+                                <button
+                                  type="button"
+                                  className="btn btn-sm"
+                                  style={{
+                                    padding: '2px 8px',
+                                    fontSize: '0.70rem',
+                                    borderRadius: '4px',
+                                    background: 'var(--color-gold)',
+                                    color: '#000',
+                                    fontWeight: 600,
+                                    border: 'none',
+                                    cursor: 'pointer',
+                                  }}
+                                  onClick={() => {
+                                    const input = document.getElementById(`custom-directive-${idx}`) as HTMLInputElement;
+                                    handleSaveCustomDirective(idx, input?.value || '');
+                                  }}
+                                >
+                                  Apply Directive
                                 </button>
                               </div>
                             )}
@@ -3021,6 +3915,18 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
           onUploadAsCopy={handleUploadAsCopy}
         />
       )}
+
+      {/* Sub-Agent Scratchpads & Extraction Manifest Modal */}
+      <AgentScratchpadModal
+        isOpen={showScratchpadModal}
+        onClose={() => setShowScratchpadModal(false)}
+        scratchpads={jobScratchpads}
+        clusters={jobClusters}
+        subagents={jobSubagents}
+        currentStep={decompStep}
+        status={decompError ? 'failed' : isDecomposing ? 'running' : 'completed'}
+        initialAgentName={selectedScratchpadAgent}
+      />
     </div>
   );
 };

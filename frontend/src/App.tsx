@@ -24,6 +24,7 @@ import { NodeDrawer } from './components/NodeDrawer';
 import { PlayerPortal } from './components/PlayerPortal';
 import { SettingsModal } from './components/SettingsModal';
 import { StatBlockLab } from './components/StatBlockLab';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { Campaign, GraphData, HierarchyItem, NodeItem } from './types';
 
 export type DMTab = 'hierarchy' | 'graph' | 'nodes' | 'ingestion' | 'statblock' | 'map';
@@ -278,68 +279,70 @@ export function App() {
 
               {/* Active Workspace View */}
               <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-                {activeTab === 'hierarchy' && (
-                  <HierarchyPlanner
-                    hierarchy={hierarchy}
-                    campaignId={activeCampaignId}
-                    onRefresh={loadData}
-                    onSelectNode={(n) => setSelectedNode(n)}
-                    onFocusCoDM={handleFocusCoDM}
-                    onNavigateToIngestion={handleOpenBookDecomposition}
-                    onNavigateToTranscript={handleOpenTranscriptIngestion}
-                  />
-                )}
+                <ErrorBoundary fallbackTitle="Workspace Tab Encountered an Issue">
+                  {activeTab === 'hierarchy' && (
+                    <HierarchyPlanner
+                      hierarchy={hierarchy}
+                      campaignId={activeCampaignId}
+                      onRefresh={loadData}
+                      onSelectNode={(n) => setSelectedNode(n)}
+                      onFocusCoDM={handleFocusCoDM}
+                      onNavigateToIngestion={handleOpenBookDecomposition}
+                      onNavigateToTranscript={handleOpenTranscriptIngestion}
+                    />
+                  )}
 
-                {activeTab === 'graph' && (
-                  <GraphView
-                    graphData={graphData}
-                    campaignId={activeCampaignId}
-                    onRefresh={loadData}
-                    onSelectNode={(n) => setSelectedNode(n)}
-                    onSwitchToBrowser={() => setActiveTab('nodes')}
-                  />
-                )}
+                  {activeTab === 'graph' && (
+                    <GraphView
+                      graphData={graphData}
+                      campaignId={activeCampaignId}
+                      onRefresh={loadData}
+                      onSelectNode={(n) => setSelectedNode(n)}
+                      onSwitchToBrowser={() => setActiveTab('nodes')}
+                    />
+                  )}
 
-                {activeTab === 'nodes' && (
-                  <NodeBrowser
-                    nodes={graphData.nodes}
-                    campaignId={activeCampaignId}
-                    onRefresh={loadData}
-                    onSelectNode={(n) => setSelectedNode(n)}
-                    onFocusCoDM={handleFocusCoDM}
-                  />
-                )}
+                  {activeTab === 'nodes' && (
+                    <NodeBrowser
+                      nodes={graphData.nodes}
+                      campaignId={activeCampaignId}
+                      onRefresh={loadData}
+                      onSelectNode={(n) => setSelectedNode(n)}
+                      onFocusCoDM={handleFocusCoDM}
+                    />
+                  )}
 
-                {activeTab === 'ingestion' && (
-                  <IngestionHub
-                    campaignId={activeCampaignId}
-                    onRefresh={loadData}
-                    onNavigateTab={(tab) => setActiveTab(tab as any)}
-                    initialCategory={ingestionInitialCategory}
-                    initialSessionNodeId={ingestionTargetSessionId}
-                    sessions={sessions}
-                  />
-                )}
+                  {activeTab === 'ingestion' && (
+                    <IngestionHub
+                      campaignId={activeCampaignId}
+                      onRefresh={loadData}
+                      onNavigateTab={(tab) => setActiveTab(tab as any)}
+                      initialCategory={ingestionInitialCategory}
+                      initialSessionNodeId={ingestionTargetSessionId}
+                      sessions={sessions}
+                    />
+                  )}
 
-                {activeTab === 'statblock' && (
-                  <StatBlockLab
-                    monsters={bestiaryCreatures}
-                    campaignId={activeCampaignId}
-                    onRefresh={loadData}
-                    onFocusCoDM={handleFocusCoDM}
-                  />
-                )}
+                  {activeTab === 'statblock' && (
+                    <StatBlockLab
+                      monsters={bestiaryCreatures}
+                      campaignId={activeCampaignId}
+                      onRefresh={loadData}
+                      onFocusCoDM={handleFocusCoDM}
+                    />
+                  )}
 
-                {activeTab === 'map' && (
-                  <MapStudio
-                    locations={locations}
-                    maps={maps}
-                    campaignId={activeCampaignId}
-                    onRefresh={loadData}
-                    onSelectNode={(n) => setSelectedNode(n)}
-                    onFocusCoDM={handleFocusCoDM}
-                  />
-                )}
+                  {activeTab === 'map' && (
+                    <MapStudio
+                      locations={locations}
+                      maps={maps}
+                      campaignId={activeCampaignId}
+                      onRefresh={loadData}
+                      onSelectNode={(n) => setSelectedNode(n)}
+                      onFocusCoDM={handleFocusCoDM}
+                    />
+                  )}
+                </ErrorBoundary>
               </div>
             </div>
           )}

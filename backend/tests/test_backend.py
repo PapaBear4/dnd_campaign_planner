@@ -281,6 +281,7 @@ def test_query_models_endpoint(client):
     assert "models" in data
     assert len(data["models"]) > 0
     model_ids = [m["id"] for m in data["models"]]
+    assert "gemini-flash-latest" in model_ids
     assert "gemini-2.5-flash" in model_ids
 
     # Test GET endpoint

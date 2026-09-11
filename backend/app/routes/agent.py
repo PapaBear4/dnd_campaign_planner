@@ -119,11 +119,13 @@ UPLOAD_DIR = Path(__file__).resolve().parent.parent.parent.parent / "data" / "up
 def decompose_adventure(request: DecomposeAdventureRequest):
     cid = request.campaign_id or graph_service.get_setting("active_campaign_id", "default-campaign")
     text_to_analyze = request.text_content or ""
+    pdf_file_path = None
 
-    if request.filename and not text_to_analyze:
+    if request.filename:
         file_path = UPLOAD_DIR / request.filename
         if file_path.exists():
             if file_path.suffix.lower() == ".pdf":
+                pdf_file_path = str(file_path)
                 start_p = request.start_page or 1
                 # Default end_page to full document length
                 if request.end_page:
@@ -135,29 +137,120 @@ def decompose_adventure(request: DecomposeAdventureRequest):
                         end_p = len(reader.pages)
                     except Exception:
                         end_p = 999  # fallback: read all
-                text_to_analyze = pdf_service.get_pdf_page_text(str(file_path), start_p, end_p)
-            else:
+
+                # Index document sections into SQLite RAG if needed
                 try:
-                    with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-                        text_to_analyze = f.read()  # No artificial cap — send full file text
+                    pdf_service.index_document_sections(request.filename, str(file_path), campaign_id=cid)
                 except Exception:
                     pass
 
-    if not text_to_analyze:
-        raise HTTPException(status_code=400, detail="No text content or uploaded file found to analyze.")
+                if not text_to_analyze:
+                    text_to_analyze = pdf_service.get_pdf_page_text(str(file_path), start_p, end_p)
+            else:
+                if not text_to_analyze:
+                    try:
+                        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                            text_to_analyze = f.read()
+                    except Exception:
+                        pass
+
+    if not text_to_analyze and not pdf_file_path and not request.current_nodes:
+        raise HTTPException(status_code=400, detail="No text content, uploaded file, or working draft nodes found to analyze.")
 
     history_dicts = [m.model_dump() for m in request.conversation_history] if request.conversation_history else None
 
-    return ai_agent_service.decompose_adventure_document(
-        text_content=text_to_analyze,
-        instruction=request.instruction or "",
-        decomposition_mode=request.decomposition_mode or "campaign_structure",
-        campaign_id=cid,
-        current_nodes=request.current_nodes,
-        current_edges=request.current_edges,
-        conversation_history=history_dicts,
-        exhaustive=request.exhaustive if request.exhaustive is not None else True
-    )
+    try:
+        return ai_agent_service.decompose_adventure_document(
+            text_content=text_to_analyze,
+            instruction=request.instruction or "",
+            decomposition_mode=request.decomposition_mode or "comprehensive",
+            campaign_id=cid,
+            current_nodes=request.current_nodes,
+            current_edges=request.current_edges,
+            conversation_history=history_dicts,
+            exhaustive=request.exhaustive if request.exhaustive is not None else True,
+            pdf_file_path=pdf_file_path,
+            start_page=request.start_page or 1,
+            end_page=request.end_page,
+        )
+    except Exception as e:
+        logger.exception(f"Unhandled error in decompose_adventure: {e}")
+        return {
+            "overview_summary": f"Decomposition error: {e}",
+            "extracted_nodes": request.current_nodes or [],
+            "extracted_edges": request.current_edges or [],
+            "error": str(e),
+            "model": "error"
+        }
+
+
+@router.get("/decompose/latest")
+def get_latest_decomposition_job(campaign_id: str):
+    """
+    Fetch the most recent decomposition job for a campaign.
+    """
+    job = ai_agent_service.get_latest_decomposition_job(campaign_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="No decomposition jobs found for this campaign")
+    return job
+
+
+@router.get("/decompose/job/{job_id}")
+def get_decomposition_job(job_id: str):
+    """
+    Fetch the live status, page clusters, sub-agent assignments, and scratchpads for a decomposition job.
+    """
+    job = ai_agent_service.get_decomposition_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Decomposition job not found")
+    return job
+
+
+@router.post("/decompose/job/{job_id}/retry")
+def retry_decomposition_job(job_id: str, step: Optional[int] = None):
+    """
+    Retries only the failed step of a decomposition job, preserving intermediate extracted nodes
+    and scratchpads from earlier phases.
+    """
+    job = ai_agent_service.retry_decomposition_job_step(job_id, target_step=step)
+    if not job:
+        raise HTTPException(status_code=404, detail="Decomposition job not found")
+    return {
+        "job_id": job.get("job_id") or job.get("id"),
+        "overview_summary": job.get("overview_summary", ""),
+        "extracted_nodes": job.get("extracted_nodes") if job.get("extracted_nodes") is not None else job.get("draft_nodes", []),
+        "extracted_edges": job.get("extracted_edges") if job.get("extracted_edges") is not None else job.get("draft_edges", []),
+        "clusters": job.get("clusters", []),
+        "subagents": job.get("subagents", []),
+        "scratchpads": job.get("scratchpads", {}),
+        "current_step": job.get("current_step", 4),
+        "status": job.get("status", "completed"),
+        "model": job.get("model") or job.get("model_name", ""),
+        "chunks_processed": len(job.get("clusters", [])),
+        "error": job.get("error_message") or job.get("error")
+    }
+
+
+@router.post("/decompose/job/{job_id}/stop")
+def stop_decomposition_job(job_id: str):
+    """
+    Emergency stop / interruption of an active decomposition job.
+    Halts upcoming worker slices while preserving all intermediate draft nodes and scratchpads.
+    """
+    job = ai_agent_service.stop_decomposition_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Decomposition job not found")
+    return {
+        "job_id": job.get("id"),
+        "status": "stopped",
+        "current_step": job.get("current_step", 2),
+        "overview_summary": job.get("overview_summary", "Pipeline interrupted by user."),
+        "extracted_nodes": job.get("draft_nodes", []),
+        "extracted_edges": job.get("draft_edges", []),
+        "clusters": job.get("clusters", []),
+        "scratchpads": job.get("scratchpads", {}),
+        "message": "Decomposition halted. Intermediate progress preserved."
+    }
 
 
 @router.post("/apply-extracted")
@@ -196,6 +289,21 @@ def apply_extracted(data: Dict[str, Any]):
         elif should_merge and not target_id:
             target_node = existing_by_title_lower.get((n.get("title") or "").lower().strip())
 
+        # Collect provenance & statblock flags into data_json
+        node_data = dict(n.get("data_json") or {})
+        if n.get("source_page"):
+            node_data["source_page"] = n["source_page"]
+        if n.get("source_doc"):
+            node_data["source_doc"] = n["source_doc"]
+        if n.get("needs_statblock"):
+            node_data["needs_statblock"] = True
+        if n.get("base_template_title"):
+            node_data["base_template_title"] = n["base_template_title"]
+        
+        custom_directive = (n.get("custom_directive") or n.get("merge_notes") or "").strip()
+        if custom_directive:
+            node_data["custom_directive"] = custom_directive
+
         if should_merge and target_node:
             # 1. Lossless content merge: Preserve canon text, append module notes under a dated header
             existing_content = (target_node.content_markdown or "").strip()
@@ -210,6 +318,9 @@ def apply_extracted(data: Dict[str, Any]):
             else:
                 merged_content = existing_content or new_content
 
+            if custom_directive and custom_directive not in merged_content:
+                merged_content = f"{merged_content}\n\n**DM Directive**: {custom_directive}".strip()
+
             # 2. Summary: Keep existing canon summary; if empty or blank, take new
             merged_summary = target_node.summary or n.get("summary") or ""
 
@@ -218,25 +329,18 @@ def apply_extracted(data: Dict[str, Any]):
 
             # 4. Deep merge data_json (do not overwrite existing non-empty values)
             existing_data = dict(target_node.data_json or {})
-            ext_data = n.get("data_json") or {}
-            merged_data = dict(existing_data)
-            for k, v in ext_data.items():
-                if k not in merged_data or merged_data[k] is None or merged_data[k] == "" or merged_data[k] == []:
-                    merged_data[k] = v
-                elif isinstance(v, dict) and isinstance(merged_data.get(k), dict):
-                    sub = dict(merged_data[k])
-                    for subk, subv in v.items():
-                        if subk not in sub or sub[subk] is None or sub[subk] == "" or sub[subk] == []:
-                            sub[subk] = subv
-                    merged_data[k] = sub
+            for k, v in node_data.items():
+                if v is not None and (k not in existing_data or existing_data[k] is None or existing_data[k] == ""):
+                    existing_data[k] = v
 
             updated_node = graph_service.update_node(
                 target_node.id,
                 NodeUpdate(
-                    summary=merged_summary,
+                    title=target_node.title,
                     subtitle=merged_subtitle,
+                    summary=merged_summary,
                     content_markdown=merged_content,
-                    data_json=merged_data,
+                    data_json=existing_data,
                     confidence=n.get("confidence") if n.get("confidence") is not None else target_node.confidence,
                     lore_status=n.get("lore_status") or target_node.lore_status
                 )
@@ -253,6 +357,10 @@ def apply_extracted(data: Dict[str, Any]):
                 title_to_id[n.get("title").lower().strip()] = node_id
         else:
             # Create as a brand new node record
+            node_content = (n.get("content_markdown") or "").strip()
+            if custom_directive and custom_directive not in node_content:
+                node_content = f"{node_content}\n\n**DM Directive**: {custom_directive}".strip()
+
             node = graph_service.create_node(
                 NodeCreate(
                     campaign_id=cid,
@@ -260,8 +368,8 @@ def apply_extracted(data: Dict[str, Any]):
                     title=n.get("title", "Extracted Node"),
                     subtitle=n.get("subtitle", ""),
                     summary=n.get("summary", ""),
-                    content_markdown=n.get("content_markdown", ""),
-                    data_json=n.get("data_json", {}),
+                    content_markdown=node_content,
+                    data_json=node_data,
                     revealed_to_players=n.get("revealed_to_players", False),
                     confidence=n.get("confidence", 1.0),
                     lore_status=n.get("lore_status", "fact")

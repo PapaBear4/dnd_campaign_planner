@@ -90,7 +90,7 @@ def init_db():
             cursor.execute(
                 """
                 INSERT OR IGNORE INTO settings (key, value, updated_at)
-                VALUES ('gemini_model', 'gemini-2.5-flash', ?)
+                VALUES ('gemini_model', 'gemini-flash-latest', ?)
                 """,
                 (now,),
             )

@@ -8,6 +8,8 @@ import {
   ModelsQueryResponse,
   NodeItem,
   PlayerNote,
+  DecompositionJob,
+  DecomposeAdventureResponse,
 } from './types';
 
 const BASE_URL = '';
@@ -15,7 +17,17 @@ const BASE_URL = '';
 async function handleResponse<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const errText = await res.text();
-    throw new Error(`API Error ${res.status}: ${errText}`);
+    try {
+      const parsed = JSON.parse(errText);
+      const msg = parsed.error || parsed.detail || `API Error ${res.status}: ${errText}`;
+      const err = new Error(msg);
+      (err as any).data = parsed;
+      (err as any).status = res.status;
+      throw err;
+    } catch (e: any) {
+      if (e.data) throw e;
+      throw new Error(`API Error ${res.status}: ${errText}`);
+    }
   }
   return res.json();
 }
@@ -389,7 +401,7 @@ export async function agentDecomposeAdventure(data: {
   filename?: string;
   text_content?: string;
   instruction?: string;
-  decomposition_mode?: 'campaign_structure' | 'monsters' | 'characters' | 'world_lore' | 'general';
+  decomposition_mode?: 'comprehensive' | 'campaign_structure' | 'monsters' | 'characters' | 'world_lore' | 'general';
   start_page?: number;
   end_page?: number;
   campaign_id?: string;
@@ -397,21 +409,42 @@ export async function agentDecomposeAdventure(data: {
   current_edges?: any[];
   conversation_history?: { role: string; content: string }[];
   exhaustive?: boolean;
-}): Promise<{
-  overview_summary: string;
-  extracted_nodes: any[];
-  extracted_edges: any[];
-  model: string;
-  chunks_processed?: number;
-  error?: string;
-}> {
+}): Promise<DecomposeAdventureResponse> {
   const res = await fetch(`${BASE_URL}/api/agent/decompose`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
-  return handleResponse<any>(res);
+  return handleResponse<DecomposeAdventureResponse>(res);
 }
+
+export async function getDecompositionJob(jobId: string): Promise<DecompositionJob> {
+  const res = await fetch(`${BASE_URL}/api/agent/decompose/job/${encodeURIComponent(jobId)}`);
+  return handleResponse<DecompositionJob>(res);
+}
+
+export async function retryDecompositionJob(jobId: string, step?: number): Promise<DecomposeAdventureResponse> {
+  const query = step !== undefined ? `?step=${step}` : '';
+  const res = await fetch(`${BASE_URL}/api/agent/decompose/job/${encodeURIComponent(jobId)}/retry${query}`, {
+    method: 'POST',
+  });
+  return handleResponse<DecomposeAdventureResponse>(res);
+}
+
+export async function getLatestDecompositionJob(campaignId: string): Promise<DecompositionJob> {
+  const res = await fetch(`${BASE_URL}/api/agent/decompose/latest?campaign_id=${encodeURIComponent(campaignId)}`);
+  return handleResponse<DecompositionJob>(res);
+}
+
+export async function stopDecompositionJob(jobId: string): Promise<DecompositionJob> {
+  const res = await fetch(`${BASE_URL}/api/agent/decompose/job/${encodeURIComponent(jobId)}/stop`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  return handleResponse<DecompositionJob>(res);
+}
+
+
 
 // --- Session Transcript Adaptation ---
 export async function agentAdaptSession(data: {

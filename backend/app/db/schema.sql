@@ -92,6 +92,46 @@ CREATE INDEX IF NOT EXISTS idx_uploads_campaign ON uploaded_documents(campaign_i
 CREATE INDEX IF NOT EXISTS idx_uploads_category ON uploaded_documents(category);
 CREATE INDEX IF NOT EXISTS idx_uploads_original_name ON uploaded_documents(campaign_id, original_name);
 
+CREATE TABLE IF NOT EXISTS uploaded_document_sections (
+    id TEXT PRIMARY KEY,
+    document_id TEXT NOT NULL REFERENCES uploaded_documents(id) ON DELETE CASCADE,
+    campaign_id TEXT,
+    section_title TEXT,
+    page_number INTEGER DEFAULT 1,
+    raw_text TEXT NOT NULL,
+    chunk_index INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_doc_sections_doc ON uploaded_document_sections(document_id);
+CREATE INDEX IF NOT EXISTS idx_doc_sections_campaign ON uploaded_document_sections(campaign_id);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS fts_document_sections USING fts5(
+    id UNINDEXED,
+    document_id UNINDEXED,
+    campaign_id UNINDEXED,
+    section_title,
+    raw_text,
+    content='uploaded_document_sections',
+    content_rowid='rowid'
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_doc_sections_insert AFTER INSERT ON uploaded_document_sections BEGIN
+    INSERT INTO fts_document_sections(rowid, id, document_id, campaign_id, section_title, raw_text)
+    VALUES (new.rowid, new.id, new.document_id, new.campaign_id, new.section_title, new.raw_text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_doc_sections_delete AFTER DELETE ON uploaded_document_sections BEGIN
+    INSERT INTO fts_document_sections(fts_document_sections, rowid, id, document_id, campaign_id, section_title, raw_text)
+    VALUES ('delete', old.rowid, old.id, old.document_id, old.campaign_id, old.section_title, old.raw_text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_doc_sections_update AFTER UPDATE ON uploaded_document_sections BEGIN
+    INSERT INTO fts_document_sections(fts_document_sections, rowid, id, document_id, campaign_id, section_title, raw_text)
+    VALUES ('delete', old.rowid, old.id, old.document_id, old.campaign_id, old.section_title, old.raw_text);
+    INSERT INTO fts_document_sections(rowid, id, document_id, campaign_id, section_title, raw_text)
+    VALUES (new.rowid, new.id, new.document_id, new.campaign_id, new.section_title, new.raw_text);
+END;
+
 
 -- Full-Text Search 5 virtual table
 CREATE VIRTUAL TABLE IF NOT EXISTS fts_nodes USING fts5(
@@ -149,4 +189,29 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 CREATE INDEX IF NOT EXISTS idx_chat_messages_thread ON chat_messages(thread_id);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_campaign ON chat_messages(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_created ON chat_messages(created_at);
+
+-- Persistent decomposition pipeline runs with step-by-step checkpointing
+CREATE TABLE IF NOT EXISTS decomposition_jobs (
+    id TEXT PRIMARY KEY,
+    campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    filename TEXT,
+    page_range TEXT,
+    instruction TEXT,
+    decomposition_mode TEXT,
+    status TEXT NOT NULL, -- 'clustering', 'mining', 'qa_auditing', 'deconflicting', 'completed', 'failed'
+    current_step INTEGER NOT NULL DEFAULT 1,
+    clusters_json TEXT DEFAULT '[]',
+    scratchpads_json TEXT DEFAULT '{}',
+    draft_nodes_json TEXT DEFAULT '[]',
+    draft_edges_json TEXT DEFAULT '[]',
+    qa_results_json TEXT DEFAULT '{}',
+    overview_summary TEXT,
+    model_name TEXT,
+    error_message TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_decomp_jobs_campaign ON decomposition_jobs(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_decomp_jobs_status ON decomposition_jobs(status);
 

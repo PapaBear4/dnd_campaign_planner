@@ -338,7 +338,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
             {model === 'custom' && (
               <input
                 type="text"
-                placeholder="Enter model identifier (e.g. gemini-2.5-flash or custom endpoint)"
+                placeholder="Enter model identifier (e.g. gemini-flash-latest or custom endpoint)"
                 value={customModel}
                 onChange={(e) => setCustomModel(e.target.value)}
                 style={{
