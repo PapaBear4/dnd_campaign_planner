@@ -1,6 +1,9 @@
 from datetime import datetime
+import logging
 from fastapi import APIRouter, HTTPException, Query
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 from app.models import (
     AgentChatRequest,
     BoxedTextRequest,
