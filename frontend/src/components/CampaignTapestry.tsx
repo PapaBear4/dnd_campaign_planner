@@ -4,32 +4,21 @@ import {
   Calendar,
   Sparkles,
   Swords,
-  MapPin,
   Package,
-  Shield,
   ShieldCheck,
-  Target,
   ChevronRight,
   ChevronDown,
   Plus,
   GitBranch,
-  Layers,
-  CheckCircle,
-  Circle,
-  Clock,
   Info,
-  Users,
   Eye,
   EyeOff,
   ArrowRight,
   Maximize2,
+  Minimize2,
   X,
-  MessageSquare,
-  HelpCircle,
   Flame,
-  Award,
   BookOpen,
-  Compass,
   Star,
   Workflow,
   ChevronsDownUp,
@@ -48,7 +37,7 @@ import {
   toggleNodeCanon,
   toggleNodeReveal
 } from '../api';
-import { GraphData, NodeItem, EdgeItem, NodeType } from '../types';
+import { GraphData, NodeItem, NodeType } from '../types';
 import { MarkdownView } from './MarkdownView';
 
 interface CampaignTapestryProps {
@@ -73,6 +62,78 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
   // Top Minimal Ribbon style & collapse state
   const [activeRibbonRiff, setActiveRibbonRiff] = useState<'woven' | 'constellation' | 'transit'>('woven');
   const [isRibbonCollapsed, setIsRibbonCollapsed] = useState<boolean>(false);
+
+  // Collapsed Quest Rows state (persisted per campaign)
+  const [collapsedQuestIds, setCollapsedQuestIds] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem(`dnd_tapestry_collapsed_${campaignId}`);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return new Set(parsed);
+      }
+    } catch (e) {
+      console.error('Failed to load collapsed quests:', e);
+    }
+    return new Set<string>();
+  });
+
+  // Scene card density in expanded rows: 'detailed' (default) or 'compact'
+  const [encounterDensity, setEncounterDensity] = useState<'detailed' | 'compact'>(() => {
+    try {
+      const saved = localStorage.getItem('dnd_tapestry_encounter_density');
+      if (saved === 'compact' || saved === 'detailed') return saved;
+    } catch (e) {
+      console.error('Failed to load encounter density:', e);
+    }
+    return 'detailed';
+  });
+
+  const toggleQuestCollapse = (questId: string) => {
+    setCollapsedQuestIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(questId)) {
+        next.delete(questId);
+      } else {
+        next.add(questId);
+      }
+      try {
+        localStorage.setItem(`dnd_tapestry_collapsed_${campaignId}`, JSON.stringify(Array.from(next)));
+      } catch (e) {
+        console.error(e);
+      }
+      return next;
+    });
+  };
+
+  const handleCollapseAll = () => {
+    const allIds = displayQuests.map((q) => q.id);
+    const next = new Set(allIds);
+    setCollapsedQuestIds(next);
+    try {
+      localStorage.setItem(`dnd_tapestry_collapsed_${campaignId}`, JSON.stringify(allIds));
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleExpandAll = () => {
+    setCollapsedQuestIds(new Set());
+    try {
+      localStorage.setItem(`dnd_tapestry_collapsed_${campaignId}`, JSON.stringify([]));
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleToggleDensity = () => {
+    const next = encounterDensity === 'detailed' ? 'compact' : 'detailed';
+    setEncounterDensity(next);
+    try {
+      localStorage.setItem('dnd_tapestry_encounter_density', next);
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   // Modals state
   const [activeEncounterNode, setActiveEncounterNode] = useState<NodeItem | null>(null);
@@ -747,6 +808,17 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
             {isRibbonCollapsed ? 'Show Ribbon' : 'Hide Ribbon'}
           </button>
 
+          <button
+            type="button"
+            onClick={handleToggleDensity}
+            className="btn btn-secondary"
+            style={{ fontSize: '0.76rem', padding: '5px 9px', gap: '5px' }}
+            title={encounterDensity === 'detailed' ? 'Switch to Compact Scene Cards' : 'Switch to Detailed Scene Cards'}
+          >
+            {encounterDensity === 'detailed' ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+            {encounterDensity === 'detailed' ? 'Compact Scenes' : 'Detailed Scenes'}
+          </button>
+
           {onNavigateToTranscript && (
             <button
               type="button"
@@ -1274,9 +1346,30 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 10px' }}>
-                  <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-                    {displayQuests.length} Story Lines
-                  </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', fontWeight: 600 }}>
+                      {displayQuests.length} Story Lines
+                    </span>
+                    {displayQuests.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={collapsedQuestIds.size >= displayQuests.length ? handleExpandAll : handleCollapseAll}
+                        className="btn btn-ghost"
+                        style={{ fontSize: '0.68rem', padding: '2px 6px', gap: '4px', height: '22px', color: 'var(--text-muted)' }}
+                        title={collapsedQuestIds.size >= displayQuests.length ? 'Expand All Story Lines' : 'Collapse All Story Lines'}
+                      >
+                        {collapsedQuestIds.size >= displayQuests.length ? (
+                          <>
+                            <ChevronsUpDown size={12} /> Expand All
+                          </>
+                        ) : (
+                          <>
+                            <ChevronsDownUp size={12} /> Collapse All
+                          </>
+                        )}
+                      </button>
+                    )}
+                  </div>
                   {sessions.length === 0 && (
                     <span style={{ fontSize: '0.68rem', color: 'var(--color-gold)', background: 'rgba(245, 158, 11, 0.12)', padding: '2px 6px', borderRadius: '4px' }}>
                       Staging Mode
@@ -1423,6 +1516,10 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                 const isQuestHovered = hoveredQuestId === quest.id;
                 const isOpenRow = quest.id === 'open-world-events';
                 const questColor = isOpenRow ? '#10b981' : questColors[qIdx % questColors.length];
+                const isCollapsed = collapsedQuestIds.has(quest.id);
+                const rowEncountersCount = isOpenRow
+                  ? unassignedQuestEncounters.length
+                  : encounters.filter((e) => encounterQuestMap.get(e.id) === quest.id).length;
 
                 return (
                   <div
@@ -1431,7 +1528,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                       display: 'grid',
                       gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${displayColumns.length}, ${SESSION_COL_WIDTH}px)`,
                       gap: `${COL_GAP}px`,
-                      alignItems: 'stretch',
+                      alignItems: isCollapsed ? 'center' : 'stretch',
                       position: 'relative'
                     }}
                     onMouseEnter={() => setHoveredQuestId(quest.id)}
@@ -1445,128 +1542,303 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                           left: `${LEFT_COL_WIDTH}px`,
                           right: '0',
                           top: '50%',
-                          height: '3px',
+                          height: isCollapsed ? '2px' : '3px',
                           background: `linear-gradient(90deg, ${questColor}66 0%, ${questColor}22 100%)`,
                           transform: 'translateY(-50%)',
                           zIndex: 0,
-                          pointerEvents: 'none'
+                          pointerEvents: 'none',
+                          opacity: isCollapsed ? 0.6 : 1
                         }}
                       />
                     )}
 
-                    {/* LEFT: Quest Header Card */}
-                    <div
-                      draggable={!isOpenRow}
-                      onDragStart={(e) => {
-                        if (isOpenRow) return;
-                        e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'quest', questId: quest.id }));
-                        e.dataTransfer.effectAllowed = 'move';
-                        setDraggingQuestId(quest.id);
-                      }}
-                      onDragEnd={() => {
-                        setDraggingQuestId(null);
-                        setDragOverQuestId(null);
-                        setDragOverQuestPosition(null);
-                      }}
-                      onDragOver={(e) => {
-                        e.preventDefault();
-                        e.dataTransfer.dropEffect = 'move';
-                        if (!isOpenRow && draggingQuestId && draggingQuestId !== quest.id) {
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          const pos = (e.clientY - rect.top) < rect.height / 2 ? 'above' : 'below';
-                          setDragOverQuestId(quest.id);
-                          setDragOverQuestPosition(pos);
-                        }
-                      }}
-                      onDragLeave={(e) => {
-                        const related = e.relatedTarget as Node | null;
-                        if (!e.currentTarget.contains(related)) {
-                          if (dragOverQuestId === quest.id) {
-                            setDragOverQuestId(null);
-                            setDragOverQuestPosition(null);
-                          }
-                        }
-                      }}
-                      onDrop={async (e) => {
-                        e.preventDefault();
-                        const raw = e.dataTransfer.getData('text/plain');
-                        if (!raw) return;
-                        try {
-                          const data = JSON.parse(raw);
-                          if (data.type === 'quest' && !isOpenRow && data.questId !== quest.id) {
-                            await handleReorderQuests(data.questId, quest.id, dragOverQuestPosition || 'below');
-                          } else if (data.type === 'encounter') {
-                            const targetQuestId = isOpenRow ? null : quest.id;
-                            const currentSessionId = encounterSessionMap.get(data.encounterId) || null;
-                            await handleMoveEncounter(data.encounterId, currentSessionId, targetQuestId);
-                          }
-                        } catch (err) {
-                          console.error(err);
-                        } finally {
+                    {/* LEFT: Quest Header Card (Collapsed Single-Line vs Expanded) */}
+                    {isCollapsed ? (
+                      <div
+                        draggable={!isOpenRow}
+                        onDragStart={(e) => {
+                          if (isOpenRow) return;
+                          e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'quest', questId: quest.id }));
+                          e.dataTransfer.effectAllowed = 'move';
+                          setDraggingQuestId(quest.id);
+                        }}
+                        onDragEnd={() => {
                           setDraggingQuestId(null);
                           setDragOverQuestId(null);
                           setDragOverQuestPosition(null);
-                        }
-                      }}
-                      onClick={() => {
-                        if (!isOpenRow) setActiveQuestModal(quest);
-                      }}
-                      className="glass-panel"
-                      style={{
-                        borderRadius: '10px',
-                        padding: '14px',
-                        background: isQuestHovered ? 'var(--bg-card-hover)' : 'var(--bg-card)',
-                        border: `1px solid ${isQuestHovered ? questColor : 'var(--border-subtle)'}`,
-                        borderLeft: `5px solid ${questColor}`,
-                        cursor: isOpenRow ? 'default' : 'grab',
-                        zIndex: 1,
-                        display: 'flex',
-                        flexDirection: 'column',
-                        justifyContent: 'space-between',
-                        transition: 'all 0.15s ease',
-                        opacity: draggingQuestId === quest.id ? 0.35 : 1,
-                        boxShadow: dragOverQuestId === quest.id
-                          ? dragOverQuestPosition === 'above'
-                            ? '0 -4px 0 0 var(--color-gold), 0 0 16px rgba(245, 158, 11, 0.4)'
-                            : '0 4px 0 0 var(--color-gold), 0 0 16px rgba(245, 158, 11, 0.4)'
-                          : 'none'
-                      }}
-                    >
-                      <div>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                            {!isOpenRow && (
-                              <GripVertical size={13} style={{ color: 'var(--text-muted)', cursor: 'grab', flexShrink: 0 }} />
-                            )}
-                            <span style={{ fontSize: '0.65rem', fontWeight: 700, textTransform: 'uppercase', color: questColor, letterSpacing: '0.5px' }}>
-                              {quest.data_json?.category || (isOpenRow ? 'World Events' : 'Storyline')}
-                            </span>
-                          </div>
-                          <span className={`status-pill status-${quest.data_json?.status === 'in_progress' ? 'inprogress' : 'planned'}`}>
-                            {isOpenRow ? `${unassignedQuestEncounters.length} Scenes` : (quest.data_json?.status || 'Active')}
+                        }}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          e.dataTransfer.dropEffect = 'move';
+                          if (!isOpenRow && draggingQuestId && draggingQuestId !== quest.id) {
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            const pos = (e.clientY - rect.top) < rect.height / 2 ? 'above' : 'below';
+                            setDragOverQuestId(quest.id);
+                            setDragOverQuestPosition(pos);
+                          }
+                        }}
+                        onDragLeave={(e) => {
+                          const related = e.relatedTarget as Node | null;
+                          if (!e.currentTarget.contains(related)) {
+                            if (dragOverQuestId === quest.id) {
+                              setDragOverQuestId(null);
+                              setDragOverQuestPosition(null);
+                            }
+                          }
+                        }}
+                        onDrop={async (e) => {
+                          e.preventDefault();
+                          const raw = e.dataTransfer.getData('text/plain');
+                          if (!raw) return;
+                          try {
+                            const data = JSON.parse(raw);
+                            if (data.type === 'quest' && !isOpenRow && data.questId !== quest.id) {
+                              await handleReorderQuests(data.questId, quest.id, dragOverQuestPosition || 'below');
+                            } else if (data.type === 'encounter') {
+                              const targetQuestId = isOpenRow ? null : quest.id;
+                              const currentSessionId = encounterSessionMap.get(data.encounterId) || null;
+                              await handleMoveEncounter(data.encounterId, currentSessionId, targetQuestId);
+                            }
+                          } catch (err) {
+                            console.error(err);
+                          } finally {
+                            setDraggingQuestId(null);
+                            setDragOverQuestId(null);
+                            setDragOverQuestPosition(null);
+                          }
+                        }}
+                        onClick={() => toggleQuestCollapse(quest.id)}
+                        className="glass-panel"
+                        style={{
+                          borderRadius: '8px',
+                          padding: '0 10px',
+                          background: isQuestHovered ? 'var(--bg-card-hover)' : 'var(--bg-card)',
+                          border: `1px solid ${isQuestHovered ? questColor : 'var(--border-subtle)'}`,
+                          borderLeft: `4px solid ${questColor}`,
+                          cursor: 'pointer',
+                          zIndex: 1,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          height: '38px',
+                          minHeight: '38px',
+                          boxSizing: 'border-box',
+                          transition: 'all 0.15s ease',
+                          opacity: draggingQuestId === quest.id ? 0.35 : 1,
+                          boxShadow: dragOverQuestId === quest.id
+                            ? dragOverQuestPosition === 'above'
+                              ? '0 -4px 0 0 var(--color-gold), 0 0 16px rgba(245, 158, 11, 0.4)'
+                              : '0 4px 0 0 var(--color-gold), 0 0 16px rgba(245, 158, 11, 0.4)'
+                            : 'none'
+                        }}
+                        title="Click to expand story line"
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0, flex: 1, overflow: 'hidden' }}>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleQuestCollapse(quest.id);
+                            }}
+                            style={{
+                              background: 'transparent',
+                              border: 'none',
+                              color: questColor,
+                              cursor: 'pointer',
+                              padding: '2px',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              flexShrink: 0
+                            }}
+                            title="Expand story line"
+                          >
+                            <ChevronRight size={14} />
+                          </button>
+                          {!isOpenRow && (
+                            <GripVertical size={12} style={{ color: 'var(--text-muted)', cursor: 'grab', flexShrink: 0 }} />
+                          )}
+                          <span
+                            style={{
+                              fontWeight: 700,
+                              fontSize: '0.82rem',
+                              lineHeight: 1.2,
+                              color: 'var(--text-primary)',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap'
+                            }}
+                          >
+                            {quest.title}
                           </span>
                         </div>
-                        <h4 style={{ margin: '4px 0 2px', fontSize: '0.88rem', fontWeight: 700, lineHeight: 1.3 }}>
-                          {quest.title}
-                        </h4>
-                        {quest.summary && (
-                          <p style={{ margin: 0, fontSize: '0.74rem', color: 'var(--text-secondary)', lineClamp: 2, display: '-webkit-box', WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-                            {quest.summary}
-                          </p>
-                        )}
-                      </div>
-
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '8px', paddingTop: '6px', borderTop: '1px solid var(--border-subtle)' }}>
-                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                          {isOpenRow ? unassignedQuestEncounters.length : encounters.filter((e) => encounterQuestMap.get(e.id) === quest.id).length} Encounters
-                        </span>
-                        {!isOpenRow && (
-                          <span style={{ fontSize: '0.7rem', color: questColor, display: 'flex', alignItems: 'center', gap: '3px' }}>
-                            Details <ChevronRight size={11} />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0, marginLeft: '6px' }}>
+                          <span
+                            className="status-pill"
+                            style={{
+                              fontSize: '0.62rem',
+                              padding: '1px 5px',
+                              background: `${questColor}1a`,
+                              borderColor: `${questColor}44`,
+                              color: questColor
+                            }}
+                          >
+                            {rowEncountersCount} {rowEncountersCount === 1 ? 'scene' : 'scenes'}
                           </span>
-                        )}
+                          {!isOpenRow && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setActiveQuestModal(quest);
+                              }}
+                              className="btn btn-ghost"
+                              style={{ padding: '2px', height: '20px', width: '20px', minWidth: '20px' }}
+                              title="View Quest Details"
+                            >
+                              <ChevronRight size={12} />
+                            </button>
+                          )}
+                        </div>
                       </div>
-                    </div>
+                    ) : (
+                      <div
+                        draggable={!isOpenRow}
+                        onDragStart={(e) => {
+                          if (isOpenRow) return;
+                          e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'quest', questId: quest.id }));
+                          e.dataTransfer.effectAllowed = 'move';
+                          setDraggingQuestId(quest.id);
+                        }}
+                        onDragEnd={() => {
+                          setDraggingQuestId(null);
+                          setDragOverQuestId(null);
+                          setDragOverQuestPosition(null);
+                        }}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          e.dataTransfer.dropEffect = 'move';
+                          if (!isOpenRow && draggingQuestId && draggingQuestId !== quest.id) {
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            const pos = (e.clientY - rect.top) < rect.height / 2 ? 'above' : 'below';
+                            setDragOverQuestId(quest.id);
+                            setDragOverQuestPosition(pos);
+                          }
+                        }}
+                        onDragLeave={(e) => {
+                          const related = e.relatedTarget as Node | null;
+                          if (!e.currentTarget.contains(related)) {
+                            if (dragOverQuestId === quest.id) {
+                              setDragOverQuestId(null);
+                              setDragOverQuestPosition(null);
+                            }
+                          }
+                        }}
+                        onDrop={async (e) => {
+                          e.preventDefault();
+                          const raw = e.dataTransfer.getData('text/plain');
+                          if (!raw) return;
+                          try {
+                            const data = JSON.parse(raw);
+                            if (data.type === 'quest' && !isOpenRow && data.questId !== quest.id) {
+                              await handleReorderQuests(data.questId, quest.id, dragOverQuestPosition || 'below');
+                            } else if (data.type === 'encounter') {
+                              const targetQuestId = isOpenRow ? null : quest.id;
+                              const currentSessionId = encounterSessionMap.get(data.encounterId) || null;
+                              await handleMoveEncounter(data.encounterId, currentSessionId, targetQuestId);
+                            }
+                          } catch (err) {
+                            console.error(err);
+                          } finally {
+                            setDraggingQuestId(null);
+                            setDragOverQuestId(null);
+                            setDragOverQuestPosition(null);
+                          }
+                        }}
+                        onClick={() => {
+                          if (!isOpenRow) setActiveQuestModal(quest);
+                        }}
+                        className="glass-panel"
+                        style={{
+                          borderRadius: '10px',
+                          padding: '14px',
+                          background: isQuestHovered ? 'var(--bg-card-hover)' : 'var(--bg-card)',
+                          border: `1px solid ${isQuestHovered ? questColor : 'var(--border-subtle)'}`,
+                          borderLeft: `5px solid ${questColor}`,
+                          cursor: isOpenRow ? 'default' : 'grab',
+                          zIndex: 1,
+                          display: 'flex',
+                          flexDirection: 'column',
+                          justifyContent: 'space-between',
+                          transition: 'all 0.15s ease',
+                          opacity: draggingQuestId === quest.id ? 0.35 : 1,
+                          boxShadow: dragOverQuestId === quest.id
+                            ? dragOverQuestPosition === 'above'
+                              ? '0 -4px 0 0 var(--color-gold), 0 0 16px rgba(245, 158, 11, 0.4)'
+                              : '0 4px 0 0 var(--color-gold), 0 0 16px rgba(245, 158, 11, 0.4)'
+                            : 'none'
+                        }}
+                      >
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleQuestCollapse(quest.id);
+                                }}
+                                style={{
+                                  background: 'transparent',
+                                  border: 'none',
+                                  color: 'var(--text-muted)',
+                                  cursor: 'pointer',
+                                  padding: '2px',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  borderRadius: '4px',
+                                  transition: 'color 0.15s ease'
+                                }}
+                                onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--text-primary)')}
+                                onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-muted)')}
+                                title="Collapse story line to single line"
+                              >
+                                <ChevronDown size={14} />
+                              </button>
+                              {!isOpenRow && (
+                                <GripVertical size={13} style={{ color: 'var(--text-muted)', cursor: 'grab', flexShrink: 0 }} />
+                              )}
+                              <span style={{ fontSize: '0.65rem', fontWeight: 700, textTransform: 'uppercase', color: questColor, letterSpacing: '0.5px' }}>
+                                {quest.data_json?.category || (isOpenRow ? 'World Events' : 'Storyline')}
+                              </span>
+                            </div>
+                            <span className={`status-pill status-${quest.data_json?.status === 'in_progress' ? 'inprogress' : 'planned'}`}>
+                              {isOpenRow ? `${unassignedQuestEncounters.length} Scenes` : (quest.data_json?.status || 'Active')}
+                            </span>
+                          </div>
+                          <h4 style={{ margin: '4px 0 2px', fontSize: '0.88rem', fontWeight: 700, lineHeight: 1.3 }}>
+                            {quest.title}
+                          </h4>
+                          {quest.summary && (
+                            <p style={{ margin: 0, fontSize: '0.74rem', color: 'var(--text-secondary)', lineClamp: 2, display: '-webkit-box', WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                              {quest.summary}
+                            </p>
+                          )}
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '8px', paddingTop: '6px', borderTop: '1px solid var(--border-subtle)' }}>
+                          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                            {rowEncountersCount} Encounters
+                          </span>
+                          {!isOpenRow && (
+                            <span style={{ fontSize: '0.7rem', color: questColor, display: 'flex', alignItems: 'center', gap: '3px' }}>
+                              Details <ChevronRight size={11} />
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    )}
 
                     {/* SESSIONS COLUMNS: Placing Encounter Cards at Intersections */}
                     {displayColumns.map((sess) => {
@@ -1589,6 +1861,200 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
 
                       const isSessionHovered = hoveredSessionId === sess.id;
                       const isCellHighlighted = isQuestHovered || isSessionHovered;
+
+                      if (isCollapsed) {
+                        return (
+                          <div
+                            key={sess.id}
+                            onDragOver={(e) => {
+                              e.preventDefault();
+                              e.dataTransfer.dropEffect = 'move';
+                            }}
+                            onDragEnter={(e) => {
+                              e.preventDefault();
+                              setDragOverCell({ questId: targetQuestId, sessionId: targetSessionId });
+                            }}
+                            onDragLeave={(e) => {
+                              const related = e.relatedTarget as Node | null;
+                              if (!e.currentTarget.contains(related)) {
+                                if (dragOverCell?.questId === targetQuestId && dragOverCell?.sessionId === targetSessionId) {
+                                  setDragOverCell(null);
+                                }
+                              }
+                            }}
+                            onDrop={async (e) => {
+                              e.preventDefault();
+                              const raw = e.dataTransfer.getData('text/plain');
+                              if (!raw) return;
+                              try {
+                                const data = JSON.parse(raw);
+                                if (data.type === 'encounter') {
+                                  await handleMoveEncounter(data.encounterId, targetSessionId, targetQuestId);
+                                }
+                              } catch (err) {
+                                console.error(err);
+                              } finally {
+                                setDraggingEncounterId(null);
+                                setDragOverCell(null);
+                              }
+                            }}
+                            style={{
+                              position: 'relative',
+                              zIndex: 1,
+                              display: 'flex',
+                              flexDirection: 'row',
+                              gap: '6px',
+                              alignItems: 'center',
+                              justifyContent: matchingEncounters.length > 0 ? 'flex-start' : 'center',
+                              background: isCellDragOver
+                                ? 'rgba(245, 158, 11, 0.12)'
+                                : isCellHighlighted
+                                ? 'rgba(255, 255, 255, 0.02)'
+                                : 'transparent',
+                              borderRadius: '8px',
+                              height: '38px',
+                              minHeight: '38px',
+                              maxHeight: '38px',
+                              padding: '0 6px',
+                              boxSizing: 'border-box',
+                              border: isCellDragOver
+                                ? '2px dashed var(--color-gold)'
+                                : isSessionHovered
+                                ? '1px dashed var(--border-subtle)'
+                                : '1px solid transparent',
+                              transition: 'all 0.15s ease',
+                              overflow: 'hidden'
+                            }}
+                          >
+                            {matchingEncounters.length > 0 ? (
+                              <>
+                                {matchingEncounters.slice(0, 2).map((enc) => {
+                                  const encStatus = enc.data_json?.status || 'planned';
+                                  return (
+                                    <div
+                                      key={enc.id}
+                                      draggable={true}
+                                      onDragStart={(e) => {
+                                        e.stopPropagation();
+                                        e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'encounter', encounterId: enc.id }));
+                                        e.dataTransfer.effectAllowed = 'move';
+                                        setDraggingEncounterId(enc.id);
+                                      }}
+                                      onDragEnd={() => {
+                                        setDraggingEncounterId(null);
+                                        setDragOverCell(null);
+                                      }}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setActiveEncounterModal(enc);
+                                      }}
+                                      onMouseEnter={() => setHoveredEncounterId(enc.id)}
+                                      onMouseLeave={() => setHoveredEncounterId(null)}
+                                      title={`${enc.title} (${encStatus === 'completed' ? 'Done' : encStatus === 'in_progress' ? 'Active' : 'Planned'}) - Click to open, drag to move`}
+                                      style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '4px',
+                                        padding: '2px 8px',
+                                        borderRadius: '6px',
+                                        background: encStatus === 'completed'
+                                          ? 'rgba(16, 185, 129, 0.15)'
+                                          : encStatus === 'in_progress'
+                                          ? 'rgba(245, 158, 11, 0.2)'
+                                          : isStagingCol
+                                          ? 'rgba(59, 130, 246, 0.1)'
+                                          : 'var(--bg-surface)',
+                                        border: `1px solid ${
+                                          encStatus === 'completed'
+                                            ? '#10b981'
+                                            : encStatus === 'in_progress'
+                                            ? 'var(--color-gold)'
+                                            : isStagingCol
+                                            ? 'rgba(59, 130, 246, 0.4)'
+                                            : 'var(--border-medium)'
+                                        }`,
+                                        fontSize: '0.72rem',
+                                        fontWeight: 600,
+                                        color: 'var(--text-primary)',
+                                        cursor: 'grab',
+                                        whiteSpace: 'nowrap',
+                                        maxWidth: matchingEncounters.length > 1 ? '130px' : '100%',
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis',
+                                        boxShadow: hoveredEncounterId === enc.id ? `0 0 10px ${questColor}66` : 'none',
+                                        transform: hoveredEncounterId === enc.id ? 'translateY(-1px)' : 'none',
+                                        transition: 'all 0.15s ease'
+                                      }}
+                                    >
+                                      <Swords size={10} style={{ color: questColor, flexShrink: 0 }} />
+                                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                        {enc.title}
+                                      </span>
+                                    </div>
+                                  );
+                                })}
+                                {matchingEncounters.length > 2 && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      toggleQuestCollapse(quest.id);
+                                    }}
+                                    className="status-pill"
+                                    title={`${matchingEncounters.length - 2} more scenes. Click to expand story line.`}
+                                    style={{
+                                      cursor: 'pointer',
+                                      fontSize: '0.62rem',
+                                      padding: '2px 6px',
+                                      background: 'var(--bg-surface)',
+                                      border: '1px solid var(--border-medium)',
+                                      color: 'var(--text-secondary)',
+                                      whiteSpace: 'nowrap',
+                                      flexShrink: 0
+                                    }}
+                                  >
+                                    +{matchingEncounters.length - 2} more
+                                  </button>
+                                )}
+                              </>
+                            ) : isCellDragOver ? (
+                              <span style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--color-gold)', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                                <Plus size={11} /> Drop
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setShowAddModal('encounter');
+                                  setTargetQuestId(isOpenRow ? null : quest.id);
+                                  setTargetSessionId(isStagingCol ? null : sess.id);
+                                }}
+                                style={{
+                                  background: 'transparent',
+                                  border: 'none',
+                                  cursor: 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  padding: '4px'
+                                }}
+                                title={`Stage encounter for ${quest.title} in ${sess.title}`}
+                              >
+                                <div
+                                  style={{
+                                    width: '8px',
+                                    height: '8px',
+                                    borderRadius: '50%',
+                                    background: `${questColor}44`,
+                                    border: `1px solid ${questColor}88`,
+                                    transition: 'all 0.15s ease'
+                                  }}
+                                />
+                              </button>
+                            )}
+                          </div>
+                        );
+                      }
 
                       return (
                         <div
@@ -1630,7 +2096,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                             zIndex: 1,
                             display: 'flex',
                             flexDirection: 'column',
-                            gap: '8px',
+                            gap: encounterDensity === 'compact' ? '6px' : '8px',
                             alignItems: 'stretch',
                             justifyContent: 'center',
                             background: isCellDragOver
@@ -1639,7 +2105,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                               ? 'rgba(255, 255, 255, 0.02)'
                               : 'transparent',
                             borderRadius: '8px',
-                            minHeight: '110px',
+                            minHeight: encounterDensity === 'compact' ? '46px' : '110px',
                             border: isCellDragOver
                               ? '2px dashed var(--color-gold)'
                               : isSessionHovered
@@ -1694,7 +2160,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                                         : 'var(--border-medium)'
                                     }`,
                                     borderRadius: '10px',
-                                    padding: '10px',
+                                    padding: encounterDensity === 'compact' ? '6px 8px' : '10px',
                                     display: 'flex',
                                     flexDirection: 'column',
                                     justifyContent: 'space-between',
@@ -1733,7 +2199,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                                       {enc.title}
                                     </div>
 
-                                    {enc.summary && (
+                                    {encounterDensity === 'detailed' && enc.summary && (
                                       <p style={{ margin: '3px 0 0', fontSize: '0.7rem', color: 'var(--text-secondary)', lineClamp: 2, display: '-webkit-box', WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
                                         {enc.summary}
                                       </p>
@@ -1742,27 +2208,51 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
 
                                   {/* Attached Entity Chips (Locations, Monsters, Loot, NPCs) */}
                                   {(attached.locations.length > 0 || attached.monsters.length > 0 || attached.items.length > 0 || attached.npcs.length > 0) && (
-                                    <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '6px', paddingTop: '4px', borderTop: '1px solid var(--border-subtle)' }}>
+                                    <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: encounterDensity === 'compact' ? '4px' : '6px', paddingTop: '4px', borderTop: '1px solid var(--border-subtle)' }}>
                                       {attached.locations.map((loc) => (
-                                        <span key={loc.id} style={{ fontSize: '0.64rem', color: '#34d399', background: 'rgba(16, 185, 129, 0.1)', padding: '1px 4px', borderRadius: '3px' }}>
+                                        <span
+                                          key={loc.id}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setActiveEntityModal(loc);
+                                          }}
+                                          style={{ fontSize: '0.64rem', color: '#34d399', background: 'rgba(16, 185, 129, 0.1)', padding: '1px 4px', borderRadius: '3px', cursor: 'pointer' }}
+                                          title={`View Location: ${loc.title}`}
+                                        >
                                           📍 {loc.title.split(' ')[0]}
                                         </span>
                                       ))}
                                       {attached.monsters.length > 0 && (
-                                        <span key="monsters" style={{ fontSize: '0.64rem', color: '#f87171', background: 'rgba(239, 68, 68, 0.1)', padding: '1px 4px', borderRadius: '3px' }}>
+                                        <span
+                                          key="monsters"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            if (attached.monsters[0]) setActiveEntityModal(attached.monsters[0]);
+                                          }}
+                                          style={{ fontSize: '0.64rem', color: '#f87171', background: 'rgba(239, 68, 68, 0.1)', padding: '1px 4px', borderRadius: '3px', cursor: 'pointer' }}
+                                          title={attached.monsters.map((m) => m.title).join(', ')}
+                                        >
                                           👹 {attached.monsters.length}
                                         </span>
                                       )}
-                                      {attached.items.length > 0 && (
-                                        <span key="items" style={{ fontSize: '0.64rem', color: '#c084fc', background: 'rgba(168, 85, 247, 0.1)', padding: '1px 4px', borderRadius: '3px' }}>
-                                          🎁 {attached.items.length}
+                                      {attached.items.map((it) => (
+                                        <span
+                                          key={it.id}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setActiveEntityModal(it);
+                                          }}
+                                          style={{ fontSize: '0.64rem', color: '#c084fc', background: 'rgba(168, 85, 247, 0.1)', padding: '1px 4px', borderRadius: '3px', cursor: 'pointer' }}
+                                          title={`View Item: ${it.title}`}
+                                        >
+                                          🎁 {it.title.split(' ')[0]}
                                         </span>
-                                      )}
+                                      ))}
                                     </div>
                                   )}
 
                                   {/* Fast Weave Controls (if unassigned session or unassigned quest) */}
-                                  {(isStagingCol || isOpenRow) && (
+                                  {encounterDensity === 'detailed' && (isStagingCol || isOpenRow) && (
                                     <div
                                       style={{
                                         display: 'flex',
