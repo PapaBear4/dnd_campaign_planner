@@ -58,14 +58,16 @@ def chat(request: AgentChatRequest):
         context_node_id=request.context_node_id
     )
     
-    # Persist assistant reply with actions_taken
+    # Persist assistant reply with actions_taken, scratchpad, and loop_steps
     if res.get("reply"):
         chat_history_service.save_message(
             thread_id=thread_id,
             campaign_id=cid,
             role="assistant",
             content=res["reply"],
-            actions_taken=res.get("actions_taken", [])
+            actions_taken=res.get("actions_taken", []),
+            scratchpad=res.get("scratchpad", ""),
+            loop_steps=res.get("loop_steps", []),
         )
     
     res["thread_id"] = thread_id

@@ -960,6 +960,69 @@ def update_node_status(node_id: str, status: str) -> Optional[NodeResponse]:
     return update_node(node_id, NodeUpdate(data_json=data))
 
 
+def bulk_update_node_status(updates: List[Dict[str, str]]) -> Dict[str, Any]:
+    """
+    Updates the status field for multiple nodes in batch.
+    Each item in updates should have 'node_id' and 'status' ('planned', 'active', 'completed', 'abandoned').
+    """
+    updated_count = 0
+    errors = []
+    results = []
+    for item in updates:
+        nid = item.get("node_id")
+        status = item.get("status")
+        if not nid or not status:
+            continue
+        res = update_node_status(nid, status)
+        if res:
+            updated_count += 1
+            results.append({"node_id": nid, "title": res.title, "status": status})
+        else:
+            errors.append(f"Node {nid} not found")
+    return {"updated_count": updated_count, "results": results, "errors": errors}
+
+
+def bulk_create_edges(edges: List[Dict[str, Any]], default_campaign_id: str) -> Dict[str, Any]:
+    """
+    Creates multiple edges in batch.
+    Each item in edges should have 'source_id', 'target_id', 'relation_type', and optional 'label'.
+    """
+    created_edges = []
+    errors = []
+    for item in edges:
+        sid = item.get("source_id")
+        tid = item.get("target_id")
+        rel = item.get("relation_type")
+        if not sid or not tid or not rel:
+            errors.append(f"Missing required edge fields in {item}")
+            continue
+        try:
+            edge = create_edge(
+                EdgeCreate(
+                    campaign_id=default_campaign_id,
+                    source_id=sid,
+                    target_id=tid,
+                    relation_type=rel,
+                    label=item.get("label", ""),
+                ),
+                default_campaign_id=default_campaign_id,
+            )
+            created_edges.append({
+                "edge_id": edge.id,
+                "source_id": sid,
+                "target_id": tid,
+                "relation_type": rel,
+                "label": edge.label,
+            })
+        except Exception as e:
+            errors.append(str(e))
+    return {
+        "created_count": len(created_edges),
+        "edges": created_edges,
+        "errors": errors,
+    }
+
+
 def find_duplicate_nodes(campaign_id: str) -> List[Dict[str, Any]]:
     """
     Finds clusters of duplicate nodes in a campaign based on normalized title and type.

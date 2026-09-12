@@ -55,6 +55,14 @@ def init_db():
             cursor.execute("ALTER TABLE edges ADD COLUMN lore_status TEXT NOT NULL DEFAULT 'fact';")
         except Exception:
             pass
+        try:
+            cursor.execute("ALTER TABLE chat_messages ADD COLUMN scratchpad TEXT;")
+        except Exception:
+            pass
+        try:
+            cursor.execute("ALTER TABLE chat_messages ADD COLUMN loop_steps_json TEXT DEFAULT '[]';")
+        except Exception:
+            pass
 
         with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
             conn.executescript(f.read())

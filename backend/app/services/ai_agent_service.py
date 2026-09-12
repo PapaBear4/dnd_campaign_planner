@@ -61,13 +61,16 @@ You have real Python tool functions that directly read and write the campaign's 
 - **create_node(type, title, subtitle?, summary?, content_markdown?, data_json?, is_canon?, confidence?, lore_status?)** — Create a new graph node.
 - **update_node(node_id, title?, subtitle?, summary?, content_markdown?, data_json?, confidence?, lore_status?)** — Update an existing node's content or confidence.
 - **update_node_status(node_id, status)** — Quickly set a node's status (planned/active/completed/abandoned).
+- **bulk_update_node_status(updates)** — Quickly set the status ('planned', 'active', 'completed', 'abandoned') for multiple nodes at once in a single call. Use this to update entire quest tracks or encounter chains efficiently.
 - **delete_node(node_id)** — Delete a single node and clean up its edges.
 - **bulk_delete_nodes(node_ids)** — Delete multiple nodes at once.
 - **merge_nodes(primary_id, duplicate_ids, merged_title?, merged_summary?, merged_content?)** — Merge duplicate nodes into one: re-points all relationships to the primary, combines content, then deletes the duplicates.
 - **deduplicate_campaign()** — Automatically audit and merge all duplicate nodes across the entire campaign graph, re-pointing relationships to canonical nodes and deleting duplicate entries from the SQLite database.
 - **set_node_canon(node_id, is_canon)** — Promote a node to official protected Canon lore (is_canon=True), or mark it as a working draft (is_canon=False).
 - **create_edge(source_id, target_id, relation_type, label?, confidence?, lore_status?)** — Create a relationship between two nodes.
+- **bulk_create_edges(edges)** — Create multiple relationships between existing nodes in a single tool call. Use this to wire multiple encounters, NPCs, and locations to their parent quests or sessions without wasting turns.
 - **delete_edge(edge_id)** — Remove a specific relationship.
+- **update_scratchpad(plan_notes)** — Maintain your internal working memory, execution plan, and progress checklist. Call this on multi-step tasks to outline your step-by-step checklist, check off completed steps, or record intermediate findings and remaining steps.
 
 ### Workflow Rules
 
@@ -79,11 +82,21 @@ You have real Python tool functions that directly read and write the campaign's 
    - You CANNOT delete or destructively overwrite Canon nodes without explicit DM confirmation. If the DM asks you to delete a Canon node, clarify that it is Canon and request confirmation.
    - Nodes marked `[Draft 📝]` or classified as `suspicion`/`rumor` are provisional brainstorms / leads. You have full authority to modify, deduplicate, merge, or refine them.
    - You can use `set_node_canon` to promote approved drafts to official Canon or vice versa upon the DM's instructions.
-4. **Do the work, don't describe it** — when asked to merge, merge. When asked to delete, delete. When asked to create, create. Then confirm in plain language.
-5. **CRITICAL ON DEDUPLICATION** — When the DM asks to deduplicate the campaign, clean up duplicates, or remove redundant nodes: **DO NOT merely describe what could be merged.** You MUST execute `deduplicate_campaign()` to actually perform the database changes in SQLite! Once the tool returns, summarize the real results from the tool receipt.
-6. **Confirm actions clearly** — after completing multi-step operations, give a short plain-English summary: what you found, what you did, and what the DM should know.
-7. **Grounded in existing lore** — always pull from existing Arcs, Quests, NPCs, Factions, Locations, and Relationships before inventing new content.
-8. **RESEARCH & INQUIRY SYNTHESIS — ALWAYS DELIVER A COMPLETE ANSWER**: When the DM asks a question, requests an audit, or seeks campaign advice (e.g. "are there encounters that connect?", "did Session 1 address this?", "what is associated with this quest?"), tool calls are only the investigation phase. You MUST synthesize everything you discovered into a rich, structured, and insightful narrative answer in the very same response. Never conclude a turn with only action receipts or generic status stubs.
+4. **AUTONOMOUS EXECUTION — DO THE WORK & FINISH IT WITHOUT PAUSING**: When asked to align, update, connect, or clean up campaign content, formulate your full execution plan and execute all tool calls to finish the job within your turn budget. **DO NOT stop halfway to ask 'should I continue?'** or pause for redundant confirmation on operations the DM has already requested. Complete the entire task, then provide a comprehensive summary of all actions taken and the new world state.
+5. **PREFER BULK TOOLS FOR MULTI-ITEM OPERATIONS**: When updating multiple node statuses or wiring multiple edges, ALWAYS use `bulk_update_node_status` and `bulk_create_edges` rather than firing dozens of individual single-item calls. This saves tool turns, executes instantly, and keeps the graph synchronized.
+6. **CRITICAL ON DEDUPLICATION** — When the DM asks to deduplicate the campaign, clean up duplicates, or remove redundant nodes: **DO NOT merely describe what could be merged.** You MUST execute `deduplicate_campaign()` to actually perform the database changes in SQLite! Once the tool returns, summarize the real results from the tool receipt.
+7. **Confirm actions clearly** — after completing multi-step operations, give a short plain-English summary: what you found, what you did, and what the DM should know.
+8. **Grounded in existing lore** — always pull from existing Arcs, Quests, NPCs, Factions, Locations, and Relationships before inventing new content.
+9. **RESEARCH & INQUIRY SYNTHESIS — ALWAYS DELIVER A COMPLETE ANSWER**: When the DM asks a question, requests an audit, or seeks campaign advice (e.g. "are there encounters that connect?", "did Session 1 address this?", "what is associated with this quest?"), tool calls are only the investigation phase. You MUST synthesize everything you discovered into a rich, structured, and insightful narrative answer in the very same response. Never conclude a turn with only action receipts or generic status stubs.
+
+---
+
+## WORKING SCRATCHPAD & PLAN STATE
+
+You have a dedicated working scratchpad tool (`update_scratchpad`):
+- **Initialize on Complex Tasks**: When handling non-trivial multi-step requests (aligning a chapter, cross-referencing session notes, resolving duplicates, or executing multiple updates), call `update_scratchpad` on your very first turn with an execution plan and checklist (e.g. `[ ] 1. Search encounters... [ ] 2. Traverse quest track... [ ] 3. Bulk update...`).
+- **Update Progress**: As you execute tools and complete each stage, call `update_scratchpad` to mark steps complete and record working deductions.
+- **Traceability**: This provides you and the DM an explicit audit trail of your thought process, guarantees you never lose context across multi-turn loops, and keeps complex plans on track.
 
 ---
 
@@ -282,6 +295,28 @@ AGENT_TOOLS = [
         },
     },
     {
+        "name": "bulk_update_node_status",
+        "description": "Quickly set the status for multiple nodes at once (planned, active, completed, abandoned). Use this to align entire questlines or chapter encounters in a single tool call.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "updates": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "node_id": {"type": "string", "description": "ID of the node."},
+                            "status": {"type": "string", "description": "Status: planned, active, completed, or abandoned."},
+                        },
+                        "required": ["node_id", "status"],
+                    },
+                    "description": "List of {node_id, status} objects to update.",
+                },
+            },
+            "required": ["updates"],
+        },
+    },
+    {
         "name": "delete_node",
         "description": "Delete a single node and all edges connected to it. Canon nodes (is_canon=true) are protected from deletion unless the DM gives explicit confirmation.",
         "parameters": {
@@ -366,6 +401,33 @@ AGENT_TOOLS = [
         },
     },
     {
+        "name": "bulk_create_edges",
+        "description": "Create multiple relationships (edges) between existing nodes in a single tool call. Use this to wire multiple encounters, NPCs, and locations to their parent quests or sessions without wasting turns.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "edges": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "source_id": {"type": "string", "description": "ID of the source node."},
+                            "target_id": {"type": "string", "description": "ID of the target node."},
+                            "relation_type": {
+                                "type": "string",
+                                "description": "Relationship type: allied_with, hostile_to, located_at, contains, leads_to, gives_quest, rewards, precedes, parent_of, related_to, associated_with, worships, created_by, recorded_in",
+                            },
+                            "label": {"type": "string", "description": "Optional label."},
+                        },
+                        "required": ["source_id", "target_id", "relation_type"],
+                    },
+                    "description": "List of edge objects to create.",
+                },
+            },
+            "required": ["edges"],
+        },
+    },
+    {
         "name": "delete_edge",
         "description": "Delete a specific relationship (edge) by its ID.",
         "parameters": {
@@ -376,10 +438,24 @@ AGENT_TOOLS = [
             "required": ["edge_id"],
         },
     },
+    {
+        "name": "update_scratchpad",
+        "description": "Maintain your internal working memory, execution plan, and progress checklist. Call this on multi-step tasks to outline your plan, check off completed steps, or record intermediate findings and remaining steps.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "plan_notes": {
+                    "type": "string",
+                    "description": "The updated working plan, checklist of completed/remaining tasks, or scratchpad notes in markdown format.",
+                },
+            },
+            "required": ["plan_notes"],
+        },
+    },
 ]
 
 
-def _dispatch_tool_call(tool_name: str, args: dict, campaign_id: str) -> dict:
+def _dispatch_tool_call(tool_name: str, args: dict, campaign_id: str, scratchpad_state: Optional[dict] = None) -> dict:
     """
     Executes a tool call from the agent loop.
     Returns a JSON-serializable dict with results.
@@ -519,6 +595,10 @@ def _dispatch_tool_call(tool_name: str, args: dict, campaign_id: str) -> dict:
                 return {"error": f"Node {args['node_id']} not found."}
             return {"updated": True, "node_id": updated.id, "title": updated.title, "status": args["status"]}
 
+        elif tool_name == "bulk_update_node_status":
+            updates = args.get("updates", [])
+            return graph_service.bulk_update_node_status(updates)
+
         elif tool_name == "delete_node":
             node = graph_service.get_node(args["node_id"])
             if not node:
@@ -592,6 +672,16 @@ def _dispatch_tool_call(tool_name: str, args: dict, campaign_id: str) -> dict:
                 default_campaign_id=campaign_id,
             )
             return {"created": True, "edge_id": edge.id, "relation_type": edge.relation_type}
+
+        elif tool_name == "bulk_create_edges":
+            edges = args.get("edges", [])
+            return graph_service.bulk_create_edges(edges, default_campaign_id=campaign_id)
+
+        elif tool_name == "update_scratchpad":
+            notes = str(args.get("plan_notes", ""))
+            if scratchpad_state is not None:
+                scratchpad_state["notes"] = notes
+            return {"status": "scratchpad_updated", "length": len(notes)}
 
         elif tool_name == "delete_edge":
             deleted = graph_service.delete_edge(args["edge_id"])
@@ -712,6 +802,8 @@ def chat_with_agent(
         # --- Agentic loop ---
         MAX_TURNS = 15
         actions_taken = []
+        scratchpad_state = {"notes": ""}
+        loop_steps = []
         current_prompt = last_prompt
         final_reply = ""
 
@@ -720,6 +812,7 @@ def chat_with_agent(
 
             # Collect any function calls and text in this response
             function_calls = []
+            turn_text_parts = []
             malformed = False
 
             for candidate in (getattr(response, "candidates", None) or []):
@@ -731,6 +824,10 @@ def chat_with_agent(
                     for part in candidate.content.parts:
                         if hasattr(part, "function_call") and part.function_call and getattr(part.function_call, "name", None):
                             function_calls.append(part.function_call)
+                        elif hasattr(part, "text") and part.text and part.text.strip():
+                            turn_text_parts.append(part.text.strip())
+
+            turn_thought = " ".join(turn_text_parts).strip() if turn_text_parts else ""
 
             # Handle MALFORMED_FUNCTION_CALL from Gemini gracefully
             if malformed and not function_calls:
@@ -745,6 +842,12 @@ def chat_with_agent(
                     except Exception as err:
                         logger.warning(f"Fallback retry failed: {err}")
                         final_reply = "I've reviewed your campaign notes. What would you like to build or brainstorm?"
+                loop_steps.append({
+                    "turn": turn + 1,
+                    "thought": turn_thought or "Direct text recovery without tools.",
+                    "actions": [],
+                    "summary": f"Turn {turn + 1}: Generated direct response.",
+                })
                 break
 
             if not function_calls:
@@ -752,7 +855,22 @@ def chat_with_agent(
                 final_reply = _extract_text_from_response(response)
                 if not final_reply:
                     final_reply = "I'm ready. How can I help with your campaign prep?"
+                loop_steps.append({
+                    "turn": turn + 1,
+                    "thought": turn_thought,
+                    "actions": [],
+                    "summary": f"Turn {turn + 1}: Final synthesis completed.",
+                })
                 break
+
+            # Record this turn's intermediate loop statement trace
+            fc_names = [fc.name for fc in function_calls]
+            loop_steps.append({
+                "turn": turn + 1,
+                "thought": turn_thought,
+                "actions": fc_names,
+                "summary": f"Turn {turn + 1}: Executed {len(function_calls)} action{'s' if len(function_calls)>1 else ''} ({', '.join(fc_names)})",
+            })
 
             # Execute each tool call and build FunctionResponse parts
             function_response_parts = []
@@ -762,7 +880,7 @@ def chat_with_agent(
                     fc_args = dict(fc.args) if fc.args else {}
                 except Exception:
                     fc_args = {}
-                tool_result = _dispatch_tool_call(fc.name, fc_args, campaign_id)
+                tool_result = _dispatch_tool_call(fc.name, fc_args, campaign_id, scratchpad_state=scratchpad_state)
                 actions_taken.append({
                     "tool": fc.name,
                     "args": fc_args,
@@ -821,6 +939,13 @@ def chat_with_agent(
                         )
                         final_text_resp = chat.send_message(forced_prompt)
                         final_reply = _extract_text_from_response(final_text_resp)
+
+                loop_steps.append({
+                    "turn": MAX_TURNS + 1,
+                    "thought": "Budget reached. Synthesized complete response.",
+                    "actions": [],
+                    "summary": f"Turn {MAX_TURNS + 1}: Final synthesis completed.",
+                })
             except Exception as synth_err:
                 logger.warning(f"Forced synthesis failed: {synth_err}")
                 final_reply = ""
@@ -836,6 +961,8 @@ def chat_with_agent(
             "reply": final_reply,
             "suggested_nodes": [],
             "actions_taken": actions_taken,
+            "scratchpad": scratchpad_state["notes"],
+            "loop_steps": loop_steps,
         }
 
     except Exception as e:

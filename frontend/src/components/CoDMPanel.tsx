@@ -33,12 +33,18 @@ import {
   getChatThreads,
   getThreadMessages,
 } from '../api';
-import { AgentActionTaken, AgentChatMessage, ChatThread, NodeItem } from '../types';
+import { AgentActionTaken, AgentChatMessage, ChatThread, LoopStepTrace, NodeItem } from '../types';
 import { MarkdownView } from './MarkdownView';
 
-const ActionReceipt: React.FC<{ actions: AgentActionTaken[] }> = ({ actions }) => {
+const ActionReceipt: React.FC<{
+  actions?: AgentActionTaken[];
+  loopSteps?: LoopStepTrace[];
+  scratchpad?: string;
+}> = ({ actions = [], loopSteps = [], scratchpad }) => {
   const [expanded, setExpanded] = useState(false);
-  if (!actions || actions.length === 0) return null;
+  const [tab, setTab] = useState<'actions' | 'loop' | 'scratchpad'>('actions');
+
+  if (actions.length === 0 && loopSteps.length === 0 && !scratchpad) return null;
 
   return (
     <div
@@ -51,67 +57,171 @@ const ActionReceipt: React.FC<{ actions: AgentActionTaken[] }> = ({ actions }) =
         fontSize: '0.74rem',
       }}
     >
-      <button
-        type="button"
-        onClick={() => setExpanded(!expanded)}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '6px',
-          width: '100%',
-          background: 'none',
-          border: 'none',
-          color: 'var(--color-gold)',
-          cursor: 'pointer',
-          padding: 0,
-          fontWeight: 600,
-          textAlign: 'left',
-        }}
-      >
-        <Wrench size={12} />
-        <span>
-          {actions.length} Arcane Operation{actions.length > 1 ? 's' : ''} Executed
-        </span>
-        <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center' }}>
-          {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-        </span>
-      </button>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <button
+          type="button"
+          onClick={() => setExpanded(!expanded)}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            background: 'none',
+            border: 'none',
+            color: 'var(--color-gold)',
+            cursor: 'pointer',
+            padding: 0,
+            fontWeight: 600,
+            textAlign: 'left',
+            flex: 1,
+          }}
+        >
+          <Wrench size={12} />
+          <span>
+            {actions.length} Operation{actions.length !== 1 ? 's' : ''}
+            {loopSteps.length > 0 ? ` • ${loopSteps.length} Loop Turn${loopSteps.length !== 1 ? 's' : ''}` : ''}
+            {scratchpad ? ' • Plan Saved' : ''}
+          </span>
+          <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center' }}>
+            {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          </span>
+        </button>
+      </div>
 
       {expanded && (
-        <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-          {actions.map((act, i) => {
-            const isError = act.result?.error || act.result?.success === false;
-            return (
-              <div
-                key={i}
+        <div style={{ marginTop: '8px' }}>
+          {/* Tabs for operations, loop trace, and scratchpad */}
+          <div style={{ display: 'flex', gap: '4px', marginBottom: '8px', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '4px' }}>
+            <button
+              type="button"
+              onClick={() => setTab('actions')}
+              style={{
+                background: tab === 'actions' ? 'var(--bg-surface)' : 'transparent',
+                border: 'none',
+                color: tab === 'actions' ? 'var(--color-gold)' : 'var(--text-muted)',
+                fontSize: '0.7rem',
+                fontWeight: 600,
+                padding: '2px 6px',
+                borderRadius: '4px',
+                cursor: 'pointer',
+              }}
+            >
+              Operations ({actions.length})
+            </button>
+            {loopSteps.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setTab('loop')}
                 style={{
-                  padding: '6px 8px',
-                  background: 'var(--bg-surface)',
+                  background: tab === 'loop' ? 'var(--bg-surface)' : 'transparent',
+                  border: 'none',
+                  color: tab === 'loop' ? 'var(--color-gold)' : 'var(--text-muted)',
+                  fontSize: '0.7rem',
+                  fontWeight: 600,
+                  padding: '2px 6px',
                   borderRadius: '4px',
-                  border: '1px solid var(--border-subtle)',
-                  borderLeft: `3px solid ${isError ? 'var(--color-crimson)' : 'var(--color-emerald)'}`,
+                  cursor: 'pointer',
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600, color: isError ? 'var(--color-crimson)' : 'var(--color-emerald)' }}>
-                  <CheckCircle size={11} />
-                  <span>{act.tool}</span>
+                Loop Statement Trace ({loopSteps.length})
+              </button>
+            )}
+            {scratchpad && (
+              <button
+                type="button"
+                onClick={() => setTab('scratchpad')}
+                style={{
+                  background: tab === 'scratchpad' ? 'var(--bg-surface)' : 'transparent',
+                  border: 'none',
+                  color: tab === 'scratchpad' ? 'var(--color-gold)' : 'var(--text-muted)',
+                  fontSize: '0.7rem',
+                  fontWeight: 600,
+                  padding: '2px 6px',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                }}
+              >
+                Scratchpad Plan
+              </button>
+            )}
+          </div>
+
+          {tab === 'actions' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              {actions.map((act, i) => {
+                const isError = act.result?.error || act.result?.success === false;
+                return (
+                  <div
+                    key={i}
+                    style={{
+                      padding: '6px 8px',
+                      background: 'var(--bg-surface)',
+                      borderRadius: '4px',
+                      border: '1px solid var(--border-subtle)',
+                      borderLeft: `3px solid ${isError ? 'var(--color-crimson)' : 'var(--color-emerald)'}`,
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600, color: isError ? 'var(--color-crimson)' : 'var(--color-emerald)' }}>
+                      <CheckCircle size={11} />
+                      <span>{act.tool}</span>
+                    </div>
+                    {act.args && Object.keys(act.args).length > 0 && (
+                      <div style={{ color: 'var(--text-secondary)', marginTop: '2px', fontSize: '0.7rem' }}>
+                        {Object.entries(act.args)
+                          .slice(0, 4)
+                          .map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`)
+                          .join(' | ')}
+                      </div>
+                    )}
+                    {act.result?.message && (
+                      <div style={{ color: 'var(--text-secondary)', marginTop: '2px', fontStyle: 'italic' }}>
+                        {act.result.message}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {tab === 'loop' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              {loopSteps.map((s, idx) => (
+                <div
+                  key={idx}
+                  style={{
+                    padding: '6px 8px',
+                    background: 'var(--bg-surface)',
+                    borderRadius: '4px',
+                    border: '1px solid var(--border-subtle)',
+                  }}
+                >
+                  <div style={{ fontWeight: 600, color: 'var(--color-gold)' }}>
+                    {s.summary || `Turn ${s.turn}`}
+                  </div>
+                  {s.thought && (
+                    <div style={{ color: 'var(--text-secondary)', fontStyle: 'italic', marginTop: '3px', fontSize: '0.7rem' }}>
+                      "{s.thought}"
+                    </div>
+                  )}
                 </div>
-                {act.args && Object.keys(act.args).length > 0 && (
-                  <div style={{ color: 'var(--text-secondary)', marginTop: '2px', fontSize: '0.7rem' }}>
-                    {Object.entries(act.args)
-                      .slice(0, 4)
-                      .map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`)
-                      .join(' | ')}
-                  </div>
-                )}
-                {act.result?.message && (
-                  <div style={{ color: 'var(--text-secondary)', marginTop: '2px', fontStyle: 'italic' }}>
-                    {act.result.message}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+              ))}
+            </div>
+          )}
+
+          {tab === 'scratchpad' && scratchpad && (
+            <div
+              style={{
+                padding: '8px 10px',
+                background: 'var(--bg-surface)',
+                borderRadius: '4px',
+                border: '1px solid var(--border-subtle)',
+                color: 'var(--text-secondary)',
+                lineHeight: 1.5,
+              }}
+            >
+              <MarkdownView content={scratchpad} />
+            </div>
+          )}
         </div>
       )}
     </div>

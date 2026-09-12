@@ -84,7 +84,7 @@ def get_thread_messages(thread_id: str) -> List[Dict[str, Any]]:
     with get_db() as conn:
         rows = conn.execute(
             """
-            SELECT id, thread_id, campaign_id, role, content, actions_json, created_at
+            SELECT id, thread_id, campaign_id, role, content, actions_json, scratchpad, loop_steps_json, created_at
             FROM chat_messages
             WHERE thread_id = ?
             ORDER BY created_at ASC
@@ -96,10 +96,15 @@ def get_thread_messages(thread_id: str) -> List[Dict[str, Any]]:
         for r in rows:
             d = dict(r)
             actions_json = d.pop("actions_json", "[]")
+            loop_steps_json = d.pop("loop_steps_json", "[]")
             try:
                 d["actions_taken"] = json.loads(actions_json) if actions_json else []
             except Exception:
                 d["actions_taken"] = []
+            try:
+                d["loop_steps"] = json.loads(loop_steps_json) if loop_steps_json else []
+            except Exception:
+                d["loop_steps"] = []
             messages.append(d)
         return messages
 
@@ -109,11 +114,14 @@ def save_message(
     role: str,
     content: str,
     actions_taken: Optional[List[Dict[str, Any]]] = None,
+    scratchpad: Optional[str] = None,
+    loop_steps: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Append a chat message to a thread and update thread timestamps and title."""
     msg_id = str(uuid.uuid4())
     now = _now_iso()
     actions_json = json.dumps(actions_taken or [])
+    loop_steps_json = json.dumps(loop_steps or [])
 
     with get_db() as conn:
         # Check thread and maybe update title if it's the first user message
@@ -138,10 +146,10 @@ def save_message(
 
         conn.execute(
             """
-            INSERT INTO chat_messages (id, thread_id, campaign_id, role, content, actions_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO chat_messages (id, thread_id, campaign_id, role, content, actions_json, scratchpad, loop_steps_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (msg_id, thread_id, campaign_id, role, content, actions_json, now),
+            (msg_id, thread_id, campaign_id, role, content, actions_json, scratchpad, loop_steps_json, now),
         )
 
     return {
@@ -151,6 +159,8 @@ def save_message(
         "role": role,
         "content": content,
         "actions_taken": actions_taken or [],
+        "scratchpad": scratchpad,
+        "loop_steps": loop_steps or [],
         "created_at": now,
     }
 

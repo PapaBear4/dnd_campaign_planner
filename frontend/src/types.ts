@@ -133,10 +133,19 @@ export interface AgentActionTaken {
   result: any;
 }
 
+export interface LoopStepTrace {
+  turn: number;
+  thought?: string;
+  actions: string[];
+  summary?: string;
+}
+
 export interface AgentChatMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
   actions_taken?: AgentActionTaken[];
+  scratchpad?: string;
+  loop_steps?: LoopStepTrace[];
 }
 
 export interface ChatThread {
