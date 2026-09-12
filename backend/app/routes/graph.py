@@ -21,6 +21,14 @@ def get_hierarchy(
     cid = campaign_id or graph_service.get_setting("active_campaign_id", "default-campaign")
     return graph_service.get_hierarchy_tree(cid, player_mode=player_mode)
 
+@router.get("/locations/hierarchy", response_model=List[HierarchyItem])
+def get_location_hierarchy(
+    campaign_id: Optional[str] = Query(None),
+    player_mode: bool = Query(False)
+):
+    cid = campaign_id or graph_service.get_setting("active_campaign_id", "default-campaign")
+    return graph_service.get_location_hierarchy(cid, player_mode=player_mode)
+
 @router.get("/search", response_model=List[NodeResponse])
 def search_nodes(
     q: str = Query(..., min_length=1),

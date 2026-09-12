@@ -55,26 +55,52 @@ def chat(request: AgentChatRequest):
         )
         
     messages = [m.model_dump() for m in request.messages]
-    res = ai_agent_service.chat_with_agent(
-        messages=messages,
-        campaign_id=cid,
-        context_node_id=request.context_node_id
-    )
-    
-    # Persist assistant reply with actions_taken, scratchpad, and loop_steps
-    if res.get("reply"):
-        chat_history_service.save_message(
-            thread_id=thread_id,
+    try:
+        res = ai_agent_service.chat_with_agent(
+            messages=messages,
             campaign_id=cid,
-            role="assistant",
-            content=res["reply"],
-            actions_taken=res.get("actions_taken", []),
-            scratchpad=res.get("scratchpad", ""),
-            loop_steps=res.get("loop_steps", []),
+            context_node_id=request.context_node_id
         )
-    
-    res["thread_id"] = thread_id
-    return res
+        
+        # Persist assistant reply with actions_taken, scratchpad, and loop_steps
+        if res.get("reply"):
+            try:
+                chat_history_service.save_message(
+                    thread_id=thread_id,
+                    campaign_id=cid,
+                    role="assistant",
+                    content=res["reply"],
+                    actions_taken=res.get("actions_taken", []),
+                    scratchpad=res.get("scratchpad", ""),
+                    loop_steps=res.get("loop_steps", []),
+                )
+            except Exception as save_err:
+                logger.error(f"Failed to save assistant message: {save_err}", exc_info=True)
+        
+        res["thread_id"] = thread_id
+        return res
+    except Exception as e:
+        logger.error(f"Error in chat endpoint: {e}", exc_info=True)
+        fallback_reply = f"⚠️ An unexpected error occurred while processing your request: {e}. Please try again or check settings."
+        try:
+            chat_history_service.save_message(
+                thread_id=thread_id,
+                campaign_id=cid,
+                role="assistant",
+                content=fallback_reply,
+                actions_taken=[],
+                scratchpad="",
+                loop_steps=[],
+            )
+        except Exception:
+            pass
+        return {
+            "model": "error",
+            "reply": fallback_reply,
+            "actions_taken": [],
+            "suggested_nodes": [],
+            "thread_id": thread_id,
+        }
 
 
 @router.post("/boxed-text")
@@ -376,6 +402,7 @@ def apply_extracted(data: Dict[str, Any]):
                     content_markdown=node_content,
                     data_json=node_data,
                     revealed_to_players=n.get("revealed_to_players", False),
+                    is_canon=n.get("is_canon", False),
                     confidence=n.get("confidence", 1.0),
                     lore_status=n.get("lore_status", "fact")
                 ),
@@ -402,6 +429,7 @@ def apply_extracted(data: Dict[str, Any]):
                     relation_type=e.get("relation_type", "located_at"),
                     label=e.get("label", ""),
                     metadata_json=e.get("metadata_json", {}),
+                    is_canon=e.get("is_canon", False),
                     confidence=e.get("confidence", 1.0),
                     lore_status=e.get("lore_status", "fact")
                 ),

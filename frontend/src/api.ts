@@ -94,6 +94,39 @@ export async function getHierarchy(campaignId?: string, playerMode: boolean = fa
   return handleResponse<HierarchyItem[]>(res);
 }
 
+export async function getLocationHierarchy(campaignId?: string, playerMode: boolean = false): Promise<HierarchyItem[]> {
+  const url = new URL(`${window.location.origin}/api/locations/hierarchy`);
+  if (campaignId) url.searchParams.set('campaign_id', campaignId);
+  if (playerMode) url.searchParams.set('player_mode', 'true');
+  const res = await fetch(url.toString());
+  return handleResponse<HierarchyItem[]>(res);
+}
+
+export async function createSubLocation(
+  campaignId: string,
+  parentLocationId: string,
+  title: string,
+  summary?: string,
+  extraData?: Record<string, any>
+): Promise<{ node: NodeItem; edge: EdgeItem }> {
+  const node = await createNode({
+    campaign_id: campaignId,
+    type: 'location',
+    title: title.trim(),
+    summary: summary?.trim() || '',
+    data_json: { status: 'planned', ...(extraData || {}) },
+  });
+  const edge = await createEdge({
+    campaign_id: campaignId,
+    source_id: parentLocationId,
+    target_id: node.id,
+    relation_type: 'contains',
+    label: 'Contains',
+    revealed_to_players: false,
+  });
+  return { node, edge };
+}
+
 export async function searchNodes(query: string, campaignId?: string, playerMode: boolean = false): Promise<NodeItem[]> {
   const url = new URL(`${window.location.origin}/api/search`);
   url.searchParams.set('q', query);

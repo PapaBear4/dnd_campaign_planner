@@ -59,9 +59,10 @@ You have real Python tool functions that directly read and write the campaign's 
 - **find_nodes_by_title(title_fragment)** — Find nodes whose title contains a word or phrase. Use to detect duplicates.
 - **list_edges_for_node(node_id)** — See every relationship touching a node. Use before merging or deleting.
 - **create_node(type, title, subtitle?, summary?, content_markdown?, data_json?, is_canon?, confidence?, lore_status?)** — Create a new graph node.
-- **update_node(node_id, title?, subtitle?, summary?, content_markdown?, data_json?, confidence?, lore_status?)** — Update an existing node's content or confidence.
+- **update_node(node_id, type?, title?, subtitle?, summary?, content_markdown?, data_json?, confidence?, lore_status?)** — Update an existing node's type, content, metadata, or confidence without breaking connected relationships or edges.
 - **update_node_status(node_id, status)** — Quickly set a node's status (planned/active/completed/abandoned).
 - **bulk_update_node_status(updates)** — Quickly set the status ('planned', 'active', 'completed', 'abandoned') for multiple nodes at once in a single call. Use this to update entire quest tracks or encounter chains efficiently.
+- **bulk_update_node_confidence(updates)** — Quickly set the epistemic truth level ('confidence': 0.0 to 1.0) and/or status ('lore_status': 'fact', 'suspicion', 'rumor') for multiple nodes in a single call. Use this to update entire questlines, encounter groups, or rumor tracks at once.
 - **delete_node(node_id)** — Delete a single node and clean up its edges.
 - **bulk_delete_nodes(node_ids)** — Delete multiple nodes at once.
 - **merge_nodes(primary_id, duplicate_ids, merged_title?, merged_summary?, merged_content?)** — Merge duplicate nodes into one: re-points all relationships to the primary, combines content, then deletes the duplicates.
@@ -132,6 +133,65 @@ A living campaign world requires chronological integrity. You want the campaign 
   - If the players bypassed an encounter (e.g. the Troll in the tavern never climbed out of the well), do not treat it as an active current threat in that scene. Mark it as bypassed/abandoned, or reposition it to a future beat.
   - If the party resolved a quest early or befriended an enemy, update the status (`completed`, `active`, `abandoned`) and adjust relationship edges immediately.
 - **Causal Sequence**: Maintain strict cause-and-effect order. Prerequisites must precede outcomes; discoveries must precede realizations; contiguous physical travel must connect via `leads_to`. Flag any temporal paradoxes, orphan events, or chronological contradictions to the DM with recommended fixes.
+
+---
+
+## CAMPAIGN TAXONOMY & NARRATIVE HIERARCHY DEFINITIONS
+
+To ensure absolute precision, architectural coherence, and flawless organization, you adhere to strict definitions for every structural element in the campaign hierarchy:
+
+1. **Campaign**:
+   - The overarching narrative umbrella, cosmic multiverse/world setting, and multi-tier saga encompassing the party's full journey from beginning to end (e.g. Levels 1 to 20).
+   - Holds the world lore, campaign setting, grand themes, and all Arcs.
+
+2. **Arc (or Campaign Arc)**:
+   - A major narrative act, chapter, or grand story milestone within the campaign with its own overarching conflict, central antagonist, theme, and climactic resolution (e.g. "The Sunless Citadel", "The Red Hand of Doom", "In Search of the Forge of Fury").
+   - Spans multiple character levels (e.g. Levels 1–3) and groups several Quests and Quest Lines together.
+   - Connected to its component Quests via `contains` relationships.
+
+3. **Quest Line**:
+   - An interconnected sequence or thematic chain of episodic quests tied to a shared patron, faction struggle, long-term mystery, or character destiny (e.g. "The Hucrele Family Rescue", "Restoring the Twilight Grove", "Meepo's Redemption").
+   - Connects individual Quests via `precedes` or thematic groupings.
+
+4. **Quest**:
+   - A distinct, actionable objective or mission with clear stakes, tangible goals, defined milestones, and explicit win/loss conditions (e.g. "Rescue the Missing Adventurers", "Recover Calcryx the White Wyrmling").
+   - Yields rewards (XP, GP, magic items, faction renown) and leads to Sessions, Encounters, and Clues.
+
+5. **Session**:
+   - A real-world table gameplay event (typically 3–5 hours) representing what actually occurred at the table chronologically.
+   - Contains the session date, table agenda, in-game journal recap, emergent player choices, and player notes.
+   - Links to the Quests progressed during the session and the Encounters triggered.
+
+6. **Scene**:
+   - A distinct dramatic and situational framing within a session or quest focused on a specific moment of dialogue, negotiation, exploration, or dilemma (e.g. "Negotiating with Yusdrayl on the Dragon Throne", "Investigating the Dragon Fountain").
+   - Focuses on atmosphere, character dialogue, and dramatic beats before escalating to or resolving an Encounter.
+
+7. **Encounter**:
+   - A discrete, focused challenge demanding immediate player decision-making, resource expenditure, skill checks, or combat initiative.
+   - Types include:
+     - **Combat Encounter**: Tactical battle against monsters/adversaries with statblocks, terrain hazards, and round-by-round tactics.
+     - **Social Encounter**: Tense negotiation, interrogation, deception, or persuasion with an NPC holding high stakes.
+     - **Puzzle & Trap / Hazard Encounter**: Environmental danger, mechanical or magical riddle, requiring skill checks or clever problem-solving.
+     - **Exploration Encounter**: Surviving wilderness hazards, navigating treacherous chasms, or enduring harsh planar environments.
+
+8. **Beats (Story Beats)**:
+   - The granular, micro-units of dramatic progression, pacing pulses, emotional turns, and discoveries within a scene, encounter, or session.
+   - Standard D&D beat structure:
+     - *Hook / Inciting Pulse*: The catalyst that demands attention.
+     - *Development / Investigation*: Exploring clues, gathering intel, sizing up the threat.
+     - *Complication / Twist*: Unexpected revelation, betrayal, trap, or escalating danger.
+     - *Climax / Crisis*: The high-stakes decision, skill check, or battle turn.
+     - *Resolution / Cliffhanger*: Consequence, loot discovery, aftermath, or suspenseful transition to the next scene.
+
+9. **Locations & Nested Locations (Keyed Areas & Dungeon Rooms)**:
+   - Physical space in the campaign world is strictly hierarchical:
+     - World / Continent -> Region -> Settlement / Wilderness -> Dungeon / Building -> Floor / District -> Keyed Room / Called-out Area.
+   - Dungeons (e.g. "Sunless Citadel", "Wave Echo Cave") contain their keyed locations (e.g. "Area 1: Ledge", "Area 2: Switchback Stairs", "Area 3: Crumbled Courtyard") connected via `contains` (or `located_at`) relationships.
+   - Each Keyed Room / Location node records:
+     - Room number and title
+     - Boxed text (read-aloud sensory description)
+     - Environmental conditions (lighting, smells, temperature, hazards)
+     - Keyed inhabitants (NPCs, monsters) and treasure/traps.
 
 ---
 
@@ -262,24 +322,72 @@ AGENT_TOOLS = [
                 "content_markdown": {"type": "string", "description": "Full DM notes in markdown format."},
                 "data_json": {"type": "string", "description": "Optional JSON string with extra structured key-value pairs. For creatures/NPCs, include 'role' (npc, companion, villain, boss, monster, beast, minion, patron), 'alignment' (lawful_good, neutral_good, chaotic_good, lawful_neutral, true_neutral, chaotic_neutral, lawful_evil, neutral_evil, chaotic_evil, unaligned, any), 'creature_size', 'creature_type', 'cr', 'hp', 'ac', 'abilities'."},
                 "is_canon": {"type": "boolean", "description": "Set to true for official Canon lore (default), or false for provisional working drafts."},
+                "confidence": {"type": "number", "description": "Epistemic confidence rating from 0.0 to 1.0 (default 1.0 for facts, 0.6-0.8 for suspicions, 0.2-0.5 for rumors)."},
+                "lore_status": {"type": "string", "description": "Truth level: 'fact' (Canon 🔒), 'suspicion' (Hypothesis 🔍), or 'rumor' (Hearsay 🗣️).", "enum": ["fact", "suspicion", "rumor"]},
             },
             "required": ["type", "title"],
         },
     },
     {
         "name": "update_node",
-        "description": "Update an existing node's title, subtitle, summary, content, or data. Only the fields you provide will be changed.",
+        "description": "Update an existing node's type, title, subtitle, summary, content, data, confidence, or lore status. Only the fields you provide will be changed. Preserves all connected edges, player notes, and references.",
         "parameters": {
             "type": "object",
             "properties": {
                 "node_id": {"type": "string", "description": "ID of the node to update."},
+                "type": {
+                    "type": "string",
+                    "description": "New node type if reclassifying (campaign, arc, quest, session, encounter, pc, npc, monster, location, faction, item, clue, map, lore). Preserves all connected edges.",
+                    "enum": [
+                        "campaign",
+                        "arc",
+                        "quest",
+                        "session",
+                        "encounter",
+                        "pc",
+                        "npc",
+                        "monster",
+                        "location",
+                        "faction",
+                        "item",
+                        "clue",
+                        "map",
+                        "lore",
+                    ],
+                },
                 "title": {"type": "string", "description": "New title."},
                 "subtitle": {"type": "string", "description": "New subtitle."},
                 "summary": {"type": "string", "description": "New summary."},
                 "content_markdown": {"type": "string", "description": "New full DM notes content."},
                 "data_json": {"type": "string", "description": "New or merged structured data as a JSON string (e.g. including role, alignment, creature_size, creature_type, stats)."},
+                "confidence": {"type": "number", "description": "New epistemic confidence rating (0.0 to 1.0, e.g. 1.0 for fact, 0.7 for suspicion, 0.4 for rumor)."},
+                "lore_status": {"type": "string", "description": "New truth status: 'fact', 'suspicion', or 'rumor'.", "enum": ["fact", "suspicion", "rumor"]},
+                "is_canon": {"type": "boolean", "description": "Set to true for official Canon lore (protected), or false for provisional working draft."},
             },
             "required": ["node_id"],
+        },
+    },
+    {
+        "name": "bulk_update_node_confidence",
+        "description": "Quickly set the epistemic confidence level (0.0 to 1.0) and/or lore_status ('fact', 'suspicion', 'rumor') for multiple nodes in a single tool call. Use this whenever the DM asks to set all quests, encounters, clues, or rumors to a specific confidence or rumor status.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "updates": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "node_id": {"type": "string", "description": "ID of the node."},
+                            "confidence": {"type": "number", "description": "Epistemic confidence rating (0.0 to 1.0, e.g. 1.0 for fact, 0.7 for suspicion, 0.4 for rumor)."},
+                            "lore_status": {"type": "string", "description": "Truth status: 'fact', 'suspicion', or 'rumor'.", "enum": ["fact", "suspicion", "rumor"]},
+                        },
+                        "required": ["node_id"],
+                    },
+                    "description": "List of {node_id, confidence?, lore_status?} objects to update.",
+                },
+            },
+            "required": ["updates"],
         },
     },
     {
@@ -396,6 +504,8 @@ AGENT_TOOLS = [
                     "description": "Relationship type: allied_with, hostile_to, located_at, contains, leads_to, gives_quest, rewards, precedes, parent_of, related_to, associated_with, worships, created_by, recorded_in",
                 },
                 "label": {"type": "string", "description": "Optional custom label for the edge."},
+                "confidence": {"type": "number", "description": "Epistemic confidence rating (0.0 to 1.0, default 1.0 for facts)."},
+                "lore_status": {"type": "string", "description": "Truth status: 'fact', 'suspicion', or 'rumor'.", "enum": ["fact", "suspicion", "rumor"]},
             },
             "required": ["source_id", "target_id", "relation_type"],
         },
@@ -547,6 +657,13 @@ def _dispatch_tool_call(tool_name: str, args: dict, campaign_id: str, scratchpad
             else:
                 data_json = {}
 
+            conf = args.get("confidence")
+            try:
+                conf_val = float(conf) if conf is not None else 1.0
+            except (ValueError, TypeError):
+                conf_val = 1.0
+            lore_status_val = str(args.get("lore_status", "fact")) if args.get("lore_status") else "fact"
+
             node = graph_service.create_node(
                 NodeCreate(
                     campaign_id=campaign_id,
@@ -557,11 +674,21 @@ def _dispatch_tool_call(tool_name: str, args: dict, campaign_id: str, scratchpad
                     content_markdown=args.get("content_markdown", ""),
                     data_json=data_json,
                     is_canon=args.get("is_canon", True),
+                    confidence=conf_val,
+                    lore_status=lore_status_val,
                 ),
                 default_campaign_id=campaign_id,
             )
             canon_str = " (Canon 🔒)" if node.is_canon else " (Draft 📝)"
-            return {"created": True, "node_id": node.id, "title": node.title + canon_str, "type": node.type, "is_canon": node.is_canon}
+            return {
+                "created": True,
+                "node_id": node.id,
+                "title": node.title + canon_str,
+                "type": node.type,
+                "is_canon": node.is_canon,
+                "confidence": node.confidence,
+                "lore_status": node.lore_status,
+            }
 
         elif tool_name == "update_node":
             raw_data = args.get("data_json")
@@ -575,19 +702,43 @@ def _dispatch_tool_call(tool_name: str, args: dict, campaign_id: str, scratchpad
             else:
                 data_json = None
 
+            conf = args.get("confidence")
+            try:
+                conf_val = float(conf) if conf is not None else None
+            except (ValueError, TypeError):
+                conf_val = None
+            lore_status_val = str(args.get("lore_status")) if args.get("lore_status") is not None else None
+            is_canon_val = bool(args["is_canon"]) if "is_canon" in args and args["is_canon"] is not None else None
+
             updated = graph_service.update_node(
                 args["node_id"],
                 NodeUpdate(
+                    type=args.get("type"),
                     title=args.get("title"),
                     subtitle=args.get("subtitle"),
                     summary=args.get("summary"),
                     content_markdown=args.get("content_markdown"),
                     data_json=data_json,
+                    confidence=conf_val,
+                    lore_status=lore_status_val,
+                    is_canon=is_canon_val,
                 ),
             )
             if not updated:
                 return {"error": f"Node {args['node_id']} not found."}
-            return {"updated": True, "node_id": updated.id, "title": updated.title}
+            return {
+                "updated": True,
+                "node_id": updated.id,
+                "title": updated.title,
+                "type": updated.type,
+                "confidence": updated.confidence,
+                "lore_status": updated.lore_status,
+                "is_canon": updated.is_canon,
+            }
+
+        elif tool_name == "bulk_update_node_confidence":
+            updates = args.get("updates", [])
+            return graph_service.bulk_update_node_confidence(updates)
 
         elif tool_name == "update_node_status":
             updated = graph_service.update_node_status(args["node_id"], args["status"])
@@ -661,6 +812,12 @@ def _dispatch_tool_call(tool_name: str, args: dict, campaign_id: str, scratchpad
             return result
 
         elif tool_name == "create_edge":
+            conf = args.get("confidence")
+            try:
+                conf_val = float(conf) if conf is not None else 1.0
+            except (ValueError, TypeError):
+                conf_val = 1.0
+            lore_status_val = str(args.get("lore_status", "fact")) if args.get("lore_status") else "fact"
             edge = graph_service.create_edge(
                 EdgeCreate(
                     campaign_id=campaign_id,
@@ -668,10 +825,12 @@ def _dispatch_tool_call(tool_name: str, args: dict, campaign_id: str, scratchpad
                     target_id=args["target_id"],
                     relation_type=args["relation_type"],
                     label=args.get("label", ""),
+                    confidence=conf_val,
+                    lore_status=lore_status_val,
                 ),
                 default_campaign_id=campaign_id,
             )
-            return {"created": True, "edge_id": edge.id, "relation_type": edge.relation_type}
+            return {"created": True, "edge_id": edge.id, "relation_type": edge.relation_type, "confidence": edge.confidence, "lore_status": edge.lore_status}
 
         elif tool_name == "bulk_create_edges":
             edges = args.get("edges", [])
@@ -693,6 +852,69 @@ def _dispatch_tool_call(tool_name: str, args: dict, campaign_id: str, scratchpad
     except Exception as e:
         logger.error(f"Tool dispatch error [{tool_name}]: {e}", exc_info=True)
         return {"error": str(e)}
+
+
+def _proto_to_python(val: Any) -> Any:
+    """Recursively converts Protobuf composite/container types into pure native Python types."""
+    if val is None:
+        return None
+    if isinstance(val, (str, int, float, bool)):
+        return val
+    if isinstance(val, (list, tuple, set)):
+        return [_proto_to_python(v) for v in val]
+    if isinstance(val, dict):
+        return {str(k): _proto_to_python(v) for k, v in val.items()}
+    try:
+        from google.protobuf.json_format import MessageToDict
+        from google.protobuf.message import Message
+        if isinstance(val, Message):
+            return MessageToDict(val)
+    except Exception:
+        pass
+    if hasattr(val, "items") and callable(getattr(val, "items", None)):
+        try:
+            return {str(k): _proto_to_python(v) for k, v in val.items()}
+        except Exception:
+            pass
+    if hasattr(val, "__iter__"):
+        try:
+            return [_proto_to_python(v) for v in val]
+        except Exception:
+            pass
+    return val
+
+
+def _sanitize_gemini_history(messages_slice: List[Dict[str, Any]]):
+    """
+    Sanitizes conversation history for Gemini multi-turn chat.
+    Guarantees strictly alternating user/model turns starting with user and ending with model.
+    Returns (gemini_history, leftover_user_text).
+    """
+    if not messages_slice:
+        return [], ""
+
+    normalized = []
+    for m in messages_slice:
+        role = "user" if m.get("role") == "user" else "model"
+        content = str(m.get("content") or "").strip()
+        if not content:
+            continue
+        if normalized and normalized[-1]["role"] == role:
+            normalized[-1]["parts"][0] += f"\n\n{content}"
+        else:
+            normalized.append({"role": role, "parts": [content]})
+
+    # Ensure it starts with user
+    while normalized and normalized[0]["role"] != "user":
+        normalized.pop(0)
+
+    # Any trailing user messages cannot be at the end of history if the new send_message is user
+    leftover_user_text = ""
+    while normalized and normalized[-1]["role"] != "model":
+        trailing = normalized.pop(-1)
+        leftover_user_text = trailing["parts"][0] + ("\n\n" + leftover_user_text if leftover_user_text else "")
+
+    return normalized, leftover_user_text
 
 
 def chat_with_agent(
@@ -775,19 +997,21 @@ def chat_with_agent(
             )
         ]
 
-        # Build conversation history for Gemini
-        gemini_history = []
-        for m in messages[:-1]:
-            gemini_history.append({
-                "role": "user" if m["role"] == "user" else "model",
-                "parts": [m["content"]]
-            })
+        # Build sanitized conversation history for Gemini
+        raw_history = messages[:-1] if len(messages) > 1 else []
+        gemini_history, leftover_user_text = _sanitize_gemini_history(raw_history)
+
+        last_user_content = messages[-1]["content"] if messages else ""
+        if leftover_user_text:
+            combined_user_content = f"{leftover_user_text}\n\n{last_user_content}"
+        else:
+            combined_user_content = last_user_content
 
         # Inject DB context + focused node into the final user prompt
         last_prompt = (
             f"{db_context}\n"
             f"{context_extra}\n"
-            f"## DM Request\n{messages[-1]['content']}"
+            f"## DM Request\n{combined_user_content}"
         )
 
         # Create a model instance with tools enabled
@@ -875,22 +1099,22 @@ def chat_with_agent(
             # Execute each tool call and build FunctionResponse parts
             function_response_parts = []
             for fc in function_calls:
-                fc_args = {}
-                try:
-                    fc_args = dict(fc.args) if fc.args else {}
-                except Exception:
+                raw_args = getattr(fc, "args", None)
+                fc_args = _proto_to_python(raw_args) if raw_args else {}
+                if not isinstance(fc_args, dict):
                     fc_args = {}
                 tool_result = _dispatch_tool_call(fc.name, fc_args, campaign_id, scratchpad_state=scratchpad_state)
+                tool_result_clean = _proto_to_python(tool_result)
                 actions_taken.append({
                     "tool": fc.name,
                     "args": fc_args,
-                    "result": tool_result,
+                    "result": tool_result_clean,
                 })
                 function_response_parts.append(
                     genai.protos.Part(
                         function_response=genai.protos.FunctionResponse(
                             name=fc.name,
-                            response={"result": tool_result},
+                            response={"result": tool_result_clean},
                         )
                     )
                 )
@@ -1599,6 +1823,7 @@ def _reconcile_extracted_nodes_with_campaign(
     reconciled = []
     for node in extracted_nodes:
         n = dict(node)
+        n["is_canon"] = False
         ext_title = (n.get("title") or "").strip()
         norm_title = ext_title.lower()
 
@@ -2074,6 +2299,7 @@ def _normalize_extracted_chunk_nodes(chunk_data: Dict[str, Any]) -> List[Dict[st
                 n.setdefault("summary", n.get("title", ""))
                 n.setdefault("content_markdown", n.get("summary", n.get("title", "")))
                 n.setdefault("data_json", {"status": "planned"})
+                n["is_canon"] = False
                 valid_nodes.append(n)
         if valid_nodes:
             return valid_nodes
@@ -2099,6 +2325,7 @@ def _normalize_extracted_chunk_nodes(chunk_data: Dict[str, Any]) -> List[Dict[st
                     it.setdefault("summary", title_str)
                     it.setdefault("content_markdown", it.get("description", title_str))
                     it.setdefault("data_json", {"status": "planned"})
+                    it["is_canon"] = False
                     collected.append(it)
                 elif isinstance(it, str) and it.strip():
                     collected.append({
@@ -2106,7 +2333,8 @@ def _normalize_extracted_chunk_nodes(chunk_data: Dict[str, Any]) -> List[Dict[st
                         "title": it.strip(),
                         "summary": it.strip(),
                         "content_markdown": it.strip(),
-                        "data_json": {"status": "planned"}
+                        "data_json": {"status": "planned"},
+                        "is_canon": False
                     })
 
     # Also inspect scratchpad object if top-level lists were empty
@@ -2123,7 +2351,8 @@ def _normalize_extracted_chunk_nodes(chunk_data: Dict[str, Any]) -> List[Dict[st
                             "title": title_str,
                             "summary": title_str,
                             "content_markdown": title_str,
-                            "data_json": {"status": "planned"}
+                            "data_json": {"status": "planned"},
+                            "is_canon": False
                         })
     return collected
 
@@ -3732,7 +3961,8 @@ def apply_session_adaptation(
                 summary=n.get("summary", ""),
                 content_markdown=n.get("content_markdown", ""),
                 data_json=n.get("data_json", {}),
-                revealed_to_players=n.get("revealed_to_players", True)
+                revealed_to_players=n.get("revealed_to_players", True),
+                is_canon=False
             ),
             default_campaign_id=campaign_id
         )
@@ -3754,7 +3984,8 @@ def apply_session_adaptation(
                     target_id=tgt_node.id,
                     relation_type=e.get("relation_type", "allied_with"),
                     label=e.get("label", ""),
-                    revealed_to_players=True
+                    revealed_to_players=True,
+                    is_canon=False
                 ),
                 default_campaign_id=campaign_id
             )
@@ -3773,7 +4004,8 @@ def apply_session_adaptation(
                 summary=effective_next_session.get("summary") or effective_next_session.get("description") or "",
                 content_markdown=effective_next_session.get("content_markdown") or effective_next_session.get("description") or "",
                 data_json={"status": "planned"},
-                revealed_to_players=True
+                revealed_to_players=True,
+                is_canon=False
             ),
             default_campaign_id=campaign_id
         )

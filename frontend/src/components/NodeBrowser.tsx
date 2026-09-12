@@ -12,6 +12,9 @@ import {
   Layers,
   LayoutGrid,
   List,
+  MapPin,
+  ChevronDown,
+  ChevronRight,
   MessageSquare,
   Plus,
   Search,
@@ -25,8 +28,8 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import { createNode, deleteNode, toggleNodeReveal } from '../api';
-import { NodeItem, NodeType, LoreStatus } from '../types';
+import { createNode, createSubLocation, deleteNode, getLocationHierarchy, toggleNodeReveal } from '../api';
+import { NodeItem, NodeType, LoreStatus, HierarchyItem } from '../types';
 
 interface NodeBrowserProps {
   nodes: NodeItem[];
@@ -81,7 +84,16 @@ export const NodeBrowser: React.FC<NodeBrowserProps> = ({
   const [loreFilter, setLoreFilter] = useState<'all' | 'fact' | 'suspicion' | 'rumor'>('all');
   const [visibilityFilter, setVisibilityFilter] = useState<'all' | 'revealed' | 'secret'>('all');
   const [sortBy, setSortBy] = useState<'title_asc' | 'title_desc' | 'type' | 'updated'>('title_asc');
-  const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards');
+  const [viewMode, setViewMode] = useState<'cards' | 'table' | 'location_tree'>('cards');
+
+  // Location Tree Hierarchy State
+  const [locationHierarchy, setLocationHierarchy] = useState<HierarchyItem[]>([]);
+  const [loadingLocations, setLoadingLocations] = useState(false);
+  const [expandedLocations, setExpandedLocations] = useState<Record<string, boolean>>({});
+  const [quickAddParentId, setQuickAddParentId] = useState<string | null>(null);
+  const [quickAddTitle, setQuickAddTitle] = useState('');
+  const [quickAddSummary, setQuickAddSummary] = useState('');
+  const [isSubmittingSubLocation, setIsSubmittingSubLocation] = useState(false);
 
   // New Node Quick Modal State
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -91,6 +103,50 @@ export const NodeBrowser: React.FC<NodeBrowserProps> = ({
   const [newSummary, setNewSummary] = useState('');
   const [newLoreStatus, setNewLoreStatus] = useState<LoreStatus>('fact');
   const [isCreating, setIsCreating] = useState(false);
+
+  const loadLocationTree = async () => {
+    try {
+      setLoadingLocations(true);
+      const data = await getLocationHierarchy(campaignId);
+      setLocationHierarchy(data);
+    } catch (err) {
+      console.error('Failed to load location hierarchy:', err);
+    } finally {
+      setLoadingLocations(false);
+    }
+  };
+
+  React.useEffect(() => {
+    if (viewMode === 'location_tree' || selectedType === 'location') {
+      loadLocationTree();
+    }
+  }, [viewMode, selectedType, campaignId, nodes]);
+
+  const toggleLocationExpand = (id: string) => {
+    setExpandedLocations((prev) => ({
+      ...prev,
+      [id]: prev[id] === false ? true : false,
+    }));
+  };
+
+  const handleQuickAddSubLocation = async (e: React.FormEvent, parentId: string) => {
+    e.preventDefault();
+    if (!quickAddTitle.trim()) return;
+    setIsSubmittingSubLocation(true);
+    try {
+      await createSubLocation(campaignId, parentId, quickAddTitle.trim(), quickAddSummary.trim());
+      setQuickAddTitle('');
+      setQuickAddSummary('');
+      setQuickAddParentId(null);
+      setExpandedLocations((prev) => ({ ...prev, [parentId]: true }));
+      onRefresh();
+      loadLocationTree();
+    } catch (err) {
+      alert('Failed to create sub-location: ' + err);
+    } finally {
+      setIsSubmittingSubLocation(false);
+    }
+  };
 
   // Filter & Search Logic
   const filteredNodes = useMemo(() => {
@@ -184,6 +240,188 @@ export const NodeBrowser: React.FC<NodeBrowserProps> = ({
     } finally {
       setIsCreating(false);
     }
+  };
+
+  const renderLocationTreeItem = (item: HierarchyItem, depth: number = 0) => {
+    const { node, children } = item;
+    const isExpanded = expandedLocations[node.id] ?? true;
+    const isAddingHere = quickAddParentId === node.id;
+
+    return (
+      <div key={node.id} style={{ marginLeft: `${depth * 20}px`, marginTop: '8px' }}>
+        <div
+          onClick={() => onSelectNode(node)}
+          className="glass-panel"
+          style={{
+            padding: '10px 14px',
+            borderRadius: '8px',
+            cursor: 'pointer',
+            border: '1px solid var(--border-subtle)',
+            background: 'var(--bg-card)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+            transition: 'all 0.15s ease',
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--color-emerald)')}
+          onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}
+        >
+          {/* Left: Expand/Collapse + Icon + Title & Scale */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: 0 }}>
+            {children.length > 0 ? (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleLocationExpand(node.id);
+                }}
+                style={{
+                  background: 'rgba(255, 255, 255, 0.06)',
+                  border: '1px solid var(--border-medium)',
+                  borderRadius: '6px',
+                  color: isExpanded ? 'var(--color-emerald)' : 'var(--text-secondary)',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: '24px',
+                  height: '24px',
+                  padding: 0,
+                }}
+              >
+                {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              </button>
+            ) : (
+              <div style={{ width: '24px', height: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <MapPin size={14} style={{ color: 'var(--color-emerald)', opacity: 0.7 }} />
+              </div>
+            )}
+
+            <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '0.88rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                  {node.title}
+                </span>
+                {node.data_json?.scale && (
+                  <span
+                    style={{
+                      fontSize: '0.66rem',
+                      padding: '1px 6px',
+                      borderRadius: '4px',
+                      background: 'rgba(16, 185, 129, 0.15)',
+                      color: 'var(--color-emerald)',
+                      border: '1px solid rgba(16, 185, 129, 0.3)',
+                    }}
+                  >
+                    {node.data_json.scale}
+                  </span>
+                )}
+                {children.length > 0 && (
+                  <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                    ({children.length} sub-area{children.length > 1 ? 's' : ''})
+                  </span>
+                )}
+              </div>
+              {node.summary && (
+                <span style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: '1px' }}>
+                  {node.summary}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Right: Actions */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }} onClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              onClick={() => {
+                setQuickAddParentId(isAddingHere ? null : node.id);
+                setQuickAddTitle('');
+                setQuickAddSummary('');
+              }}
+              className="btn btn-secondary"
+              style={{ fontSize: '0.7rem', padding: '3px 8px', display: 'flex', alignItems: 'center', gap: '4px' }}
+              title="Add a nested room / keyed area inside this location"
+            >
+              <Plus size={12} /> {isAddingHere ? 'Cancel' : '+ Sub-Room'}
+            </button>
+            <button
+              type="button"
+              onClick={() => onSelectNode(node)}
+              className="btn btn-ghost"
+              style={{ fontSize: '0.7rem', padding: '3px 8px', color: 'var(--color-gold)' }}
+            >
+              Inspect
+            </button>
+          </div>
+        </div>
+
+        {/* Inline Sub-Location Form */}
+        {isAddingHere && (
+          <form
+            onSubmit={(e) => handleQuickAddSubLocation(e, node.id)}
+            style={{
+              marginTop: '6px',
+              marginLeft: '24px',
+              padding: '10px 12px',
+              borderRadius: '8px',
+              background: 'rgba(16, 185, 129, 0.08)',
+              border: '1px solid rgba(16, 185, 129, 0.3)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '6px',
+            }}
+          >
+            <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-emerald)' }}>
+              Nest New Room inside &quot;{node.title}&quot;
+            </div>
+            <input
+              type="text"
+              placeholder="e.g. Area 1: Cave Entrance or Upper Crypt"
+              value={quickAddTitle}
+              onChange={(e) => setQuickAddTitle(e.target.value)}
+              className="input"
+              style={{ width: '100%', fontSize: '0.78rem', padding: '5px 8px' }}
+              autoFocus
+            />
+            <input
+              type="text"
+              placeholder="Quick description of room contents"
+              value={quickAddSummary}
+              onChange={(e) => setQuickAddSummary(e.target.value)}
+              className="input"
+              style={{ width: '100%', fontSize: '0.78rem', padding: '5px 8px' }}
+            />
+            <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end', marginTop: '2px' }}>
+              <button
+                type="button"
+                onClick={() => setQuickAddParentId(null)}
+                className="btn btn-ghost"
+                style={{ fontSize: '0.7rem', padding: '2px 8px' }}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={isSubmittingSubLocation || !quickAddTitle.trim()}
+                className="btn btn-primary"
+                style={{ fontSize: '0.7rem', padding: '2px 10px' }}
+              >
+                {isSubmittingSubLocation ? 'Adding...' : 'Add Room'}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {/* Children Render */}
+        {isExpanded && children.length > 0 && (
+          <div style={{ borderLeft: '1px dashed var(--border-medium)', marginLeft: '12px', paddingLeft: '4px' }}>
+            {children.map((child) => renderLocationTreeItem(child, depth + 1))}
+          </div>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -296,6 +534,22 @@ export const NodeBrowser: React.FC<NodeBrowserProps> = ({
                 }}
               >
                 <List size={15} />
+              </button>
+              <button
+                onClick={() => {
+                  setSelectedType('location');
+                  setViewMode('location_tree');
+                }}
+                className="btn btn-ghost"
+                title="Nested Dungeon & Location Tree"
+                style={{
+                  padding: '6px 10px',
+                  background: viewMode === 'location_tree' ? 'var(--color-gold)' : 'transparent',
+                  color: viewMode === 'location_tree' ? '#0a0d14' : 'var(--text-secondary)',
+                  borderRadius: 0,
+                }}
+              >
+                <Compass size={15} />
               </button>
             </div>
 
@@ -655,6 +909,99 @@ export const NodeBrowser: React.FC<NodeBrowserProps> = ({
                 </div>
               );
             })}
+          </div>
+        ) : viewMode === 'location_tree' ? (
+          /* Location Tree Hierarchy View */
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '10px 14px',
+                borderRadius: '8px',
+                background: 'rgba(255, 255, 255, 0.03)',
+                border: '1px solid var(--border-subtle)',
+                fontSize: '0.82rem',
+                color: 'var(--text-secondary)',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Compass size={15} style={{ color: 'var(--color-gold)' }} />
+                <span>
+                  Nested Location Explorer &amp; Dungeon Rooms &bull;{' '}
+                  <strong style={{ color: 'var(--text-main)' }}>{locationHierarchy.length}</strong> top-level regions/dungeons
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  style={{ fontSize: '0.75rem', padding: '4px 8px' }}
+                  onClick={() => {
+                    const allMap: Record<string, boolean> = {};
+                    const collect = (nodes: HierarchyItem[]) => {
+                      for (const n of nodes) {
+                        allMap[n.node.id] = true;
+                        if (n.children && n.children.length > 0) collect(n.children);
+                      }
+                    };
+                    collect(locationHierarchy);
+                    setExpandedLocations(allMap);
+                  }}
+                >
+                  Expand All
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  style={{ fontSize: '0.75rem', padding: '4px 8px' }}
+                  onClick={() => setExpandedLocations({})}
+                >
+                  Collapse All
+                </button>
+              </div>
+            </div>
+
+            {loadingLocations ? (
+              <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                Loading nested location structure...
+              </div>
+            ) : locationHierarchy.length === 0 ? (
+              <div
+                className="glass-panel"
+                style={{
+                  padding: '40px 20px',
+                  textAlign: 'center',
+                  color: 'var(--text-muted)',
+                  borderRadius: '10px',
+                }}
+              >
+                <Compass size={36} style={{ marginBottom: '12px', opacity: 0.3 }} />
+                <div style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
+                  No Locations Found
+                </div>
+                <div style={{ fontSize: '0.82rem', maxWidth: '400px', margin: '0 auto 16px' }}>
+                  Create a location (such as a dungeon, town, or continent) to organize rooms, sub-areas, and points of interest.
+                </div>
+                <button
+                  className="btn btn-primary"
+                  onClick={() => {
+                    setNewType('location');
+                    setNewTitle('');
+                    setNewSubtitle('Dungeon / Complex');
+                    setNewSummary('');
+                    setShowCreateModal(true);
+                  }}
+                >
+                  + Add First Location
+                </button>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {locationHierarchy.map((root) => renderLocationTreeItem(root, 0))}
+              </div>
+            )}
           </div>
         ) : (
           /* Table View */

@@ -120,8 +120,8 @@ def save_message(
     """Append a chat message to a thread and update thread timestamps and title."""
     msg_id = str(uuid.uuid4())
     now = _now_iso()
-    actions_json = json.dumps(actions_taken or [])
-    loop_steps_json = json.dumps(loop_steps or [])
+    actions_json = json.dumps(actions_taken or [], default=str)
+    loop_steps_json = json.dumps(loop_steps or [], default=str)
 
     with get_db() as conn:
         # Check thread and maybe update title if it's the first user message

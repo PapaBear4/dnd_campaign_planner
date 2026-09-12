@@ -340,5 +340,172 @@ def test_uploads_library_and_duplicate_handling(client):
     assert dup_after.status_code == 200
     assert dup_after.json()["exists"] is False
 
+def test_location_hierarchy(client):
+    campaign = graph_service.create_campaign(
+        CampaignCreate(name="Dungeon Hierarchy Campaign", setting="Underdark")
+    )
+    cid = campaign.id
+
+    dungeon = graph_service.create_node(
+        NodeCreate(campaign_id=cid, type="location", title="Sunless Citadel", summary="Ancient sunken fortress"),
+        default_campaign_id=cid
+    )
+    area1 = graph_service.create_node(
+        NodeCreate(campaign_id=cid, type="location", title="Area 1: Ledge", summary="Narrow path above the ravine"),
+        default_campaign_id=cid
+    )
+    area2 = graph_service.create_node(
+        NodeCreate(campaign_id=cid, type="location", title="Area 2: Switchback Stairs", summary="Crumbled stone stairway"),
+        default_campaign_id=cid
+    )
+    area3 = graph_service.create_node(
+        NodeCreate(campaign_id=cid, type="location", title="Area 3: Crumbled Courtyard", summary="Overgrown ruins"),
+        default_campaign_id=cid
+    )
+    area3a = graph_service.create_node(
+        NodeCreate(campaign_id=cid, type="location", title="Area 3a: Secret Alcove", summary="Hidden treasure cache"),
+        default_campaign_id=cid
+    )
+
+    # Wire relationships: dungeon contains area 1, 2, 3; area 3 contains area 3a
+    for child in [area1, area2, area3]:
+        graph_service.create_edge(
+            EdgeCreate(campaign_id=cid, source_id=dungeon.id, target_id=child.id, relation_type="contains"),
+            default_campaign_id=cid
+        )
+    graph_service.create_edge(
+        EdgeCreate(campaign_id=cid, source_id=area3.id, target_id=area3a.id, relation_type="contains"),
+        default_campaign_id=cid
+    )
+
+    # 1. Test service method
+    tree = graph_service.get_location_hierarchy(cid)
+    assert len(tree) == 1
+    root_item = tree[0]
+    assert root_item.node.id == dungeon.id
+    assert len(root_item.children) == 3
+    area3_item = next(it for it in root_item.children if it.node.id == area3.id)
+    assert len(area3_item.children) == 1
+    assert area3_item.children[0].node.id == area3a.id
+
+    # 2. Test API route
+    resp = client.get(f"/api/locations/hierarchy?campaign_id={cid}")
+    assert resp.status_code == 200
+    api_tree = resp.json()
+    assert len(api_tree) == 1
+    assert api_tree[0]["node"]["title"] == "Sunless Citadel"
+    assert len(api_tree[0]["children"]) == 3
+
+def test_apply_extracted_defaults_to_draft(client):
+    campaign = graph_service.create_campaign(
+        CampaignCreate(name="Import Draft Test", setting="Faerun")
+    )
+    cid = campaign.id
+
+    resp = client.post("/api/agent/apply-extracted", json={
+        "campaign_id": cid,
+        "nodes": [
+            {
+                "type": "location",
+                "title": "Area 5: Goblin Guard Post",
+                "summary": "Watch outpost manned by goblins."
+            },
+            {
+                "type": "npc",
+                "title": "Durnn the Chieftain",
+                "summary": "Leader of the Durbuluk tribe."
+            }
+        ],
+        "edges": [
+            {
+                "source_title": "Durnn the Chieftain",
+                "target_title": "Area 5: Goblin Guard Post",
+                "relation_type": "located_at"
+            }
+        ]
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["nodes_created"] == 2
+    assert data["edges_created"] == 1
+
+    nodes = graph_service.list_nodes(cid)
+    for n in nodes:
+        assert n.is_canon is False  # Newly imported nodes must default to draft
+
+    edges = graph_service.list_edges(cid)
+    assert len(edges) == 1
+    assert edges[0].is_canon is False  # Newly imported edges must default to draft
 
 
+def test_mutable_node_type_preserves_edges_and_id(client):
+    campaign = graph_service.create_campaign(
+        CampaignCreate(name="Mutable Type Test", setting="Faerun")
+    )
+    cid = campaign.id
+
+    # 1. Create a node as a 'quest' (mistakenly classified on import)
+    node1 = graph_service.create_node(
+        NodeCreate(
+            campaign_id=cid,
+            type="quest",
+            title="The Sun Sword",
+            summary="A radiant blade of legendary sunlight power."
+        ),
+        default_campaign_id=cid
+    )
+    node2 = graph_service.create_node(
+        NodeCreate(
+            campaign_id=cid,
+            type="location",
+            title="Crypt of Sergei",
+            summary="The resting place of the prince."
+        ),
+        default_campaign_id=cid
+    )
+
+    # 2. Wire an edge between the two nodes
+    edge = graph_service.create_edge(
+        EdgeCreate(
+            campaign_id=cid,
+            source_id=node1.id,
+            target_id=node2.id,
+            relation_type="located_at",
+            label="Hidden within"
+        ),
+        default_campaign_id=cid
+    )
+    assert edge is not None
+
+    # 3. Update node1's type from 'quest' to 'item' via API
+    resp = client.put(f"/api/nodes/{node1.id}", json={
+        "type": "item",
+        "subtitle": "Legendary Holy Weapon"
+    })
+    assert resp.status_code == 200
+    updated_api = resp.json()
+    assert updated_api["id"] == node1.id
+    assert updated_api["type"] == "item"
+    assert updated_api["subtitle"] == "Legendary Holy Weapon"
+
+    # Verify edge is intact and untouched
+    edges_after = graph_service.list_edges(cid)
+    assert len(edges_after) == 1
+    assert edges_after[0].source_id == node1.id
+    assert edges_after[0].target_id == node2.id
+    assert edges_after[0].relation_type == "located_at"
+
+    # 4. Test Co-DM agent's _dispatch_tool_call for update_node reclassifying type
+    from app.services.ai_agent_service import _dispatch_tool_call
+    tool_res = _dispatch_tool_call("update_node", {
+        "node_id": node1.id,
+        "type": "clue",
+        "title": "Sunsword of Ravenloft"
+    }, cid)
+    assert tool_res.get("updated") is True
+    assert tool_res.get("type") == "clue"
+
+    rechecked_node = graph_service.get_node(node1.id)
+    assert rechecked_node.type == "clue"
+    assert rechecked_node.id == node1.id
+    assert rechecked_node.title == "Sunsword of Ravenloft"

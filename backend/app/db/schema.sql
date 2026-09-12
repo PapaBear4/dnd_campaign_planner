@@ -183,6 +183,8 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     role TEXT NOT NULL, -- 'user' | 'assistant' | 'system'
     content TEXT NOT NULL,
     actions_json TEXT DEFAULT '[]',
+    scratchpad TEXT,
+    loop_steps_json TEXT DEFAULT '[]',
     created_at TEXT NOT NULL
 );
 

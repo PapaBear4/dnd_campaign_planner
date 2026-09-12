@@ -1,21 +1,36 @@
 import React, { useEffect, useState } from 'react';
 import {
-  BookOpen,
   Check,
+  ChevronDown,
   Eye,
   EyeOff,
   Feather,
   FileText,
-  Maximize2,
   Save,
   ShieldCheck,
   Sparkles,
-  Tag,
   Trash2,
   X,
 } from 'lucide-react';
 import { deleteNode, toggleNodeCanon, toggleNodeReveal, updateNode } from '../api';
-import { NodeItem, NodeType, LoreStatus } from '../types';
+import { NodeItem, EdgeItem, LoreStatus, NodeType } from '../types';
+
+const ALL_NODE_TYPES: { value: NodeType; label: string }[] = [
+  { value: 'location', label: 'Location' },
+  { value: 'npc', label: 'NPC' },
+  { value: 'monster', label: 'Monster' },
+  { value: 'pc', label: 'PC' },
+  { value: 'faction', label: 'Faction' },
+  { value: 'item', label: 'Item' },
+  { value: 'quest', label: 'Quest' },
+  { value: 'arc', label: 'Arc' },
+  { value: 'session', label: 'Session' },
+  { value: 'encounter', label: 'Encounter' },
+  { value: 'clue', label: 'Clue' },
+  { value: 'lore', label: 'Lore' },
+  { value: 'map', label: 'Map' },
+  { value: 'campaign', label: 'Campaign' },
+];
 import {
   Alignment,
   CreatureRole,
@@ -25,16 +40,17 @@ import {
   getCreatureAlignment,
   getCreatureRole,
   getCreature5eType,
-  CREATURE_SIZES,
-  CREATURE_TYPES,
-  CREATURE_ROLES,
 } from '../utils/alignmentAndRoles';
-import {
-  AlignmentBadge,
-  AlignmentMatrixSelector,
-  RolePill,
-} from './AlignmentSelector';
 import { MarkdownView } from './MarkdownView';
+
+// Specialized Modal Views
+import { LocationModal } from './nodeModals/LocationModal';
+import { CreatureModal } from './nodeModals/CreatureModal';
+import { TimelineModal } from './nodeModals/TimelineModal';
+import { ItemModal } from './nodeModals/ItemModal';
+import { FactionModal } from './nodeModals/FactionModal';
+import { ClueLoreModal } from './nodeModals/ClueLoreModal';
+import { MapModal } from './nodeModals/MapModal';
 
 interface NodeDrawerProps {
   node: NodeItem | null;
@@ -43,6 +59,9 @@ interface NodeDrawerProps {
   onFocusCoDM: (node: NodeItem) => void;
   isAgentOpen?: boolean;
   coDmWidth?: number;
+  allNodes?: NodeItem[];
+  edges?: EdgeItem[];
+  onNavigateNode?: (targetNode: NodeItem) => void;
 }
 
 export const NodeDrawer: React.FC<NodeDrawerProps> = ({
@@ -50,10 +69,14 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
   onClose,
   onRefresh,
   onFocusCoDM,
+  allNodes = [],
+  edges = [],
+  onNavigateNode,
 }) => {
   if (!node) return null;
 
   const [title, setTitle] = useState(node.title);
+  const [nodeType, setNodeType] = useState<NodeType>(node.type);
   const [subtitle, setSubtitle] = useState(node.subtitle || '');
   const [summary, setSummary] = useState(node.summary || '');
   const [content, setContent] = useState(node.content_markdown || '');
@@ -61,16 +84,18 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
   const [isCanon, setIsCanon] = useState<boolean>(node.is_canon ?? true);
   const [loreStatus, setLoreStatus] = useState<LoreStatus>(node.lore_status || 'fact');
   const [confidence, setConfidence] = useState<number>(node.confidence ?? 1.0);
+  const [dataJson, setDataJson] = useState<Record<string, any>>(node.data_json || {});
   const [isSaving, setIsSaving] = useState(false);
   const [markdownTab, setMarkdownTab] = useState<'edit' | 'preview'>('edit');
 
-  // 5e Classification State
+  // 5e Classification State (for creature nodes)
   const [role, setRole] = useState<CreatureRole>(getCreatureRole(node));
   const [alignment, setAlignment] = useState<Alignment>(getCreatureAlignment(node));
   const [size, setSize] = useState<CreatureSize>(getCreature5eType(node).size);
   const [type, setType] = useState<CreatureType>(getCreature5eType(node).type);
   const [tag, setTag] = useState<string>(getCreature5eType(node).tag || '');
-  const [showAlignmentMatrix, setShowAlignmentMatrix] = useState(true);
+
+  const currentNode: NodeItem = { ...node, type: nodeType };
 
   // Close on Escape key
   useEffect(() => {
@@ -85,6 +110,7 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
 
   useEffect(() => {
     setTitle(node.title);
+    setNodeType(node.type);
     setSubtitle(node.subtitle || '');
     setSummary(node.summary || '');
     setContent(node.content_markdown || '');
@@ -92,6 +118,7 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
     setIsCanon(node.is_canon ?? true);
     setLoreStatus(node.lore_status || 'fact');
     setConfidence(node.confidence ?? 1.0);
+    setDataJson(node.data_json || {});
 
     setRole(getCreatureRole(node));
     setAlignment(getCreatureAlignment(node));
@@ -147,21 +174,25 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
     e.preventDefault();
     setIsSaving(true);
     try {
-      const dataJson = {
-        ...(node.data_json || {}),
-        role,
-        alignment,
-        creature_size: size,
-        creature_type: type,
-        creature_tag: tag || undefined,
-      };
+      let finalDataJson = { ...dataJson };
+      if (['npc', 'monster', 'pc'].includes(nodeType)) {
+        finalDataJson = {
+          ...finalDataJson,
+          role,
+          alignment,
+          creature_size: size,
+          creature_type: type,
+          creature_tag: tag || undefined,
+        };
+      }
 
       await updateNode(node.id, {
+        type: nodeType,
         title,
         subtitle,
         summary,
         content_markdown: content,
-        data_json: dataJson,
+        data_json: finalDataJson,
         revealed_to_players: revealed,
         is_canon: isCanon,
         confidence,
@@ -197,7 +228,7 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
         className="glass-panel animate-scale-up"
         style={{
           width: '92vw',
-          maxWidth: '1280px',
+          maxWidth: '1320px',
           height: '88vh',
           maxHeight: '920px',
           borderRadius: '16px',
@@ -222,12 +253,73 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-            <span
-              className={`badge badge-${node.type}`}
-              style={{ fontSize: '0.82rem', padding: '5px 12px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.5px' }}
-            >
-              {node.type}
-            </span>
+            {/* Mutable Type Dropdown */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
+                <select
+                  value={nodeType}
+                  onChange={(e) => setNodeType(e.target.value as NodeType)}
+                  className={`badge badge-${nodeType}`}
+                  title="Change Entity Type (preserves all edges, player notes, and references)"
+                  style={{
+                    fontSize: '0.8rem',
+                    padding: '5px 26px 5px 12px',
+                    fontWeight: 800,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.5px',
+                    cursor: 'pointer',
+                    appearance: 'none',
+                    WebkitAppearance: 'none',
+                    border: '1px solid var(--border-medium)',
+                    borderRadius: '6px',
+                    background: 'var(--bg-surface)',
+                    color: 'inherit',
+                  }}
+                >
+                  {ALL_NODE_TYPES.map((t) => (
+                    <option
+                      key={t.value}
+                      value={t.value}
+                      style={{
+                        background: '#0f172a',
+                        color: '#f8fafc',
+                        fontWeight: 600,
+                        textTransform: 'none',
+                      }}
+                    >
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown
+                  size={14}
+                  style={{
+                    position: 'absolute',
+                    right: '8px',
+                    pointerEvents: 'none',
+                    opacity: 0.7,
+                  }}
+                />
+              </div>
+
+              {nodeType !== node.type && (
+                <span
+                  style={{
+                    fontSize: '0.68rem',
+                    color: '#38bdf8',
+                    background: 'rgba(56, 189, 248, 0.12)',
+                    border: '1px solid rgba(56, 189, 248, 0.3)',
+                    padding: '2px 6px',
+                    borderRadius: '4px',
+                    fontWeight: 600,
+                  }}
+                  title={`Entity will be reclassified from ${node.type} to ${nodeType} upon saving`}
+                >
+                  Type will change on Save
+                </span>
+              )}
+            </div>
+
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <h2 style={{ fontSize: '1.25rem', fontWeight: 800, margin: 0, color: 'var(--text-primary)' }}>
@@ -321,7 +413,7 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
           </div>
         </div>
 
-        {/* Modal Content / Two-Column Form */}
+        {/* Modal Content / Two-Column Layout */}
         <form
           onSubmit={handleSave}
           style={{
@@ -330,12 +422,12 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
             overflow: 'hidden',
           }}
         >
-          {/* Left Column: Attributes, Mechanics & Epistemics */}
+          {/* Left Column: Contextual Attributes & Node-Type-Specific Panels */}
           <div
             style={{
-              width: '420px',
-              minWidth: '380px',
-              maxWidth: '460px',
+              width: '440px',
+              minWidth: '400px',
+              maxWidth: '480px',
               borderRight: '1px solid var(--border-subtle)',
               padding: '20px 22px',
               overflowY: 'auto',
@@ -475,166 +567,6 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
               </div>
             </div>
 
-            {/* 5e Classification: Role, Type & Alignment */}
-            <div
-              style={{
-                padding: '14px',
-                borderRadius: '10px',
-                background: 'rgba(255, 255, 255, 0.02)',
-                border: '1px solid var(--border-medium)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '10px',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--color-gold)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  ⚔️ 5e Role &amp; Alignment Matrix
-                </span>
-                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                  <RolePill role={role} size="sm" />
-                  <AlignmentBadge alignment={alignment} size="sm" />
-                </div>
-              </div>
-
-              {/* Role selection */}
-              <div>
-                <label style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
-                  Tactical / Narrative Role
-                </label>
-                <select
-                  value={role}
-                  onChange={(e) => setRole(e.target.value as CreatureRole)}
-                  style={{
-                    width: '100%',
-                    padding: '6px 8px',
-                    background: 'var(--bg-surface)',
-                    border: '1px solid var(--border-medium)',
-                    borderRadius: '6px',
-                    color: 'var(--text-primary)',
-                    fontSize: '0.8rem',
-                  }}
-                >
-                  {(Object.keys(CREATURE_ROLES) as CreatureRole[]).map((r) => (
-                    <option key={r} value={r}>
-                      {CREATURE_ROLES[r].icon} {CREATURE_ROLES[r].label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Size & Type */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' }}>
-                <div>
-                  <label style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>
-                    Size
-                  </label>
-                  <select
-                    value={size}
-                    onChange={(e) => {
-                      const newS = e.target.value as CreatureSize;
-                      setSize(newS);
-                      handleSyncSubtitle(newS, type, alignment, tag);
-                    }}
-                    style={{
-                      width: '100%',
-                      padding: '5px 6px',
-                      background: 'var(--bg-surface)',
-                      border: '1px solid var(--border-medium)',
-                      borderRadius: '6px',
-                      color: 'var(--text-primary)',
-                      fontSize: '0.75rem',
-                    }}
-                  >
-                    {CREATURE_SIZES.map((s) => (
-                      <option key={s} value={s}>{s}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>
-                    5e Type
-                  </label>
-                  <select
-                    value={type}
-                    onChange={(e) => {
-                      const newT = e.target.value as CreatureType;
-                      setType(newT);
-                      handleSyncSubtitle(size, newT, alignment, tag);
-                    }}
-                    style={{
-                      width: '100%',
-                      padding: '5px 6px',
-                      background: 'var(--bg-surface)',
-                      border: '1px solid var(--border-medium)',
-                      borderRadius: '6px',
-                      color: 'var(--text-primary)',
-                      fontSize: '0.75rem',
-                    }}
-                  >
-                    {CREATURE_TYPES.map((t) => (
-                      <option key={t} value={t}>{t}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>
-                    Tag / Subtype
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Druid"
-                    value={tag}
-                    onChange={(e) => {
-                      setTag(e.target.value);
-                      handleSyncSubtitle(size, type, alignment, e.target.value);
-                    }}
-                    style={{
-                      width: '100%',
-                      padding: '5px 6px',
-                      background: 'var(--bg-surface)',
-                      border: '1px solid var(--border-medium)',
-                      borderRadius: '6px',
-                      color: 'var(--text-primary)',
-                      fontSize: '0.75rem',
-                    }}
-                  />
-                </div>
-              </div>
-
-              {/* Alignment Matrix Dropdown / Expander */}
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
-                  <label style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
-                    Moral Compass &amp; 5e Alignment
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => setShowAlignmentMatrix(!showAlignmentMatrix)}
-                    className="btn btn-ghost"
-                    style={{ padding: '2px 6px', fontSize: '0.7rem', color: 'var(--color-gold)' }}
-                  >
-                    {showAlignmentMatrix ? 'Hide Grid' : 'Show 3x3 Grid ▾'}
-                  </button>
-                </div>
-
-                {showAlignmentMatrix && (
-                  <div style={{ animation: 'fadeIn 0.15s ease', marginTop: '6px' }}>
-                    <AlignmentMatrixSelector
-                      value={alignment}
-                      onChange={(newAlign) => {
-                        setAlignment(newAlign);
-                        handleSyncSubtitle(size, type, newAlign, tag);
-                      }}
-                      compact
-                    />
-                  </div>
-                )}
-              </div>
-            </div>
-
             {/* Summary & Quick Cues */}
             <div>
               <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
@@ -644,7 +576,7 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
                 rows={3}
                 value={summary}
                 onChange={(e) => setSummary(e.target.value)}
-                placeholder="1-2 sentences summarizing appearance, role, or core plot hook..."
+                placeholder="1-2 sentences summarizing core role, appearance, or plot hooks..."
                 style={{
                   width: '100%',
                   padding: '8px 12px',
@@ -658,9 +590,87 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
                 }}
               />
             </div>
+
+            {/* DYNAMIC NODE-SPECIFIC MODAL SECTION */}
+            {nodeType === 'location' && (
+              <LocationModal
+                node={currentNode}
+                campaignId={node.campaign_id}
+                dataJson={dataJson}
+                onChangeDataJson={setDataJson}
+                allNodes={allNodes}
+                edges={edges}
+                onNavigateNode={onNavigateNode}
+                onRefresh={onRefresh}
+                onFocusCoDM={onFocusCoDM}
+              />
+            )}
+
+            {['npc', 'monster', 'pc'].includes(nodeType) && (
+              <CreatureModal
+                node={currentNode}
+                dataJson={dataJson}
+                onChangeDataJson={setDataJson}
+                role={role}
+                setRole={setRole}
+                alignment={alignment}
+                setAlignment={setAlignment}
+                size={size}
+                setSize={setSize}
+                type={type}
+                setType={setType}
+                tag={tag}
+                setTag={setTag}
+                onSyncSubtitle={handleSyncSubtitle}
+              />
+            )}
+
+            {['arc', 'quest', 'session', 'encounter', 'campaign'].includes(nodeType) && (
+              <TimelineModal
+                node={currentNode}
+                campaignId={node.campaign_id}
+                dataJson={dataJson}
+                onChangeDataJson={setDataJson}
+                allNodes={allNodes}
+                edges={edges}
+                onNavigateNode={onNavigateNode}
+              />
+            )}
+
+            {nodeType === 'item' && (
+              <ItemModal
+                node={currentNode}
+                dataJson={dataJson}
+                onChangeDataJson={setDataJson}
+              />
+            )}
+
+            {nodeType === 'faction' && (
+              <FactionModal
+                node={currentNode}
+                dataJson={dataJson}
+                onChangeDataJson={setDataJson}
+              />
+            )}
+
+            {(nodeType === 'clue' || nodeType === 'lore') && (
+              <ClueLoreModal
+                node={currentNode}
+                dataJson={dataJson}
+                onChangeDataJson={setDataJson}
+              />
+            )}
+
+            {nodeType === 'map' && (
+              <MapModal
+                node={currentNode}
+                dataJson={dataJson}
+                onChangeDataJson={setDataJson}
+              />
+            )}
           </div>
 
-          {/* Right Column: Title, Subtitle, Full Markdown Canvas & Preview */}
+          {/* Right Column: Title, Subtitle, Markdown Canvas with Tabs */}
           <div
             style={{
               flex: 1,
@@ -701,21 +711,23 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
                   <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
                     Subtitle / Epithet
                   </label>
-                  <button
-                    type="button"
-                    onClick={() => handleSyncSubtitle()}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      fontSize: '0.68rem',
-                      color: 'var(--color-gold)',
-                      cursor: 'pointer',
-                      textDecoration: 'underline',
-                    }}
-                    title="Format subtitle using current 5e classification"
-                  >
-                    Sync 5e Format
-                  </button>
+                  {['npc', 'monster', 'pc'].includes(nodeType) && (
+                    <button
+                      type="button"
+                      onClick={() => handleSyncSubtitle()}
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        fontSize: '0.68rem',
+                        color: 'var(--color-gold)',
+                        cursor: 'pointer',
+                        textDecoration: 'underline',
+                      }}
+                      title="Format subtitle using current 5e classification"
+                    >
+                      Sync 5e Format
+                    </button>
+                  )}
                 </div>
                 <input
                   type="text"
@@ -839,7 +851,7 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
                     <MarkdownView content={content} />
                   ) : (
                     <div style={{ color: 'var(--text-muted)', fontStyle: 'italic', padding: '24px', textAlign: 'center' }}>
-                      No markdown content written yet. Switch to "Edit Markdown" to add descriptions, secrets, and statblock details.
+                      No markdown content written yet. Switch to &quot;Edit Markdown&quot; to add descriptions, secrets, and statblock details.
                     </div>
                   )}
                 </div>

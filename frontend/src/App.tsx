@@ -371,6 +371,9 @@ export function App() {
         onFocusCoDM={handleFocusCoDM}
         isAgentOpen={isAgentOpen}
         coDmWidth={coDmWidth}
+        allNodes={graphData.nodes}
+        edges={graphData.edges}
+        onNavigateNode={(n) => setSelectedNode(n)}
       />
 
       {/* Settings Modal (Gemini API Key, Models, LAN info) */}

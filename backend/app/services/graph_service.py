@@ -541,6 +541,80 @@ def get_hierarchy_tree(campaign_id: str, player_mode: bool = False) -> List[Hier
 
     return root_items
 
+# --- Location Hierarchy (World -> Region -> Settlement/Dungeon -> District/Level -> Room/Keyed Area) ---
+def get_location_hierarchy(campaign_id: str, player_mode: bool = False) -> List[HierarchyItem]:
+    """
+    Builds a tree structure for nested locations in a campaign (e.g. dungeon -> rooms, city -> districts).
+    Parent locations connect to child sub-locations via 'contains' or 'parent_of', or children to parents via 'located_at'.
+    """
+    nodes = [n for n in list_nodes(campaign_id, revealed_only=player_mode) if n.type == "location"]
+    node_map = {n.id: n for n in nodes}
+    edges = list_edges(campaign_id, revealed_only=player_mode)
+
+    hierarchy_relations = {"contains", "parent_of"}
+    child_map: Dict[str, List[str]] = {}
+    parent_map: Dict[str, str] = {}
+
+    for e in edges:
+        if e.source_id in node_map and e.target_id in node_map:
+            # Parent -> Child via contains or parent_of
+            if e.relation_type in hierarchy_relations:
+                child_map.setdefault(e.source_id, []).append(e.target_id)
+                parent_map[e.target_id] = e.source_id
+            # Child -> Parent via located_at
+            elif e.relation_type == "located_at":
+                child_map.setdefault(e.target_id, []).append(e.source_id)
+                parent_map[e.source_id] = e.target_id
+
+    def build_item(nid: str, path: set) -> Optional[HierarchyItem]:
+        if nid in path:
+            return None
+        node = node_map.get(nid)
+        if not node:
+            return None
+        child_ids = child_map.get(nid, [])
+        valid_children_nodes = [
+            node_map[cid] for cid in child_ids
+            if cid in node_map and cid not in path
+        ]
+        valid_children_nodes.sort(key=_natural_sort_key)
+
+        new_path = path | {nid}
+        children_items = []
+        for c_node in valid_children_nodes:
+            child_item = build_item(c_node.id, new_path)
+            if child_item:
+                children_items.append(child_item)
+        return HierarchyItem(node=node, children=children_items)
+
+    root_items = []
+    # Locations without parents are root locations (continents, regions, major dungeons, cities)
+    roots = [n for n in nodes if n.id not in parent_map]
+    roots.sort(key=_natural_sort_key)
+    for n in roots:
+        item = build_item(n.id, set())
+        if item:
+            root_items.append(item)
+
+    # In case there are remaining locations involved in cycles without clear roots
+    covered_ids = set()
+    def collect_ids(it: HierarchyItem):
+        covered_ids.add(it.node.id)
+        for c in it.children:
+            collect_ids(c)
+    for it in root_items:
+        collect_ids(it)
+
+    orphans = [n for n in nodes if n.id not in covered_ids]
+    orphans.sort(key=_natural_sort_key)
+    for n in orphans:
+        item = build_item(n.id, set())
+        if item and item.node.id not in covered_ids:
+            root_items.append(item)
+            collect_ids(item)
+
+    return root_items
+
 # --- FTS5 Search ---
 def search_nodes(campaign_id: str, query_str: str, player_mode: bool = False) -> List[NodeResponse]:
     if not query_str.strip():
@@ -980,6 +1054,45 @@ def bulk_update_node_status(updates: List[Dict[str, str]]) -> Dict[str, Any]:
         else:
             errors.append(f"Node {nid} not found")
     return {"updated_count": updated_count, "results": results, "errors": errors}
+
+
+def bulk_update_node_confidence(updates: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Updates the confidence factor (0.0 - 1.0) and/or lore_status ('fact', 'suspicion', 'rumor')
+    for multiple nodes in batch.
+    Each item in updates should have 'node_id', and optional 'confidence' and/or 'lore_status'.
+    """
+    updated_count = 0
+    errors = []
+    results = []
+    for item in updates:
+        nid = item.get("node_id")
+        if not nid:
+            continue
+        conf = item.get("confidence")
+        lore_status = item.get("lore_status")
+        if conf is None and lore_status is None:
+            continue
+        try:
+            conf_val = float(conf) if conf is not None else None
+        except (ValueError, TypeError):
+            conf_val = None
+        lore_status_val = str(lore_status) if lore_status is not None else None
+
+        node_up = NodeUpdate(confidence=conf_val, lore_status=lore_status_val)
+        res = update_node(nid, node_up)
+        if res:
+            updated_count += 1
+            results.append({
+                "node_id": nid,
+                "title": res.title,
+                "confidence": res.confidence,
+                "lore_status": res.lore_status,
+            })
+        else:
+            errors.append(f"Node {nid} not found")
+    return {"updated_count": updated_count, "results": results, "errors": errors}
+
 
 
 def bulk_create_edges(edges: List[Dict[str, Any]], default_campaign_id: str) -> Dict[str, Any]:
