@@ -489,23 +489,30 @@ def get_hierarchy_tree(campaign_id: str, player_mode: bool = False) -> List[Hier
     child_map: Dict[str, List[str]] = {}
     parent_map: Dict[str, str] = {}
 
+    # Hierarchical node types
+    hierarchy_types = {"arc", "quest", "session", "encounter"}
+
     for e in edges:
         if e.relation_type in hierarchy_relations:
             if e.source_id in node_map and e.target_id in node_map:
-                child_map.setdefault(e.source_id, []).append(e.target_id)
-                parent_map[e.target_id] = e.source_id
-
-    # Hierarchical node types
-    hierarchy_types = {"arc", "quest", "session", "encounter"}
+                source_node = node_map[e.source_id]
+                target_node = node_map[e.target_id]
+                # Strictly only include narrative timeline nodes in the planning tree
+                if source_node.type in hierarchy_types and target_node.type in hierarchy_types:
+                    child_map.setdefault(e.source_id, []).append(e.target_id)
+                    parent_map[e.target_id] = e.source_id
     
     # Root nodes are arc nodes or nodes without parents in hierarchy_types
     def build_item(nid: str) -> Optional[HierarchyItem]:
         node = node_map.get(nid)
-        if not node:
+        if not node or node.type not in hierarchy_types:
             return None
         child_ids = child_map.get(nid, [])
-        # Sort children by explicit sort_order and natural numbering
-        valid_children_nodes = [node_map[cid] for cid in child_ids if cid in node_map]
+        # Sort children by explicit sort_order and natural numbering, strictly filtering hierarchy types
+        valid_children_nodes = [
+            node_map[cid] for cid in child_ids 
+            if cid in node_map and node_map[cid].type in hierarchy_types
+        ]
         valid_children_nodes.sort(key=_natural_sort_key)
         
         children_items = []
@@ -845,6 +852,100 @@ def list_edges_for_node(campaign_id: str, node_id: str) -> List[Dict[str, Any]]:
                 "label": e.label,
             })
     return result
+
+
+def traverse_graph(
+    campaign_id: str,
+    start_node_id: str,
+    depth: int = 1,
+    relation_types: Optional[List[str]] = None,
+    node_types: Optional[List[str]] = None,
+    direction: str = "both",
+) -> Dict[str, Any]:
+    """
+    Intelligently traverses the graph starting from start_node_id up to depth hops.
+    Selectively follows edges matching relation_types and filters nodes by node_types.
+    Returns the rich neighborhood of nodes and connecting edges.
+    """
+    start_node = get_node(start_node_id)
+    if not start_node:
+        return {"error": f"Node {start_node_id} not found."}
+
+    max_depth = min(max(1, depth), 3)
+    all_nodes = {n.id: n for n in list_nodes(campaign_id)}
+    all_edges = list_edges(campaign_id)
+
+    visited_nodes = {start_node_id}
+    current_frontier = [start_node_id]
+    discovered_neighbors = []
+
+    rel_filter = set(r.lower() for r in relation_types) if relation_types else None
+    type_filter = set(t.lower() for t in node_types) if node_types else None
+
+    for d in range(1, max_depth + 1):
+        next_frontier = []
+        for nid in current_frontier:
+            for e in all_edges:
+                neighbor_id = None
+                edge_dir = None
+
+                if (direction in ("outgoing", "both")) and e.source_id == nid:
+                    neighbor_id = e.target_id
+                    edge_dir = "outgoing"
+                elif (direction in ("incoming", "both")) and e.target_id == nid:
+                    neighbor_id = e.source_id
+                    edge_dir = "incoming"
+
+                if not neighbor_id:
+                    continue
+
+                if rel_filter and e.relation_type.lower() not in rel_filter:
+                    continue
+
+                nbr_node = all_nodes.get(neighbor_id)
+                if not nbr_node:
+                    continue
+
+                if type_filter and nbr_node.type.lower() not in type_filter:
+                    continue
+
+                status = (nbr_node.data_json or {}).get("status", "planned") if nbr_node.data_json else "planned"
+                discovered_neighbors.append({
+                    "distance": d,
+                    "edge_id": e.id,
+                    "relation_type": e.relation_type,
+                    "edge_label": e.label or "",
+                    "direction": edge_dir,
+                    "from_node_id": nid,
+                    "from_node_title": all_nodes.get(nid).title if all_nodes.get(nid) else "Unknown",
+                    "neighbor_id": nbr_node.id,
+                    "type": nbr_node.type,
+                    "title": nbr_node.title,
+                    "subtitle": nbr_node.subtitle or "",
+                    "summary": nbr_node.summary or "",
+                    "status": status,
+                    "is_canon": nbr_node.is_canon,
+                })
+
+                if neighbor_id not in visited_nodes:
+                    visited_nodes.add(neighbor_id)
+                    next_frontier.append(neighbor_id)
+
+        current_frontier = next_frontier
+        if not current_frontier:
+            break
+
+    return {
+        "root_node": {
+            "id": start_node.id,
+            "title": start_node.title,
+            "type": start_node.type,
+            "summary": start_node.summary,
+        },
+        "depth_searched": max_depth,
+        "total_connections": len(discovered_neighbors),
+        "connections": discovered_neighbors,
+    }
 
 
 def update_node_status(node_id: str, status: str) -> Optional[NodeResponse]:

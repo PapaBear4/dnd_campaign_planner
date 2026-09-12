@@ -16,6 +16,7 @@ import {
   EyeOff,
   Feather,
   Flame,
+  Layers,
   MessageSquare,
   Mic,
   Plus,
@@ -26,11 +27,13 @@ import {
   Trash2,
 } from 'lucide-react';
 import { createEdge, createNode, deleteNode, toggleNodeCanon, toggleNodeReveal, updateNode } from '../api';
-import { HierarchyItem, NodeItem, NodeType } from '../types';
+import { CampaignTapestry } from './CampaignTapestry';
+import { GraphData, HierarchyItem, NodeItem, NodeType } from '../types';
 
 interface HierarchyPlannerProps {
   hierarchy: HierarchyItem[];
   campaignId: string;
+  graphData?: GraphData;
   onRefresh: () => void;
   onSelectNode: (node: NodeItem) => void;
   onFocusCoDM: (node: NodeItem) => void;
@@ -41,12 +44,14 @@ interface HierarchyPlannerProps {
 export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
   hierarchy,
   campaignId,
+  graphData,
   onRefresh,
   onSelectNode,
   onFocusCoDM,
   onNavigateToIngestion,
   onNavigateToTranscript,
 }) => {
+  const [viewMode, setViewMode] = useState<'tapestry' | 'tree'>('tapestry');
   const [expandedNodes, setExpandedNodes] = useState<Record<string, boolean>>({});
   const [showAddModal, setShowAddModal] = useState(false);
   const [targetParentId, setTargetParentId] = useState<string | null>(null);
@@ -541,6 +546,45 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
     );
   };
 
+  if (viewMode === 'tapestry') {
+    const activeGraphData = graphData || { nodes: [], edges: [] };
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
+        {/* Top-right view mode toggle */}
+        <div style={{ position: 'absolute', top: '12px', right: '24px', zIndex: 10 }}>
+          <div style={{ display: 'flex', gap: '4px', background: 'var(--bg-surface)', padding: '2px', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+            <button
+              type="button"
+              onClick={() => setViewMode('tapestry')}
+              className="btn btn-primary"
+              style={{ fontSize: '0.74rem', padding: '4px 8px', gap: '4px' }}
+            >
+              <Sparkles size={12} /> Tapestry
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('tree')}
+              className="btn btn-ghost"
+              style={{ fontSize: '0.74rem', padding: '4px 8px', gap: '4px' }}
+            >
+              <Layers size={12} /> Classic Tree
+            </button>
+          </div>
+        </div>
+
+        <CampaignTapestry
+          campaignId={campaignId}
+          graphData={activeGraphData}
+          onRefresh={onRefresh}
+          onSelectNode={onSelectNode}
+          onFocusCoDM={onFocusCoDM}
+          onNavigateToIngestion={onNavigateToIngestion}
+          onNavigateToTranscript={onNavigateToTranscript}
+        />
+      </div>
+    );
+  }
+
   return (
     <div style={{ padding: '24px', maxWidth: '1200px', margin: '0 auto' }}>
       {/* Header bar */}
@@ -554,6 +598,26 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
           </p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+          {/* View Mode Switcher */}
+          <div style={{ display: 'flex', gap: '4px', background: 'var(--bg-surface)', padding: '2px', borderRadius: '8px', border: '1px solid var(--border-subtle)', marginRight: '8px' }}>
+            <button
+              type="button"
+              onClick={() => setViewMode('tapestry')}
+              className="btn btn-ghost"
+              style={{ fontSize: '0.74rem', padding: '4px 8px', gap: '4px' }}
+            >
+              <Sparkles size={12} /> Tapestry
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('tree')}
+              className="btn btn-primary"
+              style={{ fontSize: '0.74rem', padding: '4px 8px', gap: '4px' }}
+            >
+              <Layers size={12} /> Classic Tree
+            </button>
+          </div>
+
           {hierarchy.length > 0 && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginRight: '6px', background: 'var(--bg-surface)', padding: '2px', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
               <button

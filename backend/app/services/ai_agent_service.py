@@ -8,7 +8,7 @@ import uuid
 import pypdf
 from app.db.database import get_connection
 from app.services import graph_service
-from app.services.graph_service import get_setting, get_campaign, list_nodes, list_edges
+from app.services.graph_service import get_setting, set_setting, get_campaign, list_nodes, list_edges
 from app.models import NodeCreate, NodeUpdate, EdgeCreate, PlayerNoteCreate
 
 logger = logging.getLogger(__name__)
@@ -54,6 +54,7 @@ You have real Python tool functions that directly read and write the campaign's 
 ### Your Tools and When to Use Them
 
 - **search_nodes(type_filter?, title_fragment?)** — Browse or filter existing graph nodes. Use first to understand what exists before creating duplicates.
+- **traverse_graph(start_node_id, depth?, relation_types?, node_types?, direction?)** — Intelligently and selectively traverse connected paths from a starting node. Selectively follows relationship types (e.g. ['contains', 'leads_to', 'located_at']) and filters by node types (e.g. ['encounter', 'npc']). Returns the rich neighborhood of nodes (titles, types, summaries, statuses) and connecting edge metadata in one operation. Use this instead of issuing dozens of serial get_node_detail queries.
 - **get_node_detail(node_id)** — Read the full content, notes, and relationships of a specific node.
 - **find_nodes_by_title(title_fragment)** — Find nodes whose title contains a word or phrase. Use to detect duplicates.
 - **list_edges_for_node(node_id)** — See every relationship touching a node. Use before merging or deleting.
@@ -82,6 +83,44 @@ You have real Python tool functions that directly read and write the campaign's 
 5. **CRITICAL ON DEDUPLICATION** — When the DM asks to deduplicate the campaign, clean up duplicates, or remove redundant nodes: **DO NOT merely describe what could be merged.** You MUST execute `deduplicate_campaign()` to actually perform the database changes in SQLite! Once the tool returns, summarize the real results from the tool receipt.
 6. **Confirm actions clearly** — after completing multi-step operations, give a short plain-English summary: what you found, what you did, and what the DM should know.
 7. **Grounded in existing lore** — always pull from existing Arcs, Quests, NPCs, Factions, Locations, and Relationships before inventing new content.
+8. **RESEARCH & INQUIRY SYNTHESIS — ALWAYS DELIVER A COMPLETE ANSWER**: When the DM asks a question, requests an audit, or seeks campaign advice (e.g. "are there encounters that connect?", "did Session 1 address this?", "what is associated with this quest?"), tool calls are only the investigation phase. You MUST synthesize everything you discovered into a rich, structured, and insightful narrative answer in the very same response. Never conclude a turn with only action receipts or generic status stubs.
+
+---
+
+## GRAPH PRECISION & STRUCTURAL INTEGRITY: CONNECT ALL THE RIGHT NODES, NONE OF THE WRONG ONES
+
+You place supreme value on a well-connected, highly accurate campaign graph. An isolated, floating node is forgotten lore, but a spurious or incorrect relationship corrupts campaign canon.
+
+- **High Standards for Connectivity**: Every entity in the world lives within a web of causality and affiliation. Ensure that newly created or reviewed nodes are anchored to their true narrative parents and peers:
+  - Quests must link to their parent Arc via `contains`.
+  - Key Encounters, Clues, and Locations must connect to their parent Quests or Sessions (`contains`, `located_at`, `leads_to`).
+  - NPCs must link to their Factions (`member_of`), allies (`allied_with`), adversaries (`hostile_to`), or home bases (`located_at`).
+  - Clues and Rumors must connect to the secret, NPC, or Location they illuminate (`reveals`, `knows_secret`, `associated_with`).
+- **Precision & Accuracy (Zero Hallucinated Links)**: Care deeply that you link *all* the right nodes and *none* of the wrong ones. Never invent speculative links that contradict established facts or pollute the graph. When in doubt, assign the edge a `confidence` score (e.g., 0.5 for rumor) and mark `lore_status='suspicion'`.
+- **Deduplication Vigilance**: Detect and eliminate duplicate nodes (e.g., duplicate encounters, statblocks, or faction names). Always merge duplicates cleanly using `merge_nodes` or `deduplicate_campaign()` so edges point to the single canonical record.
+
+---
+
+## INTELLIGENT & SELECTIVE GRAPH TRAVERSAL
+
+Do not wander aimlessly or blast serial queries across the entire graph. Search intelligently by traversing selectively:
+
+- **Anchor First, Traverse Selectively**: When researching questions ("are there other encounters connected to this quest?", "how does Session 1 relate to Chapter 1?"), locate the anchor node first with `find_nodes_by_title` or `search_nodes`, then use `traverse_graph` to selectively explore its neighborhood along relevant relationships (`contains`, `leads_to`, `allied_with`, etc.).
+- **Selective Pruning**: Do not blindly pull every node. Filter by `relation_types` and `node_types` to follow the exact narrative thread without overwhelming the context or wasting tool turns.
+- **Cross-Reference Subgraphs**: Traverse from the Session to inspect what was logged, and traverse from the Quest/Arc to inspect what was designed. Compare the two neighborhoods to spot discrepancies, missing edges, or completed beats.
+
+---
+
+## CHRONOLOGICAL & TIMELINE COHERENCE: MAKING TIME AND CAUSALITY MAKE SENSE
+
+A living campaign world requires chronological integrity. You want the campaign timeline to make absolute sense and reflect reality at the game table:
+
+- **Actual Session History vs. Adventure Prep**: What actually occurred during a session is immutable campaign history. What is written in adventure notes is merely a blueprint. When auditing or cross-referencing:
+  - If the players bypassed an encounter (e.g. the Troll in the tavern never climbed out of the well), do not treat it as an active current threat in that scene. Mark it as bypassed/abandoned, or reposition it to a future beat.
+  - If the party resolved a quest early or befriended an enemy, update the status (`completed`, `active`, `abandoned`) and adjust relationship edges immediately.
+- **Causal Sequence**: Maintain strict cause-and-effect order. Prerequisites must precede outcomes; discoveries must precede realizations; contiguous physical travel must connect via `leads_to`. Flag any temporal paradoxes, orphan events, or chronological contradictions to the DM with recommended fixes.
+
+---
 
 ### D&D 5e Design Principles
 
@@ -169,6 +208,32 @@ AGENT_TOOLS = [
                 "node_id": {"type": "string", "description": "The node ID to inspect relationships for."},
             },
             "required": ["node_id"],
+        },
+    },
+    {
+        "name": "traverse_graph",
+        "description": "Selectively traverse connected paths in the campaign graph starting from a node. Returns rich neighbor details (titles, types, summaries, statuses) and connecting edge relations in a single call. Use this to trace questlines, inspect scenes, and explore connected lore selectively rather than querying individual nodes one by one.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "start_node_id": {"type": "string", "description": "The node ID from which to begin traversal."},
+                "depth": {"type": "integer", "description": "Traversal depth in hops (1 or 2, default is 1)."},
+                "relation_types": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional list of relationship types to follow (e.g. ['contains', 'leads_to', 'located_at', 'allied_with', 'gives_quest']).",
+                },
+                "node_types": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional list of node types to filter neighbors by (e.g. ['encounter', 'quest', 'npc', 'location']).",
+                },
+                "direction": {
+                    "type": "string",
+                    "description": "Edge direction to traverse: 'outgoing', 'incoming', or 'both' (default 'both').",
+                },
+            },
+            "required": ["start_node_id"],
         },
     },
     {
@@ -375,6 +440,24 @@ def _dispatch_tool_call(tool_name: str, args: dict, campaign_id: str) -> dict:
         elif tool_name == "list_edges_for_node":
             edges = graph_service.list_edges_for_node(campaign_id, args["node_id"])
             return {"edges": edges, "count": len(edges)}
+
+        elif tool_name == "traverse_graph":
+            depth = int(args.get("depth", 1))
+            relation_types = args.get("relation_types")
+            if isinstance(relation_types, str):
+                relation_types = [r.strip() for r in relation_types.split(",") if r.strip()]
+            node_types = args.get("node_types")
+            if isinstance(node_types, str):
+                node_types = [t.strip() for t in node_types.split(",") if t.strip()]
+            direction = str(args.get("direction", "both")).lower()
+            return graph_service.traverse_graph(
+                campaign_id=campaign_id,
+                start_node_id=args["start_node_id"],
+                depth=depth,
+                relation_types=relation_types,
+                node_types=node_types,
+                direction=direction,
+            )
 
         elif tool_name == "create_node":
             raw_data = args.get("data_json", {})
@@ -627,7 +710,7 @@ def chat_with_agent(
         chat = tool_model.start_chat(history=gemini_history)
 
         # --- Agentic loop ---
-        MAX_TURNS = 10
+        MAX_TURNS = 15
         actions_taken = []
         current_prompt = last_prompt
         final_reply = ""
@@ -698,13 +781,55 @@ def chat_with_agent(
             current_prompt = function_response_parts
 
         else:
-            # Hit MAX_TURNS without a terminal text reply
-            extracted = _extract_text_from_response(response) if 'response' in locals() else ""
-            final_reply = extracted or (
-                "I've completed the requested operations. "
-                f"Actions taken: {len(actions_taken)}. "
-                "Check the graph to see the updated state."
-            )
+            # Hit MAX_TURNS without a terminal text reply — force final synthesis
+            logger.info(f"Hit MAX_TURNS ({MAX_TURNS}). Forcing synthesis from model.")
+            try:
+                # Deliver the pending tool results from the final turn to the model
+                synth_resp = chat.send_message(current_prompt)
+                final_reply = _extract_text_from_response(synth_resp)
+
+                # If the model tried to invoke more tools instead of answering, complete function responses then demand synthesis
+                if not final_reply:
+                    has_fc = any(
+                        hasattr(part, "function_call") and part.function_call and getattr(part.function_call, "name", None)
+                        for candidate in (getattr(synth_resp, "candidates", None) or [])
+                        if candidate.content and candidate.content.parts
+                        for part in candidate.content.parts
+                    )
+                    if has_fc:
+                        fc_parts = []
+                        for candidate in (getattr(synth_resp, "candidates", None) or []):
+                            if candidate.content and candidate.content.parts:
+                                for part in candidate.content.parts:
+                                    if hasattr(part, "function_call") and part.function_call and getattr(part.function_call, "name", None):
+                                        fc_parts.append(
+                                            genai.protos.Part(
+                                                function_response=genai.protos.FunctionResponse(
+                                                    name=part.function_call.name,
+                                                    response={"result": "Operation budget reached. Synthesizing final answer."},
+                                                )
+                                            )
+                                        )
+                        final_text_resp = chat.send_message(fc_parts)
+                        final_reply = _extract_text_from_response(final_text_resp)
+
+                    if not final_reply:
+                        forced_prompt = (
+                            "All tool research and operations are now complete. "
+                            "Synthesize all data and results gathered above into a detailed, comprehensive, "
+                            "and well-structured final answer for the DM. Do not call any further tools."
+                        )
+                        final_text_resp = chat.send_message(forced_prompt)
+                        final_reply = _extract_text_from_response(final_text_resp)
+            except Exception as synth_err:
+                logger.warning(f"Forced synthesis failed: {synth_err}")
+                final_reply = ""
+
+            if not final_reply:
+                final_reply = (
+                    f"I've completed my analysis and executed {len(actions_taken)} actions across the campaign graph. "
+                    "The graph has been updated with these findings. Let me know what specific details you would like me to unpack!"
+                )
 
         return {
             "model": model_name,

@@ -284,6 +284,7 @@ export function App() {
                     <HierarchyPlanner
                       hierarchy={hierarchy}
                       campaignId={activeCampaignId}
+                      graphData={graphData}
                       onRefresh={loadData}
                       onSelectNode={(n) => setSelectedNode(n)}
                       onFocusCoDM={handleFocusCoDM}
