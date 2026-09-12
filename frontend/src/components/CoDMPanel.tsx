@@ -12,6 +12,7 @@ import {
   MessageSquare,
   Minimize2,
   Plus,
+  RotateCw,
   Send,
   Sparkles,
   Trash2,
@@ -234,6 +235,7 @@ interface CoDMPanelProps {
   campaignId: string;
   focusedNode?: NodeItem | null;
   onNodeCreated?: () => void;
+  isRefreshing?: boolean;
   width?: number;
   onWidthChange?: (newWidth: number) => void;
 }
@@ -244,10 +246,12 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
   campaignId,
   focusedNode,
   onNodeCreated,
+  isRefreshing = false,
   width,
   onWidthChange,
 }) => {
   const [panelWidth, setPanelWidth] = useState(width || 440);
+  const [syncNotice, setSyncNotice] = useState<string | null>(null);
   const isResizingRef = useRef(false);
 
   useEffect(() => {
@@ -467,11 +471,22 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
       getChatThreads(campaignId).then((tl) => setThreads(tl)).catch(() => {});
 
       if (res.actions_taken && res.actions_taken.length > 0) {
-        const hasMutations = res.actions_taken.some((a: any) =>
-          ['create_node', 'update_node', 'update_node_status', 'delete_node', 'bulk_delete_nodes', 'merge_nodes', 'deduplicate_campaign', 'create_edge', 'delete_edge', 'set_node_canon'].includes(a.tool)
+        const READ_ONLY_TOOLS = new Set([
+          'search_nodes',
+          'get_node_detail',
+          'find_nodes_by_title',
+          'list_edges_for_node',
+          'traverse_graph',
+          'update_scratchpad',
+        ]);
+        const hasMutations = res.actions_taken.some(
+          (a: any) => a.tool && !READ_ONLY_TOOLS.has(a.tool)
         );
         if (hasMutations && onNodeCreated) {
           onNodeCreated();
+          const count = res.actions_taken.filter((a: any) => a.tool && !READ_ONLY_TOOLS.has(a.tool)).length;
+          setSyncNotice(`Synced ${count} campaign modification${count > 1 ? 's' : ''}`);
+          setTimeout(() => setSyncNotice(null), 4000);
         }
       }
     } catch (err: any) {
@@ -637,6 +652,28 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+          {/* Refresh Campaign Data Button */}
+          <button
+            onClick={() => {
+              if (onNodeCreated) {
+                onNodeCreated();
+                setSyncNotice('Refreshed campaign data');
+                setTimeout(() => setSyncNotice(null), 3000);
+              }
+            }}
+            className="btn btn-ghost"
+            style={{ padding: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            title={isRefreshing ? 'Refreshing data...' : 'Refresh Campaign Data & Graph'}
+            disabled={isRefreshing}
+            aria-label="Refresh Campaign Data"
+          >
+            <RotateCw
+              size={14}
+              className={isRefreshing ? 'spin' : ''}
+              style={{ color: isRefreshing ? 'var(--color-gold)' : 'var(--text-secondary)' }}
+            />
+          </button>
+
           {/* New Chat Button */}
           <button
             onClick={handleNewThread}
@@ -665,6 +702,37 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Sync Status Notice */}
+      {syncNotice && (
+        <div
+          className="animate-fade-in"
+          style={{
+            padding: '5px 12px',
+            background: 'rgba(16, 185, 129, 0.15)',
+            borderBottom: '1px solid rgba(16, 185, 129, 0.35)',
+            color: '#34d399',
+            fontSize: '0.72rem',
+            fontWeight: 500,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '6px',
+            flexShrink: 0,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <CheckCircle size={13} style={{ color: '#34d399' }} />
+            <span>{syncNotice}</span>
+          </div>
+          <button
+            onClick={() => setSyncNotice(null)}
+            style={{ background: 'none', border: 'none', color: '#34d399', cursor: 'pointer', padding: 0 }}
+          >
+            <X size={12} />
+          </button>
+        </div>
+      )}
 
       {/* Active Thread Bar & History Selector */}
       {toolMode === 'chat' && (

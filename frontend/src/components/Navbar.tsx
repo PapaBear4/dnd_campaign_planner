@@ -9,6 +9,7 @@ import {
   Moon,
   Palette,
   Plus,
+  RotateCw,
   Scroll,
   Search,
   Settings,
@@ -37,6 +38,7 @@ interface NavbarProps {
   onSelectCampaign: (id: string) => void;
   onCreateCampaign: () => void;
   onRefreshCampaigns: () => void;
+  isRefreshing?: boolean;
   isPlayerMode: boolean;
   onTogglePlayerMode: () => void;
   onOpenSettings: () => void;
@@ -51,6 +53,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onSelectCampaign,
   onCreateCampaign,
   onRefreshCampaigns,
+  isRefreshing = false,
   isPlayerMode,
   onTogglePlayerMode,
   onOpenSettings,
@@ -340,6 +343,25 @@ export const Navbar: React.FC<NavbarProps> = ({
         >
           <Sparkles size={16} />
           <span>Co-DM</span>
+        </button>
+
+        {/* Refresh Campaign Data Button */}
+        <button
+          onClick={onRefreshCampaigns}
+          className="btn btn-ghost"
+          style={{ padding: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          title={isRefreshing ? 'Refreshing campaign data...' : 'Refresh Campaign Data (Sync Graph & Hierarchy)'}
+          disabled={isRefreshing}
+          aria-label="Refresh Campaign Data"
+        >
+          <RotateCw
+            size={18}
+            className={isRefreshing ? 'spin' : ''}
+            style={{
+              color: isRefreshing ? 'var(--color-gold)' : 'var(--text-secondary)',
+              transition: 'color 0.2s',
+            }}
+          />
         </button>
 
         {/* Export & Import (DM Only) */}

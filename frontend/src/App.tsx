@@ -96,6 +96,11 @@ export function App() {
       }
       setGraphData(g);
       setHierarchy(h);
+      setSelectedNode((prev) => {
+        if (!prev) return null;
+        const updated = g.nodes.find((n: NodeItem) => n.id === prev.id);
+        return updated || prev;
+      });
     } catch (err) {
       console.error('Failed to load campaign data:', err);
     } finally {
@@ -159,6 +164,7 @@ export function App() {
         onSelectCampaign={handleSelectCampaign}
         onCreateCampaign={handleCreateCampaign}
         onRefreshCampaigns={() => loadData()}
+        isRefreshing={loading}
         isPlayerMode={isPlayerMode}
         onTogglePlayerMode={() => setIsPlayerMode(!isPlayerMode)}
         onOpenSettings={() => setIsSettingsOpen(true)}
@@ -357,6 +363,7 @@ export function App() {
             campaignId={activeCampaignId}
             focusedNode={focusedCoDMNode}
             onNodeCreated={loadData}
+            isRefreshing={loading}
             width={coDmWidth}
             onWidthChange={setCoDmWidth}
           />
