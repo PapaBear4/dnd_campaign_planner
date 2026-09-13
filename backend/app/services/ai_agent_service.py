@@ -1003,10 +1003,193 @@ def _sanitize_gemini_history(messages_slice: List[Dict[str, Any]]):
     return normalized, leftover_user_text
 
 
+DEFAULT_MAX_TURNS = 25
+DEFAULT_MAX_TOKENS = 120_000
+
+
+def _sanitize_and_truncate_tool_result(result: Any, max_chars: int = 4000) -> Any:
+    """
+    Truncates oversized tool outputs to prevent context bloat and quadratic token usage.
+    Preserves dictionary structure while clipping long lists or large text fields.
+    """
+    if not isinstance(result, (dict, list)):
+        return result
+
+    try:
+        dumped = json.dumps(result, default=str)
+        if len(dumped) <= max_chars:
+            return result
+    except Exception:
+        return result
+
+    if isinstance(result, dict):
+        truncated_dict = {}
+        for k, v in result.items():
+            if isinstance(v, list) and len(v) > 8:
+                original_len = len(v)
+                truncated_dict[k] = v[:6]
+                truncated_dict[f"_{k}_truncated"] = (
+                    f"Showing 6 of {original_len} items to optimize token usage. "
+                    f"Refine search filters to target specific items."
+                )
+            elif isinstance(v, str) and len(v) > 2000:
+                truncated_dict[k] = v[:1800] + f"\n\n[... truncated {len(v) - 1800} chars for context efficiency ...]"
+            elif isinstance(v, dict):
+                truncated_dict[k] = _sanitize_and_truncate_tool_result(v, max_chars=max_chars // 2)
+            else:
+                truncated_dict[k] = v
+        return truncated_dict
+
+    elif isinstance(result, list) and len(result) > 8:
+        return result[:6] + [{"_truncated": f"{len(result) - 6} additional items truncated to prevent token bloat."}]
+
+    return result
+
+
+class AgentLoopGuard:
+    """
+    Safeguards agentic execution against infinite tool loops, aimless stagnation,
+    and runaway token usage during complex multi-turn tasks.
+    """
+    def __init__(
+        self,
+        max_turns: int = DEFAULT_MAX_TURNS,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        repeat_window: int = 6,
+        repeat_threshold: int = 2,
+        max_stagnant_reads: int = 5,
+    ):
+        self.max_turns = max_turns
+        self.max_tokens = max_tokens
+        self.repeat_window = repeat_window
+        self.repeat_threshold = repeat_threshold
+        self.max_stagnant_reads = max_stagnant_reads
+
+        self.call_history: List[Tuple[str, str]] = []
+        self.read_only_turns_count: int = 0
+        self.loop_warnings_count: int = 0
+        self.consecutive_loop_interventions: int = 0
+        self.total_tokens_observed: int = 0
+        self.stop_reason: Optional[str] = None
+
+    def record_turn_tokens(self, response) -> Tuple[bool, int]:
+        """
+        Checks usage metadata from Gemini response.
+        Returns (is_exceeded, total_tokens).
+        """
+        usage = getattr(response, "usage_metadata", None)
+        if usage:
+            total = getattr(usage, "total_token_count", 0)
+            if total > 0:
+                self.total_tokens_observed = total
+                if total >= self.max_tokens:
+                    self.stop_reason = f"Token budget exceeded ({total:,} tokens >= {self.max_tokens:,} limit)"
+                    return True, total
+        return False, self.total_tokens_observed
+
+    def check_tool_call(self, tool_name: str, args: dict) -> Tuple[bool, Optional[str]]:
+        """
+        Checks if a tool call is an unproductive repeat.
+        Returns (is_blocked, intervention_message).
+        """
+        # Scratchpad updates are working thoughts and should not be blocked as duplicates
+        if tool_name == "update_scratchpad":
+            return False, None
+
+        try:
+            serialized_args = json.dumps(args, sort_keys=True, default=str)
+        except Exception:
+            serialized_args = str(args)
+
+        call_sig = (tool_name, serialized_args)
+
+        # Count occurrences in the recent call window
+        recent_window = self.call_history[-self.repeat_window:]
+        recent_matches = sum(1 for sig in recent_window if sig == call_sig)
+
+        # Check immediate consecutive repeat
+        is_consecutive = bool(self.call_history and self.call_history[-1] == call_sig)
+
+        if is_consecutive or recent_matches >= self.repeat_threshold:
+            self.loop_warnings_count += 1
+            self.consecutive_loop_interventions += 1
+            msg = (
+                f"Loop Prevention Warning: You have executed '{tool_name}' with identical parameters "
+                f"multiple times without an intervening state change. "
+                f"Do not repeat this call. Pivot to a different query, perform your planned updates, "
+                f"or synthesize your final response."
+            )
+            return True, msg
+
+        self.call_history.append(call_sig)
+        self.consecutive_loop_interventions = 0
+        return False, None
+
+    def should_force_stop(self) -> Tuple[bool, Optional[str]]:
+        """
+        Determines if the agent has repeatedly triggered loop warnings
+        and should immediately transition to final synthesis.
+        """
+        if self.consecutive_loop_interventions >= 2:
+            return True, "Repeated consecutive identical tool calls detected. Breaking to final synthesis."
+        if self.loop_warnings_count >= 4:
+            return True, "Multiple loop prevention warnings encountered. Breaking to final synthesis."
+        if self.stop_reason:
+            return True, self.stop_reason
+        return False, None
+
+    def update_turn_activity(self, function_names: List[str], turn: int) -> Optional[str]:
+        """
+        Tracks whether the turn was state-modifying or purely read-only.
+        Returns a stagnation nudge message if too many read-only turns have occurred.
+        """
+        modifying_tools = {
+            "create_node", "update_node", "bulk_update_node_status",
+            "create_edge", "bulk_create_edges", "delete_node",
+            "delete_edge", "merge_nodes", "deduplicate_campaign",
+            "set_node_canon", "update_scratchpad"
+        }
+        has_write = any(name in modifying_tools for name in function_names)
+
+        if has_write:
+            self.read_only_turns_count = 0
+        else:
+            self.read_only_turns_count += 1
+
+        if self.read_only_turns_count >= self.max_stagnant_reads:
+            return (
+                f"Pacing Notice: You have completed {self.read_only_turns_count} consecutive read-only turns. "
+                f"If you have gathered sufficient information, proceed to make the required updates or synthesize your answer."
+            )
+        return None
+
+    def get_pacing_meta(self, turn: int) -> Dict[str, Any]:
+        """
+        Returns pacing metadata to inject into tool responses.
+        """
+        current_turn = turn + 1
+        turns_remaining = max(0, self.max_turns - current_turn)
+        meta: Dict[str, Any] = {
+            "turn": current_turn,
+            "max_turns": self.max_turns,
+            "turns_remaining": turns_remaining,
+        }
+        if turns_remaining <= 3:
+            meta["urgency"] = (
+                f"CRITICAL: Only {turns_remaining} turn(s) remaining in this operation budget. "
+                f"Finalize any essential updates immediately and prepare to synthesize your final response."
+            )
+        elif turns_remaining <= 6:
+            meta["notice"] = f"{turns_remaining} turns remaining. Begin wrapping up your investigations."
+        return meta
+
+
 def chat_with_agent(
     messages: List[Dict[str, str]],
     campaign_id: str,
-    context_node_id: Optional[str] = None
+    context_node_id: Optional[str] = None,
+    max_turns: int = DEFAULT_MAX_TURNS,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> Dict[str, Any]:
     """
     Agentic chat loop using Gemini function calling.
@@ -1109,16 +1292,31 @@ def chat_with_agent(
 
         chat = tool_model.start_chat(history=gemini_history)
 
-        # --- Agentic loop ---
-        MAX_TURNS = 15
+        # --- Guarded Agentic Loop ---
+        MAX_TURNS = max_turns
         actions_taken = []
         scratchpad_state = {"notes": ""}
         loop_steps = []
         current_prompt = last_prompt
         final_reply = ""
+        loop_guard = AgentLoopGuard(max_turns=MAX_TURNS, max_tokens=max_tokens)
+        last_turn_completed = 0
 
         for turn in range(MAX_TURNS):
+            last_turn_completed = turn + 1
             response = chat.send_message(current_prompt)
+
+            # Check token ceiling guardrail
+            budget_exceeded, tokens_seen = loop_guard.record_turn_tokens(response)
+            if budget_exceeded:
+                logger.warning(f"Loop guard triggered: {loop_guard.stop_reason}")
+                loop_steps.append({
+                    "turn": turn + 1,
+                    "thought": f"Token ceiling reached ({tokens_seen:,} tokens).",
+                    "actions": [],
+                    "summary": f"Turn {turn + 1}: Token ceiling reached. Gracefully proceeding to final synthesis.",
+                })
+                break
 
             # Collect any function calls and text in this response
             function_calls = []
@@ -1173,6 +1371,18 @@ def chat_with_agent(
                 })
                 break
 
+            # Check if repetitive calls or loop warnings warrant forcing a stop
+            stop_forced, stop_reason = loop_guard.should_force_stop()
+            if stop_forced:
+                logger.warning(f"Loop guard forced stop: {stop_reason}")
+                loop_steps.append({
+                    "turn": turn + 1,
+                    "thought": f"Loop guard intervention: {stop_reason}",
+                    "actions": [],
+                    "summary": f"Turn {turn + 1}: Loop guard intervened to prevent infinite loop. Proceeding to final synthesis.",
+                })
+                break
+
             # Record this turn's intermediate loop statement trace
             fc_names = [fc.name for fc in function_calls]
             loop_steps.append({
@@ -1182,25 +1392,50 @@ def chat_with_agent(
                 "summary": f"Turn {turn + 1}: Executed {len(function_calls)} action{'s' if len(function_calls)>1 else ''} ({', '.join(fc_names)})",
             })
 
-            # Execute each tool call and build FunctionResponse parts
+            # Check for read-only stagnation and prepare pacing metadata
+            stagnation_nudge = loop_guard.update_turn_activity(fc_names, turn)
+            pacing_meta = loop_guard.get_pacing_meta(turn)
+            if stagnation_nudge:
+                pacing_meta["stagnation_advisory"] = stagnation_nudge
+
+            # Execute each tool call with loop guard deduplication and hygiene
             function_response_parts = []
             for fc in function_calls:
                 raw_args = getattr(fc, "args", None)
                 fc_args = _proto_to_python(raw_args) if raw_args else {}
                 if not isinstance(fc_args, dict):
                     fc_args = {}
-                tool_result = _dispatch_tool_call(fc.name, fc_args, campaign_id, scratchpad_state=scratchpad_state)
-                tool_result_clean = _proto_to_python(tool_result)
-                actions_taken.append({
-                    "tool": fc.name,
-                    "args": fc_args,
-                    "result": tool_result_clean,
-                })
+
+                is_blocked, loop_warning = loop_guard.check_tool_call(fc.name, fc_args)
+                if is_blocked:
+                    tool_result_clean = {
+                        "status": "blocked_by_loop_guard",
+                        "warning": loop_warning,
+                    }
+                    actions_taken.append({
+                        "tool": fc.name,
+                        "args": fc_args,
+                        "result": tool_result_clean,
+                        "blocked": True,
+                    })
+                else:
+                    tool_result = _dispatch_tool_call(fc.name, fc_args, campaign_id, scratchpad_state=scratchpad_state)
+                    tool_result_clean = _proto_to_python(tool_result)
+                    tool_result_clean = _sanitize_and_truncate_tool_result(tool_result_clean)
+                    actions_taken.append({
+                        "tool": fc.name,
+                        "args": fc_args,
+                        "result": tool_result_clean,
+                    })
+
                 function_response_parts.append(
                     genai.protos.Part(
                         function_response=genai.protos.FunctionResponse(
                             name=fc.name,
-                            response={"result": tool_result_clean},
+                            response={
+                                "result": tool_result_clean,
+                                "_meta": pacing_meta,
+                            },
                         )
                     )
                 )
@@ -1208,11 +1443,11 @@ def chat_with_agent(
             # Feed tool results back into the conversation
             current_prompt = function_response_parts
 
-        else:
-            # Hit MAX_TURNS without a terminal text reply — force final synthesis
-            logger.info(f"Hit MAX_TURNS ({MAX_TURNS}). Forcing synthesis from model.")
+        if not final_reply:
+            # Reached MAX_TURNS, token ceiling, or loop guard break without terminal text — force final synthesis
+            logger.info(f"Agent loop ended without final reply (turns={last_turn_completed}/{MAX_TURNS}). Forcing synthesis from model.")
             try:
-                # Deliver the pending tool results from the final turn to the model
+                # Deliver the pending tool results to the model
                 synth_resp = chat.send_message(current_prompt)
                 final_reply = _extract_text_from_response(synth_resp)
 
@@ -1251,10 +1486,10 @@ def chat_with_agent(
                         final_reply = _extract_text_from_response(final_text_resp)
 
                 loop_steps.append({
-                    "turn": MAX_TURNS + 1,
-                    "thought": "Budget reached. Synthesized complete response.",
+                    "turn": last_turn_completed + 1,
+                    "thought": "Budget reached or loop guard intervened. Synthesized complete response.",
                     "actions": [],
-                    "summary": f"Turn {MAX_TURNS + 1}: Final synthesis completed.",
+                    "summary": f"Turn {last_turn_completed + 1}: Final synthesis completed.",
                 })
             except Exception as synth_err:
                 logger.warning(f"Forced synthesis failed: {synth_err}")

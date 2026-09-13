@@ -1,7 +1,9 @@
-import React from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Calendar,
   CheckCircle,
+  CheckCircle2,
+  Circle,
   Clock,
   Flame,
   Layers,
@@ -11,8 +13,18 @@ import {
   Trophy,
   User,
   Users,
+  GitFork,
+  Plus,
+  Trash2,
+  ExternalLink,
+  Link2,
+  ArrowRight,
+  X,
+  Check,
+  Edit2
 } from 'lucide-react';
 import { NodeItem, EdgeItem } from '../../types';
+import { createEdge, deleteEdge, createSubQuest, updateNode } from '../../api';
 
 interface TimelineModalProps {
   node: NodeItem;
@@ -37,6 +49,7 @@ const QUEST_TYPES = ['Main Story Quest', 'Character Backstory Quest', 'Faction M
 
 export const TimelineModal: React.FC<TimelineModalProps> = ({
   node,
+  campaignId,
   dataJson,
   onChangeDataJson,
   allNodes = [],
@@ -44,6 +57,187 @@ export const TimelineModal: React.FC<TimelineModalProps> = ({
   onNavigateNode,
 }) => {
   const status = dataJson.status || 'planned';
+
+  // Sub-quest and branching state
+  const [newSubQuestTitle, setNewSubQuestTitle] = useState('');
+  const [isAddingSubQuest, setIsAddingSubQuest] = useState(false);
+  const [selectedPrereqId, setSelectedPrereqId] = useState('');
+  const [isAddingPrereq, setIsAddingPrereq] = useState(false);
+  const [selectedBranchTargetId, setSelectedBranchTargetId] = useState('');
+  const [branchConditionLabel, setBranchConditionLabel] = useState('');
+  const [isAddingBranch, setIsAddingBranch] = useState(false);
+  const [editingEdgeId, setEditingEdgeId] = useState<string | null>(null);
+  const [editingEdgeLabel, setEditingEdgeLabel] = useState('');
+
+  // Node lookup map
+  const nodeMap = useMemo(() => {
+    const map = new Map<string, NodeItem>();
+    allNodes.forEach((n) => map.set(n.id, n));
+    return map;
+  }, [allNodes]);
+
+  // Find Parent Quest (if this node is a sub-quest)
+  const parentQuest = useMemo(() => {
+    if (node.type !== 'quest') return null;
+    const parentEdge = edges.find(
+      (e) =>
+        e.target_id === node.id &&
+        (e.relation_type === 'contains' || e.relation_type === 'parent_of') &&
+        nodeMap.get(e.source_id)?.type === 'quest'
+    );
+    return parentEdge ? nodeMap.get(parentEdge.source_id) || null : null;
+  }, [node.id, node.type, edges, nodeMap]);
+
+  // Find Child Sub-Quests
+  const subQuests = useMemo(() => {
+    if (node.type !== 'quest') return [];
+    return edges
+      .filter(
+        (e) =>
+          e.source_id === node.id &&
+          (e.relation_type === 'contains' || e.relation_type === 'parent_of') &&
+          nodeMap.get(e.target_id)?.type === 'quest'
+      )
+      .map((e) => ({
+        edgeId: e.id,
+        node: nodeMap.get(e.target_id)!,
+      }))
+      .filter((item) => !!item.node);
+  }, [node.id, node.type, edges, nodeMap]);
+
+  // Find Prerequisites (incoming precedes edges)
+  const prerequisites = useMemo(() => {
+    if (node.type !== 'quest') return [];
+    return edges
+      .filter(
+        (e) =>
+          e.target_id === node.id &&
+          e.relation_type === 'precedes' &&
+          nodeMap.get(e.source_id)?.type === 'quest'
+      )
+      .map((e) => ({
+        edgeId: e.id,
+        node: nodeMap.get(e.source_id)!,
+        label: e.label || '',
+      }))
+      .filter((item) => !!item.node);
+  }, [node.id, node.type, edges, nodeMap]);
+
+  // Find Downstream Branches (outgoing precedes edges)
+  const downstreamBranches = useMemo(() => {
+    if (node.type !== 'quest') return [];
+    return edges
+      .filter(
+        (e) =>
+          e.source_id === node.id &&
+          e.relation_type === 'precedes' &&
+          nodeMap.get(e.target_id)?.type === 'quest'
+      )
+      .map((e) => ({
+        edgeId: e.id,
+        node: nodeMap.get(e.target_id)!,
+        label: e.label || '',
+      }))
+      .filter((item) => !!item.node);
+  }, [node.id, node.type, edges, nodeMap]);
+
+  // Available quests to link as prerequisite (excluding self, existing prereqs, and sub-quests)
+  const availablePrereqQuests = useMemo(() => {
+    const existingPrereqIds = new Set(prerequisites.map((p) => p.node.id));
+    return allNodes.filter(
+      (n) => n.type === 'quest' && n.id !== node.id && !existingPrereqIds.has(n.id)
+    );
+  }, [allNodes, node.id, prerequisites]);
+
+  // Available quests to link as branch target
+  const availableBranchQuests = useMemo(() => {
+    const existingBranchIds = new Set(downstreamBranches.map((b) => b.node.id));
+    return allNodes.filter(
+      (n) => n.type === 'quest' && n.id !== node.id && !existingBranchIds.has(n.id)
+    );
+  }, [allNodes, node.id, downstreamBranches]);
+
+  // Handlers
+  const handleAddSubQuest = async () => {
+    if (!newSubQuestTitle.trim()) return;
+    try {
+      await createSubQuest(campaignId, node.id, newSubQuestTitle.trim());
+      setNewSubQuestTitle('');
+      setIsAddingSubQuest(false);
+    } catch (err) {
+      console.error('Failed to add sub-quest:', err);
+    }
+  };
+
+  const handleToggleSubQuestStatus = async (subNode: NodeItem) => {
+    const current = subNode.data_json?.status || 'planned';
+    const next = current === 'completed' ? 'planned' : 'completed';
+    try {
+      await updateNode(subNode.id, {
+        data_json: { ...subNode.data_json, status: next },
+      });
+    } catch (err) {
+      console.error('Failed to update sub-quest status:', err);
+    }
+  };
+
+  const handleAddPrerequisite = async () => {
+    if (!selectedPrereqId) return;
+    try {
+      await createEdge({
+        campaign_id: campaignId,
+        source_id: selectedPrereqId,
+        target_id: node.id,
+        relation_type: 'precedes',
+        label: 'Prerequisite',
+      });
+      setSelectedPrereqId('');
+      setIsAddingPrereq(false);
+    } catch (err) {
+      console.error('Failed to add prerequisite:', err);
+    }
+  };
+
+  const handleAddBranch = async () => {
+    if (!selectedBranchTargetId) return;
+    try {
+      await createEdge({
+        campaign_id: campaignId,
+        source_id: node.id,
+        target_id: selectedBranchTargetId,
+        relation_type: 'precedes',
+        label: branchConditionLabel.trim() || 'Next Objective',
+      });
+      setSelectedBranchTargetId('');
+      setBranchConditionLabel('');
+      setIsAddingBranch(false);
+    } catch (err) {
+      console.error('Failed to add branch:', err);
+    }
+  };
+
+  const handleDeleteDependencyEdge = async (edgeId: string) => {
+    try {
+      await deleteEdge(edgeId);
+    } catch (err) {
+      console.error('Failed to delete edge:', err);
+    }
+  };
+
+  const handleSaveEdgeLabel = async (edgeId: string) => {
+    try {
+      const edge = edges.find((e) => e.id === edgeId);
+      if (edge) {
+        await createEdge({
+          ...edge,
+          label: editingEdgeLabel.trim(),
+        });
+      }
+      setEditingEdgeId(null);
+    } catch (err) {
+      console.error('Failed to update edge label:', err);
+    }
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -195,14 +389,445 @@ export const TimelineModal: React.FC<TimelineModalProps> = ({
             <label style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
               Rewards / Bounty (Gold, XP, Magic Item, Renown)
             </label>
-            <input
-              type="text"
-              placeholder="e.g. 100 gp each, salvager ring, merchant guild renown"
-              value={dataJson.rewards || ''}
-              onChange={(e) => onChangeDataJson({ ...dataJson, rewards: e.target.value })}
-              className="input"
-              style={{ width: '100%', fontSize: '0.8rem', padding: '6px 8px' }}
-            />
+          </div>
+
+          {/* STORY FLOW, SUB-QUESTS & BRANCHING */}
+          <div
+            style={{
+              padding: '12px',
+              borderRadius: '8px',
+              background: 'rgba(0, 0, 0, 0.2)',
+              border: '1px solid rgba(59, 130, 246, 0.2)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '12px',
+              marginTop: '4px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: '0.76rem', fontWeight: 700, color: '#93c5fd', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <GitFork size={14} /> Story Flow &amp; Dependencies
+              </span>
+              {parentQuest && (
+                <span
+                  onClick={() => onNavigateNode && onNavigateNode(parentQuest)}
+                  style={{
+                    fontSize: '0.7rem',
+                    color: 'var(--text-secondary)',
+                    cursor: onNavigateNode ? 'pointer' : 'default',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                  }}
+                  title="Click to view parent quest"
+                >
+                  Sub-quest of: <strong style={{ color: '#60a5fa' }}>{parentQuest.title}</strong>
+                  {onNavigateNode && <ExternalLink size={11} />}
+                </span>
+              )}
+            </div>
+
+            {/* A. PREREQUISITES */}
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600 }}>
+                  Prerequisites (Must complete before this quest)
+                </span>
+                {!isAddingPrereq && availablePrereqQuests.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setIsAddingPrereq(true)}
+                    className="btn btn-ghost"
+                    style={{ fontSize: '0.68rem', padding: '2px 6px', gap: '3px', height: '22px' }}
+                  >
+                    <Plus size={11} /> Add Prereq
+                  </button>
+                )}
+              </div>
+
+              {prerequisites.length === 0 && !isAddingPrereq ? (
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                  No prerequisites (unlocked from start of arc).
+                </span>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  {prerequisites.map((p) => {
+                    const isDone = p.node.data_json?.status === 'completed';
+                    return (
+                      <div
+                        key={p.edgeId}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          background: 'rgba(255, 255, 255, 0.03)',
+                          padding: '4px 8px',
+                          borderRadius: '6px',
+                          fontSize: '0.74rem',
+                        }}
+                      >
+                        <div
+                          onClick={() => onNavigateNode && onNavigateNode(p.node)}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            cursor: onNavigateNode ? 'pointer' : 'default',
+                            flex: 1,
+                            overflow: 'hidden',
+                          }}
+                        >
+                          <Link2 size={12} style={{ color: isDone ? '#10b981' : 'var(--text-muted)', flexShrink: 0 }} />
+                          <span style={{ color: isDone ? 'var(--text-muted)' : 'var(--text-primary)', textDecoration: isDone ? 'line-through' : 'none' }}>
+                            {p.node.title}
+                          </span>
+                          <span style={{ fontSize: '0.65rem', padding: '1px 6px', borderRadius: '4px', background: isDone ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255,255,255,0.06)', color: isDone ? '#34d399' : 'var(--text-muted)' }}>
+                            {p.node.data_json?.status || 'planned'}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteDependencyEdge(p.edgeId)}
+                          className="btn btn-ghost"
+                          style={{ padding: '2px 4px', color: 'var(--text-muted)' }}
+                          title="Remove prerequisite"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Add Prereq form */}
+              {isAddingPrereq && (
+                <div style={{ display: 'flex', gap: '6px', marginTop: '6px', alignItems: 'center' }}>
+                  <select
+                    value={selectedPrereqId}
+                    onChange={(e) => setSelectedPrereqId(e.target.value)}
+                    className="input"
+                    style={{ fontSize: '0.75rem', padding: '4px 8px', flex: 1 }}
+                  >
+                    <option value="">Select a prerequisite quest...</option>
+                    {availablePrereqQuests.map((q) => (
+                      <option key={q.id} value={q.id}>
+                        {q.title}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={handleAddPrerequisite}
+                    disabled={!selectedPrereqId}
+                    className="btn btn-primary"
+                    style={{ padding: '4px 8px', fontSize: '0.72rem' }}
+                  >
+                    Link
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsAddingPrereq(false)}
+                    className="btn btn-ghost"
+                    style={{ padding: '4px 6px' }}
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* B. SUB-QUESTS & MILESTONES */}
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600 }}>
+                  Sub-Quests &amp; Milestone Objectives ({subQuests.filter((s) => s.node.data_json?.status === 'completed').length}/{subQuests.length})
+                </span>
+                {!isAddingSubQuest && (
+                  <button
+                    type="button"
+                    onClick={() => setIsAddingSubQuest(true)}
+                    className="btn btn-ghost"
+                    style={{ fontSize: '0.68rem', padding: '2px 6px', gap: '3px', height: '22px' }}
+                  >
+                    <Plus size={11} /> Add Objective
+                  </button>
+                )}
+              </div>
+
+              {subQuests.length === 0 && !isAddingSubQuest ? (
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                  No sub-quests defined yet.
+                </span>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  {subQuests.map((sq) => {
+                    const isDone = sq.node.data_json?.status === 'completed';
+                    return (
+                      <div
+                        key={sq.edgeId}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          background: 'rgba(255, 255, 255, 0.03)',
+                          padding: '4px 8px',
+                          borderRadius: '6px',
+                          fontSize: '0.74rem',
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '8px',
+                            cursor: 'pointer',
+                            flex: 1,
+                            overflow: 'hidden',
+                          }}
+                          onClick={() => handleToggleSubQuestStatus(sq.node)}
+                        >
+                          {isDone ? (
+                            <CheckCircle2 size={14} style={{ color: '#10b981', flexShrink: 0 }} />
+                          ) : (
+                            <Circle size={14} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+                          )}
+                          <span
+                            onClick={(e) => {
+                              if (onNavigateNode) {
+                                e.stopPropagation();
+                                onNavigateNode(sq.node);
+                              }
+                            }}
+                            style={{
+                              color: isDone ? 'var(--text-muted)' : 'var(--text-primary)',
+                              textDecoration: isDone ? 'line-through' : 'none',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                            title="Click to view sub-quest details"
+                          >
+                            {sq.node.title}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteDependencyEdge(sq.edgeId)}
+                          className="btn btn-ghost"
+                          style={{ padding: '2px 4px', color: 'var(--text-muted)' }}
+                          title="Unlink sub-quest"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Add Sub-quest inline */}
+              {isAddingSubQuest && (
+                <div style={{ display: 'flex', gap: '6px', marginTop: '6px', alignItems: 'center' }}>
+                  <input
+                    type="text"
+                    placeholder="Sub-quest / objective title..."
+                    value={newSubQuestTitle}
+                    onChange={(e) => setNewSubQuestTitle(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleAddSubQuest();
+                      else if (e.key === 'Escape') setIsAddingSubQuest(false);
+                    }}
+                    autoFocus
+                    className="input"
+                    style={{ fontSize: '0.75rem', padding: '4px 8px', flex: 1 }}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleAddSubQuest}
+                    disabled={!newSubQuestTitle.trim()}
+                    className="btn btn-primary"
+                    style={{ padding: '4px 8px', fontSize: '0.72rem' }}
+                  >
+                    Add
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsAddingSubQuest(false)}
+                    className="btn btn-ghost"
+                    style={{ padding: '4px 6px' }}
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* C. DOWNSTREAM BRANCHES */}
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600 }}>
+                  Next Branches &amp; Unlocks (Where this quest leads)
+                </span>
+                {!isAddingBranch && availableBranchQuests.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setIsAddingBranch(true)}
+                    className="btn btn-ghost"
+                    style={{ fontSize: '0.68rem', padding: '2px 6px', gap: '3px', height: '22px' }}
+                  >
+                    <Plus size={11} /> Add Branch
+                  </button>
+                )}
+              </div>
+
+              {downstreamBranches.length === 0 && !isAddingBranch ? (
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                  No downstream branches linked yet.
+                </span>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  {downstreamBranches.map((b) => (
+                    <div
+                      key={b.edgeId}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        background: 'rgba(255, 255, 255, 0.03)',
+                        padding: '4px 8px',
+                        borderRadius: '6px',
+                        fontSize: '0.74rem',
+                      }}
+                    >
+                      <div
+                        onClick={() => onNavigateNode && onNavigateNode(b.node)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          cursor: onNavigateNode ? 'pointer' : 'default',
+                          flex: 1,
+                          overflow: 'hidden',
+                        }}
+                      >
+                        <ArrowRight size={12} style={{ color: '#60a5fa', flexShrink: 0 }} />
+                        <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>
+                          {b.node.title}
+                        </span>
+                        {editingEdgeId === b.edgeId ? (
+                          <div
+                            onClick={(e) => e.stopPropagation()}
+                            style={{ display: 'flex', alignItems: 'center', gap: '4px', marginLeft: '6px' }}
+                          >
+                            <input
+                              type="text"
+                              value={editingEdgeLabel}
+                              onChange={(e) => setEditingEdgeLabel(e.target.value)}
+                              placeholder="Condition / trigger"
+                              className="input"
+                              style={{ fontSize: '0.68rem', padding: '2px 6px', width: '120px' }}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleSaveEdgeLabel(b.edgeId)}
+                              className="btn btn-primary"
+                              style={{ padding: '2px 4px' }}
+                            >
+                              <Check size={10} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditingEdgeId(null)}
+                              className="btn btn-ghost"
+                              style={{ padding: '2px 4px' }}
+                            >
+                              <X size={10} />
+                            </button>
+                          </div>
+                        ) : (
+                          <span
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingEdgeId(b.edgeId);
+                              setEditingEdgeLabel(b.label || '');
+                            }}
+                            style={{
+                              fontSize: '0.65rem',
+                              padding: '1px 6px',
+                              borderRadius: '4px',
+                              background: 'rgba(59, 130, 246, 0.15)',
+                              color: '#93c5fd',
+                              cursor: 'pointer',
+                            }}
+                            title="Click to edit condition label"
+                          >
+                            {b.label ? `Condition: ${b.label}` : '+ Add condition'}
+                          </span>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteDependencyEdge(b.edgeId)}
+                        className="btn btn-ghost"
+                        style={{ padding: '2px 4px', color: 'var(--text-muted)' }}
+                        title="Remove branch link"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Add Branch form */}
+              {isAddingBranch && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '6px' }}>
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                    <select
+                      value={selectedBranchTargetId}
+                      onChange={(e) => setSelectedBranchTargetId(e.target.value)}
+                      className="input"
+                      style={{ fontSize: '0.75rem', padding: '4px 8px', flex: 1 }}
+                    >
+                      <option value="">Select target quest to unlock...</option>
+                      {availableBranchQuests.map((q) => (
+                        <option key={q.id} value={q.id}>
+                          {q.title}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                    <input
+                      type="text"
+                      placeholder="Trigger condition (e.g. 'If party accepts deal')..."
+                      value={branchConditionLabel}
+                      onChange={(e) => setBranchConditionLabel(e.target.value)}
+                      className="input"
+                      style={{ fontSize: '0.75rem', padding: '4px 8px', flex: 1 }}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleAddBranch}
+                      disabled={!selectedBranchTargetId}
+                      className="btn btn-primary"
+                      style={{ padding: '4px 8px', fontSize: '0.72rem' }}
+                    >
+                      Add Branch
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsAddingBranch(false)}
+                      className="btn btn-ghost"
+                      style={{ padding: '4px 6px' }}
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}

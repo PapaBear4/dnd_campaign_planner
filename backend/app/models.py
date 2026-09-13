@@ -25,6 +25,7 @@ RelationType = Literal[
     "allied_with",
     "hostile_to",
     "gives_quest",
+    "advances_quest",
     "rewards",
     "frequents",
     "knows_secret",

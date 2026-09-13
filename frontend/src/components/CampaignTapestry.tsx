@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import confetti from 'canvas-confetti';
 import {
   Calendar,
@@ -26,7 +26,16 @@ import {
   Mic,
   Feather,
   Trash2,
-  GripVertical
+  GripVertical,
+  GitFork,
+  LayoutGrid,
+  Link2,
+  CornerDownRight,
+  CheckCircle2,
+  Circle,
+  MapPin,
+  Skull,
+  Users
 } from 'lucide-react';
 import {
   createNode,
@@ -39,6 +48,7 @@ import {
 } from '../api';
 import { GraphData, NodeItem, NodeType } from '../types';
 import { MarkdownView } from './MarkdownView';
+import { QuestFlowchart } from './QuestFlowchart';
 
 interface CampaignTapestryProps {
   campaignId: string;
@@ -59,6 +69,10 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
   onNavigateToIngestion,
   onNavigateToTranscript,
 }) => {
+  // Tapestry View Mode: 'matrix' (Sessions x Quests) or 'flowchart' (Story Flow & Branches DAG)
+  const [tapestryViewMode, setTapestryViewMode] = useState<'matrix' | 'flowchart'>('matrix');
+  const [collapsedSubQuestParents, setCollapsedSubQuestParents] = useState<Set<string>>(new Set());
+
   // Top Minimal Ribbon style & collapse state
   const [activeRibbonRiff, setActiveRibbonRiff] = useState<'woven' | 'constellation' | 'transit'>('woven');
   const [isRibbonCollapsed, setIsRibbonCollapsed] = useState<boolean>(false);
@@ -169,6 +183,40 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
   const [dragOverQuestPosition, setDragOverQuestPosition] = useState<'above' | 'below' | null>(null);
   const [localQuestOrder, setLocalQuestOrder] = useState<string[] | null>(null);
 
+  // Horizontal Session Folding State
+  const [collapsedSessionIds, setCollapsedSessionIds] = useState<Set<string>>(new Set());
+
+  // Milestone authoring state
+  const [newMilestoneQuestId, setNewMilestoneQuestId] = useState<string>('');
+  const [newMilestoneSummary, setNewMilestoneSummary] = useState<string>('');
+  const [isSavingMilestone, setIsSavingMilestone] = useState(false);
+
+  // Encounter Precedence Authoring state
+  const [newPrecedingEncounterId, setNewPrecedingEncounterId] = useState<string>('');
+  const [newBranchTargetEncounterId, setNewBranchTargetEncounterId] = useState<string>('');
+  const [newBranchLabel, setNewBranchLabel] = useState<string>('');
+  const [isSavingPrecedence, setIsSavingPrecedence] = useState(false);
+
+  const toggleSessionCollapse = (sessionId: string) => {
+    setCollapsedSessionIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(sessionId)) {
+        next.delete(sessionId);
+      } else {
+        next.add(sessionId);
+      }
+      return next;
+    });
+  };
+
+  const collapseAllSessions = () => {
+    setCollapsedSessionIds(new Set(displayColumns.map((c) => c.id)));
+  };
+
+  const expandAllSessions = () => {
+    setCollapsedSessionIds(new Set());
+  };
+
   // 1. Filter Nodes by Type
   const { arcs, sessions, quests, encounters, nodeMap } = useMemo(() => {
     const map = new Map<string, NodeItem>();
@@ -272,6 +320,62 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
     });
     return sToA;
   }, [graphData.edges, nodeMap]);
+
+  // 2b. Build Quest Hierarchy (Sub-Quests) & Branches (Prerequisites & Outgoing Forks)
+  const {
+    parentQuestMap,
+    childQuestsMap,
+    questPrereqsMap,
+    questBranchesMap,
+  } = useMemo(() => {
+    const parentMap = new Map<string, string>();
+    const childMap = new Map<string, string[]>();
+    const prereqs = new Map<string, Array<{ quest: NodeItem; label?: string }>>();
+    const branches = new Map<string, Array<{ quest: NodeItem; label?: string }>>();
+
+    graphData.edges.forEach((edge) => {
+      const source = nodeMap.get(edge.source_id);
+      const target = nodeMap.get(edge.target_id);
+      if (!source || !target) return;
+
+      if (source.type === 'quest' && target.type === 'quest') {
+        if (edge.relation_type === 'contains' || edge.relation_type === 'parent_of') {
+          parentMap.set(target.id, source.id);
+          const c = childMap.get(source.id) || [];
+          if (!c.includes(target.id)) {
+            c.push(target.id);
+            childMap.set(source.id, c);
+          }
+        } else if (edge.relation_type === 'precedes') {
+          const inList = prereqs.get(target.id) || [];
+          inList.push({ quest: source, label: edge.label });
+          prereqs.set(target.id, inList);
+
+          const outList = branches.get(source.id) || [];
+          outList.push({ quest: target, label: edge.label });
+          branches.set(source.id, outList);
+        }
+      }
+    });
+
+    return {
+      parentQuestMap: parentMap,
+      childQuestsMap: childMap,
+      questPrereqsMap: prereqs,
+      questBranchesMap: branches,
+    };
+  }, [graphData.edges, nodeMap]);
+
+  // Toggle collapsing sub-quests under a parent quest
+  const toggleSubQuestsCollapse = (parentQuestId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setCollapsedSubQuestParents((prev) => {
+      const next = new Set(prev);
+      if (next.has(parentQuestId)) next.delete(parentQuestId);
+      else next.add(parentQuestId);
+      return next;
+    });
+  };
 
   // Handle status changes with celebratory confetti on victory
   const handleStatusChange = async (node: NodeItem, newStatus: string) => {
@@ -393,8 +497,9 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
     try {
       const existingEdges = graphData.edges.filter(
         (e) =>
-          (e.source_id === encounterId && nodeMap.get(e.target_id)?.type === 'quest') ||
-          (e.target_id === encounterId && nodeMap.get(e.source_id)?.type === 'quest')
+          ((e.source_id === encounterId && nodeMap.get(e.target_id)?.type === 'quest') ||
+          (e.target_id === encounterId && nodeMap.get(e.source_id)?.type === 'quest')) &&
+          (e.relation_type === 'contains' || e.relation_type === 'parent_of')
       );
       for (const edge of existingEdges) {
         await deleteEdge(edge.id);
@@ -478,6 +583,96 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
     }
   };
 
+  // Milestone consequence actions
+  const handleAddMilestoneImpact = async (encounterId: string) => {
+    if (!newMilestoneQuestId.trim()) return;
+    try {
+      setIsSavingMilestone(true);
+      await createEdge({
+        campaign_id: campaignId,
+        source_id: encounterId,
+        target_id: newMilestoneQuestId,
+        relation_type: 'advances_quest',
+        label: 'Advances Quest',
+        revealed_to_players: true,
+        metadata_json: {
+          is_milestone: true,
+          summary: newMilestoneSummary.trim() || undefined
+        }
+      });
+      setNewMilestoneQuestId('');
+      setNewMilestoneSummary('');
+      await onRefresh();
+    } catch (err) {
+      console.error('Failed to register milestone impact:', err);
+    } finally {
+      setIsSavingMilestone(false);
+    }
+  };
+
+  const handleDeleteMilestoneImpact = async (edgeId: string) => {
+    try {
+      await deleteEdge(edgeId);
+      await onRefresh();
+    } catch (err) {
+      console.error('Failed to delete milestone impact:', err);
+    }
+  };
+
+  // Encounter Precedence actions
+  const handleAddPrecedingEncounter = async (targetEncounterId: string) => {
+    if (!newPrecedingEncounterId.trim()) return;
+    try {
+      setIsSavingPrecedence(true);
+      await createEdge({
+        campaign_id: campaignId,
+        source_id: newPrecedingEncounterId,
+        target_id: targetEncounterId,
+        relation_type: 'precedes',
+        label: newBranchLabel.trim() || undefined,
+        revealed_to_players: true,
+      });
+      setNewPrecedingEncounterId('');
+      setNewBranchLabel('');
+      await onRefresh();
+    } catch (err) {
+      console.error('Failed to link preceding encounter:', err);
+    } finally {
+      setIsSavingPrecedence(false);
+    }
+  };
+
+  const handleAddBranchEncounter = async (sourceEncounterId: string) => {
+    if (!newBranchTargetEncounterId.trim()) return;
+    try {
+      setIsSavingPrecedence(true);
+      await createEdge({
+        campaign_id: campaignId,
+        source_id: sourceEncounterId,
+        target_id: newBranchTargetEncounterId,
+        relation_type: 'precedes',
+        label: newBranchLabel.trim() || undefined,
+        revealed_to_players: true,
+      });
+      setNewBranchTargetEncounterId('');
+      setNewBranchLabel('');
+      await onRefresh();
+    } catch (err) {
+      console.error('Failed to link branch encounter:', err);
+    } finally {
+      setIsSavingPrecedence(false);
+    }
+  };
+
+  const handleDeletePrecedenceEdge = async (edgeId: string) => {
+    try {
+      await deleteEdge(edgeId);
+      await onRefresh();
+    } catch (err) {
+      console.error('Failed to delete precedence edge:', err);
+    }
+  };
+
   // Fast session creation
   const handleQuickCreateSession = async (sessNum?: number, title?: string) => {
     try {
@@ -507,13 +702,14 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
 
   // Dimensions for pixel-perfect horizontal timeline
   const LEFT_COL_WIDTH = 280;
-  const SESSION_COL_WIDTH = 240;
+  const SESSION_COL_EXPANDED_WIDTH = 680;
+  const SESSION_COL_COLLAPSED_WIDTH = 48;
   const COL_GAP = 12;
 
   const { displayColumns, arcLayouts } = useMemo(() => {
     const unassignedSessions = encounters.filter((e) => !encounterSessionMap.get(e.id));
     const cols: NodeItem[] = [];
-    const layouts: { arc: NodeItem; colSpan: number }[] = [];
+    const layouts: { arc: NodeItem; colSpan: number; sessionIds: string[] }[] = [];
 
     // Always include Intake / Prep Staging column if there are unassigned encounters OR 0 sessions
     const needsStaging = unassignedSessions.length > 0 || sessions.length === 0;
@@ -541,13 +737,14 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
 
         if (linkedSessions.length > 0) {
           linkedSessions.forEach((s) => cols.push(s));
-          layouts.push({ arc, colSpan: linkedSessions.length });
+          layouts.push({ arc, colSpan: linkedSessions.length, sessionIds: linkedSessions.map((s) => s.id) });
         } else {
           // Provide at least 1 staging session pillar for this Arc so each Arc has its own horizontal space!
           const sessNum = aIdx + 1;
           const cleanArcTitle = arc.title.replace(/^(?:arc|act)\s*\d+:\s*/i, '');
+          const virtualId = `virtual-session-${sessNum}`;
           cols.push({
-            id: `virtual-session-${sessNum}`,
+            id: virtualId,
             campaign_id: campaignId,
             type: 'session',
             title: `Session ${sessNum}: ${cleanArcTitle}`,
@@ -560,7 +757,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
             is_canon: true,
             revealed_to_players: aIdx === 0,
           });
-          layouts.push({ arc, colSpan: 1 });
+          layouts.push({ arc, colSpan: 1, sessionIds: [virtualId] });
         }
       });
     } else if (sessions.length > 0) {
@@ -604,6 +801,144 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
     };
   }, [arcs, sessions, sessionArcMap, encounters, encounterSessionMap, campaignId]);
 
+  const { milestoneEmitters, milestoneReceivers } = useMemo(() => {
+    const emitters = new Map<string, { targetQuestId: string; label: string; summary?: string }[]>();
+    const receivers = new Map<string, { sourceEncounterId: string; sourceEncounterTitle: string; label: string; summary?: string }[]>();
+
+    graphData.edges.forEach((edge) => {
+      const isMilestone = edge.relation_type === 'advances_quest' || edge.metadata_json?.is_milestone;
+      if (!isMilestone) return;
+
+      const sourceNode = nodeMap.get(edge.source_id);
+      const targetNode = nodeMap.get(edge.target_id);
+      if (!sourceNode || !targetNode) return;
+
+      const sourceEnc = sourceNode.type === 'encounter' ? sourceNode : null;
+      const targetQuest = targetNode.type === 'quest' ? targetNode : null;
+      if (!sourceEnc || !targetQuest) return;
+
+      const sourceSessionId = encounterSessionMap.get(sourceEnc.id) || edge.metadata_json?.session_id;
+      const label = edge.label || edge.metadata_json?.milestone_title || 'Milestone Breakthrough';
+      const summary = edge.metadata_json?.summary || '';
+
+      if (!emitters.has(sourceEnc.id)) emitters.set(sourceEnc.id, []);
+      emitters.get(sourceEnc.id)!.push({ targetQuestId: targetQuest.id, label, summary });
+
+      if (sourceSessionId) {
+        const key = `${targetQuest.id}-${sourceSessionId}`;
+        if (!receivers.has(key)) receivers.set(key, []);
+        receivers.get(key)!.push({
+          sourceEncounterId: sourceEnc.id,
+          sourceEncounterTitle: sourceEnc.title,
+          label,
+          summary
+        });
+      }
+    });
+
+    return { milestoneEmitters: emitters, milestoneReceivers: receivers };
+  }, [graphData.edges, nodeMap, encounterSessionMap]);
+
+  // Precedence edges between encounters (Encounter -> precedes -> Encounter)
+  const encounterPrecedenceEdges = useMemo(() => {
+    return graphData.edges.filter(
+      (e) =>
+        e.relation_type === 'precedes' &&
+        nodeMap.get(e.source_id)?.type === 'encounter' &&
+        nodeMap.get(e.target_id)?.type === 'encounter'
+    );
+  }, [graphData.edges, nodeMap]);
+
+  interface PrecedenceLine {
+    edgeId: string;
+    d: string;
+    label?: string;
+    midX: number;
+    midY: number;
+    sourceId: string;
+    targetId: string;
+    isTight: boolean;
+    tooltipBelow: boolean;
+  }
+
+  const matrixContainerRef = useRef<HTMLDivElement>(null);
+  const [precedenceLines, setPrecedenceLines] = useState<PrecedenceLine[]>([]);
+
+  const calculatePrecedenceLines = useCallback(() => {
+    if (!matrixContainerRef.current) return;
+    const mRect = matrixContainerRef.current.getBoundingClientRect();
+    const lines: PrecedenceLine[] = [];
+
+    encounterPrecedenceEdges.forEach((edge) => {
+      const fromEl = document.getElementById(`enc-${edge.source_id}`);
+      const toEl = document.getElementById(`enc-${edge.target_id}`);
+      if (!fromEl || !toEl) return;
+
+      const fRect = fromEl.getBoundingClientRect();
+      const tRect = toEl.getBoundingClientRect();
+
+      const x1 = fRect.right - mRect.left;
+      const y1 = fRect.top + fRect.height / 2 - mRect.top;
+      const x2 = tRect.left - mRect.left;
+      const y2 = tRect.top + tRect.height / 2 - mRect.top;
+
+      const dx = Math.max(30, Math.abs(x2 - x1) * 0.5);
+      const d = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
+
+      const midX = (x1 + x2) / 2;
+      const midY = (y1 + y2) / 2;
+
+      let isTight = false;
+      if (edge.label) {
+        // Estimate rendered width of the full condition pill
+        const estWidth = (edge.label.length * 7.2) + 28;
+        const pillLeft = midX - estWidth / 2 - 4;
+        const pillRight = midX + estWidth / 2 + 4;
+        const pillTop = midY - 14;
+        const pillBottom = midY + 14;
+
+        const srcLeft = fRect.left - mRect.left;
+        const srcRight = fRect.right - mRect.left;
+        const srcTop = fRect.top - mRect.top;
+        const srcBottom = fRect.bottom - mRect.top;
+
+        const tgtLeft = tRect.left - mRect.left;
+        const tgtRight = tRect.right - mRect.left;
+        const tgtTop = tRect.top - mRect.top;
+        const tgtBottom = tRect.bottom - mRect.top;
+
+        // Detect collision with source or target cards
+        const overlapsSource = (pillRight > srcLeft && pillLeft < srcRight && pillBottom > srcTop && pillTop < srcBottom);
+        const overlapsTarget = (pillRight > tgtLeft && pillLeft < tgtRight && pillBottom > tgtTop && pillTop < tgtBottom);
+
+        isTight = overlapsSource || overlapsTarget || (Math.abs(y1 - y2) < 40 && (x2 - x1) < estWidth + 16);
+      }
+
+      lines.push({
+        edgeId: edge.id,
+        d,
+        label: edge.label,
+        midX,
+        midY,
+        sourceId: edge.source_id,
+        targetId: edge.target_id,
+        isTight,
+        tooltipBelow: midY < 50,
+      });
+    });
+
+    setPrecedenceLines(lines);
+  }, [encounterPrecedenceEdges]);
+
+  useEffect(() => {
+    const timeout = setTimeout(calculatePrecedenceLines, 60);
+    window.addEventListener('resize', calculatePrecedenceLines);
+    return () => {
+      clearTimeout(timeout);
+      window.removeEventListener('resize', calculatePrecedenceLines);
+    };
+  }, [calculatePrecedenceLines, collapsedSessionIds, collapsedQuestIds, encounters]);
+
   const orderedQuests = useMemo(() => {
     if (!localQuestOrder) return quests;
     const map = new Map(quests.map((q) => [q.id, q]));
@@ -619,13 +954,70 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
   }, [quests, localQuestOrder]);
 
   const displayQuests = useMemo(() => {
-    const list = [...orderedQuests];
+    // Separate root quests from sub-quests
+    const subQuestIds = new Set(parentQuestMap.keys());
+    const rootQuests: NodeItem[] = [];
+
+    orderedQuests.forEach((q) => {
+      if (!subQuestIds.has(q.id)) {
+        rootQuests.push(q);
+      }
+    });
+
+    const list: Array<NodeItem & {
+      isSubQuest?: boolean;
+      parentQuestId?: string;
+      subQuestCount?: number;
+      completedSubQuestCount?: number;
+    }> = [];
+
+    // For each root quest, add it, and if it has sub-quests, insert them right beneath
+    rootQuests.forEach((rootQ) => {
+      const childIds = childQuestsMap.get(rootQ.id) || [];
+      const childNodes = childIds
+        .map((cid) => nodeMap.get(cid))
+        .filter((n): n is NodeItem => !!n);
+      const completedCount = childNodes.filter(
+        (c) => c.data_json?.status === 'completed'
+      ).length;
+
+      list.push({
+        ...rootQ,
+        isSubQuest: false,
+        subQuestCount: childNodes.length,
+        completedSubQuestCount: completedCount,
+      });
+
+      // If parent's sub-quests are not collapsed, include each child sub-quest directly below
+      if (childNodes.length > 0 && !collapsedSubQuestParents.has(rootQ.id)) {
+        childNodes.forEach((childQ) => {
+          list.push({
+            ...childQ,
+            isSubQuest: true,
+            parentQuestId: rootQ.id,
+            subQuestCount: 0,
+            completedSubQuestCount: 0,
+          });
+        });
+      }
+    });
+
+    // Also include any orphan sub-quests whose parent was deleted or not in list
+    orderedQuests.forEach((q) => {
+      if (subQuestIds.has(q.id)) {
+        const pId = parentQuestMap.get(q.id);
+        if (pId && !nodeMap.has(pId)) {
+          list.push({ ...q, isSubQuest: false });
+        }
+      }
+    });
+
     // If there are encounters without an assigned quest, add an Open Encounters lane
     if (unassignedQuestEncounters.length > 0) {
-      const openRow: NodeItem = {
+      const openRow = {
         id: 'open-world-events',
         campaign_id: campaignId,
-        type: 'quest',
+        type: 'quest' as NodeType,
         title: 'Open Encounters & World Events',
         summary: `${unassignedQuestEncounters.length} scenes not yet attached to a specific quest line`,
         data_json: { category: 'World Events', status: 'in_progress', is_open_lane: true },
@@ -634,11 +1026,12 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
         updated_at: new Date().toISOString(),
         is_canon: true,
         revealed_to_players: true,
+        isSubQuest: false,
       };
       return [openRow, ...list];
     }
     return list;
-  }, [orderedQuests, unassignedQuestEncounters.length, campaignId]);
+  }, [orderedQuests, parentQuestMap, childQuestsMap, nodeMap, collapsedSubQuestParents, unassignedQuestEncounters.length, campaignId]);
 
   // Unified Encounter Move Handler (Drag & Drop across sessions & quests)
   const handleMoveEncounter = async (
@@ -706,13 +1099,84 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
     }
   };
 
+  // Dynamic Session Column Widths:
+  // Automatically scales each session column to comfortably fit its encounters without dead whitespace or internal horizontal scrolling!
+  const sessionColWidths = useMemo(() => {
+    const map = new Map<string, number>();
+
+    displayColumns.forEach((col) => {
+      if (collapsedSessionIds.has(col.id)) {
+        map.set(col.id, SESSION_COL_COLLAPSED_WIDTH);
+        return;
+      }
+
+      const isStaging = col.id === 'unscheduled-staging';
+      let maxCardsInCol = 0;
+
+      // Scan all quest rows to find the quest with the most horizontal cards in this session
+      displayQuests.forEach((quest) => {
+        const isOpenRow = quest.id === 'open-world-events';
+        const matchingEncounters = encounters.filter((e) => {
+          const eQuestId = encounterQuestMap.get(e.id);
+          const isQuestMatch = isOpenRow ? !eQuestId : eQuestId === quest.id;
+          const isSessionMatch = isStaging ? !encounterSessionMap.get(e.id) : encounterSessionMap.get(e.id) === col.id;
+          return isQuestMatch && isSessionMatch;
+        });
+
+        const cellMilestones = (milestoneReceivers.get(quest.id) || []).filter((ms) => {
+          const sourceSessId = encounterSessionMap.get(ms.sourceEncounterId);
+          return isStaging ? !sourceSessId : sourceSessId === col.id;
+        });
+
+        const totalInCell = matchingEncounters.length + cellMilestones.length;
+        if (totalInCell > maxCardsInCol) {
+          maxCardsInCol = totalInCell;
+        }
+      });
+
+      // Also check unassigned encounters in open row for staging column
+      if (isStaging) {
+        const unassignedCount = encounters.filter((e) => !encounterSessionMap.get(e.id)).length;
+        maxCardsInCol = Math.max(maxCardsInCol, Math.min(3, unassignedCount));
+      }
+
+      // Base minimum width for a session column (allows header title + 'Plan' badge + '◀ Fold' to fit cleanly)
+      const MIN_SESSION_WIDTH = 260;
+
+      if (maxCardsInCol <= 0) {
+        map.set(col.id, MIN_SESSION_WIDTH);
+      } else {
+        // 24px cell padding (12px * 2) + 16px buffer + (N * 185px card) + ((N - 1) * 14px gap)
+        const computed = 40 + (maxCardsInCol * 185) + ((maxCardsInCol - 1) * 14);
+        map.set(col.id, Math.max(MIN_SESSION_WIDTH, computed));
+      }
+    });
+
+    return map;
+  }, [displayColumns, collapsedSessionIds, displayQuests, encounters, encounterQuestMap, encounterSessionMap, milestoneReceivers]);
+
+  const matrixGridCols = useMemo(() => {
+    const cols = displayColumns.map((col) => `${sessionColWidths.get(col.id) || 260}px`);
+    return `${LEFT_COL_WIDTH}px ${cols.join(' ')}`;
+  }, [displayColumns, sessionColWidths]);
+
   // Pixel-perfect canvas dimensions for horizontal scrolling
   const canvasWidth = useMemo(() => {
-    return LEFT_COL_WIDTH + displayColumns.length * (SESSION_COL_WIDTH + COL_GAP) + 40;
-  }, [displayColumns.length]);
+    const sessionColsWidth = displayColumns.reduce((sum, col) => {
+      const w = sessionColWidths.get(col.id) || 260;
+      return sum + w + COL_GAP;
+    }, 0);
+    return LEFT_COL_WIDTH + sessionColsWidth + 40;
+  }, [displayColumns, sessionColWidths]);
 
   const getColX = (index: number) => {
-    return LEFT_COL_WIDTH + index * (SESSION_COL_WIDTH + COL_GAP) + SESSION_COL_WIDTH / 2;
+    let x = LEFT_COL_WIDTH;
+    for (let i = 0; i < index; i++) {
+      const w = sessionColWidths.get(displayColumns[i]?.id) || 260;
+      x += w + COL_GAP;
+    }
+    const currentWidth = sessionColWidths.get(displayColumns[index]?.id) || 260;
+    return x + currentWidth / 2;
   };
 
   // Quest Color Palette
@@ -755,6 +1219,38 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
               <Calendar size={18} style={{ color: 'var(--color-gold)' }} />
               Story Threads &amp; Session Matrix
             </h2>
+
+            {/* View Mode Switcher: Matrix vs Story Flow DAG */}
+            <div
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                background: 'var(--bg-input)',
+                padding: '2px',
+                borderRadius: '8px',
+                border: '1px solid var(--border-subtle)',
+                marginLeft: '12px',
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setTapestryViewMode('matrix')}
+                className={`btn ${tapestryViewMode === 'matrix' ? 'btn-primary' : 'btn-ghost'}`}
+                style={{ fontSize: '0.74rem', padding: '3px 10px', gap: '5px', height: '28px' }}
+                title="Matrix Timeline of Quests and Sessions"
+              >
+                <LayoutGrid size={13} /> Matrix Timeline
+              </button>
+              <button
+                type="button"
+                onClick={() => setTapestryViewMode('flowchart')}
+                className={`btn ${tapestryViewMode === 'flowchart' ? 'btn-primary' : 'btn-ghost'}`}
+                style={{ fontSize: '0.74rem', padding: '3px 10px', gap: '5px', height: '28px' }}
+                title="Story Flow & Branching DAG Flowchart"
+              >
+                <GitFork size={13} /> Story Flow &amp; Branches
+              </button>
+            </div>
           </div>
           <p style={{ margin: '3px 0 0', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
             Quests flow horizontally • Sessions weave vertically • Encounters bridge your narrative goals with game night reality.
@@ -870,9 +1366,17 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
         </div>
       </div>
 
-      {/* Main Tapestry Canvas Area with True Horizontal Scroll */}
-      <div
-        style={{
+      {tapestryViewMode === 'flowchart' ? (
+        <QuestFlowchart
+          campaignId={campaignId}
+          graphData={graphData}
+          onSelectNode={onSelectNode}
+          onRefresh={onRefresh}
+        />
+      ) : (
+        /* Main Tapestry Canvas Area with True Horizontal Scroll */
+        <div
+          style={{
           flex: 1,
           minHeight: 0,
           overflowX: 'auto',
@@ -1260,7 +1764,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
               <div
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${displayColumns.length}, ${SESSION_COL_WIDTH}px)`,
+                  gridTemplateColumns: matrixGridCols,
                   gap: `${COL_GAP}px`,
                   alignItems: 'stretch',
                   whiteSpace: 'nowrap'
@@ -1273,59 +1777,113 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                 </div>
 
                 {/* If intake staging column is present, render staging banner above it */}
-                {displayColumns[0]?.id === 'unscheduled-staging' && (
-                  <div
-                    style={{
-                      gridColumn: 'span 1',
-                      background: 'rgba(59, 130, 246, 0.08)',
-                      border: '1px dashed rgba(59, 130, 246, 0.35)',
-                      borderRadius: '8px',
-                      padding: '8px 12px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between'
-                    }}
-                  >
-                    <span style={{ fontSize: '0.72rem', fontWeight: 800, color: '#60a5fa', textTransform: 'uppercase' }}>
-                      📥 Intake Pool
-                    </span>
-                    <span style={{ fontSize: '0.68rem', color: '#93c5fd' }}>
-                      Unscheduled
-                    </span>
-                  </div>
-                )}
+                {displayColumns[0]?.id === 'unscheduled-staging' && (() => {
+                  const isStagingFolded = collapsedSessionIds.has('unscheduled-staging');
+                  return (
+                    <div
+                      style={{
+                        gridColumn: 'span 1',
+                        minWidth: 0,
+                        overflow: 'hidden',
+                        background: 'rgba(59, 130, 246, 0.08)',
+                        border: '1px dashed rgba(59, 130, 246, 0.35)',
+                        borderRadius: '8px',
+                        padding: isStagingFolded ? '6px 2px' : '8px 12px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: isStagingFolded ? 'center' : 'space-between',
+                        boxSizing: 'border-box'
+                      }}
+                      title="📥 Intake Pool (Unscheduled Scenes)"
+                    >
+                      {isStagingFolded ? (
+                        <span style={{ fontSize: '0.85rem' }} title="Intake Pool (Unscheduled Scenes)">
+                          📥
+                        </span>
+                      ) : (
+                        <>
+                          <span style={{ fontSize: '0.72rem', fontWeight: 800, color: '#60a5fa', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>
+                            📥 Intake Pool
+                          </span>
+                          <span style={{ fontSize: '0.68rem', color: '#93c5fd', whiteSpace: 'nowrap' }}>
+                            Unscheduled
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {/* Render Arc Banners in a SINGLE horizontal non-wrapping row */}
                 {arcLayouts.map((item, aIdx) => {
+                  const isAllFolded = Boolean(item.sessionIds && item.sessionIds.length > 0 && item.sessionIds.every((id) => collapsedSessionIds.has(id)));
+
+                  if (isAllFolded) {
+                    return (
+                      <div
+                        key={item.arc.id}
+                        onClick={() => setActiveArcModal(item.arc)}
+                        style={{
+                          gridColumn: `span ${item.colSpan}`,
+                          minWidth: 0,
+                          overflow: 'hidden',
+                          background: 'linear-gradient(180deg, rgba(245, 158, 11, 0.16) 0%, rgba(245, 158, 11, 0.05) 100%)',
+                          border: '1px solid rgba(245, 158, 11, 0.4)',
+                          borderRadius: '8px',
+                          padding: '4px 2px',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          justifyContent: 'center',
+                          alignItems: 'center',
+                          boxSizing: 'border-box',
+                          transition: 'all 0.15s ease'
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--color-gold)')}
+                        onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'rgba(245, 158, 11, 0.4)')}
+                        title={`${item.arc.title} (${item.colSpan} session${item.colSpan > 1 ? 's' : ''} folded — Click to inspect arc)`}
+                      >
+                        <span style={{ fontSize: '0.66rem', fontWeight: 900, color: 'var(--color-gold)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                          ACT {aIdx + 1}
+                        </span>
+                      </div>
+                    );
+                  }
+
                   return (
                     <div
                       key={item.arc.id}
                       onClick={() => setActiveArcModal(item.arc)}
                       style={{
                         gridColumn: `span ${item.colSpan}`,
+                        minWidth: 0,
+                        overflow: 'hidden',
                         background: 'linear-gradient(90deg, rgba(245, 158, 11, 0.12) 0%, rgba(245, 158, 11, 0.04) 100%)',
                         border: '1px solid rgba(245, 158, 11, 0.35)',
                         borderRadius: '8px',
-                        padding: '8px 12px',
+                        padding: '8px 14px',
                         cursor: 'pointer',
                         display: 'flex',
                         justifyContent: 'space-between',
                         alignItems: 'center',
+                        gap: '12px',
+                        boxSizing: 'border-box',
                         transition: 'all 0.15s ease'
                       }}
                       onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--color-gold)')}
                       onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'rgba(245, 158, 11, 0.35)')}
+                      title={item.arc.title}
                     >
-                      <div>
+                      <div style={{ minWidth: 0, overflow: 'hidden' }}>
                         <span style={{ fontSize: '0.68rem', fontWeight: 800, color: 'var(--color-gold)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                           Act {aIdx + 1}
                         </span>
-                        <div style={{ fontSize: '0.85rem', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        <div style={{ fontSize: '0.85rem', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: 'var(--text-primary)' }}>
                           {item.arc.title}
                         </div>
                       </div>
-                      <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginLeft: '8px', whiteSpace: 'nowrap' }}>
-                        {item.colSpan} {item.colSpan === 1 ? 'Column' : 'Columns'}
+                      <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', flexShrink: 0, whiteSpace: 'nowrap' }}>
+                        {item.colSpan} {item.colSpan === 1 ? 'Session' : 'Sessions'}
                       </span>
                     </div>
                   );
@@ -1340,7 +1898,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
               <div
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${displayColumns.length}, ${SESSION_COL_WIDTH}px)`,
+                  gridTemplateColumns: matrixGridCols,
                   gap: `${COL_GAP}px`,
                   alignItems: 'stretch'
                 }}
@@ -1382,6 +1940,42 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                   const isCurrent = sess.data_json?.status === 'in_progress';
                   const isStaging = sess.id === 'unscheduled-staging';
                   const isVirtual = sess.data_json?.is_virtual;
+                  const isColCollapsed = collapsedSessionIds.has(sess.id);
+                  const sessEncounters = encounters.filter((e) =>
+                    isStaging ? !encounterSessionMap.get(e.id) : encounterSessionMap.get(e.id) === sess.id
+                  );
+                  const sessNum = sess.data_json?.session_number || idx + (displayColumns[0]?.id === 'unscheduled-staging' ? 0 : 1);
+
+                  if (isColCollapsed) {
+                    const cleanTitle = sess.title.replace(/^Session\s*\d+\s*:\s*/i, '');
+                    return (
+                      <div
+                        key={sess.id}
+                        onClick={() => toggleSessionCollapse(sess.id)}
+                        className="tapestry-col-spine"
+                        title={`${sess.title} (Click to unroll column)`}
+                      >
+                        <span style={{ fontSize: '0.65rem', fontWeight: 800, color: 'var(--color-gold)', fontFamily: 'var(--font-mono)' }}>
+                          {isStaging ? 'INT' : `S0${sessNum}`}
+                        </span>
+                        <div
+                          style={{
+                            width: '8px',
+                            height: '8px',
+                            borderRadius: '50%',
+                            background: isCurrent ? 'var(--color-gold)' : sess.data_json?.status === 'completed' ? 'var(--color-emerald)' : 'var(--text-muted)'
+                          }}
+                        />
+                        <div className="tapestry-spine-vtitle">{cleanTitle}</div>
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
+                          <span style={{ fontSize: '0.62rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+                            {sessEncounters.length}
+                          </span>
+                          <span style={{ fontSize: '0.68rem', color: 'var(--color-gold)', fontWeight: 800 }}>+</span>
+                        </div>
+                      </div>
+                    );
+                  }
 
                   return (
                     <div
@@ -1431,11 +2025,14 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                             : 'var(--border-subtle)'
                         }`,
                         borderRadius: '8px',
-                        padding: '8px 10px',
+                        padding: '8px 12px',
                         cursor: isStaging ? 'default' : 'pointer',
                         boxShadow: isCurrent ? '0 0 14px rgba(245, 158, 11, 0.25)' : 'none',
                         position: 'relative',
-                        transition: 'all 0.15s ease'
+                        transition: 'all 0.15s ease',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        justifyContent: 'space-between'
                       }}
                     >
                       {isStaging && (
@@ -1477,16 +2074,33 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                       )}
 
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <span style={{ fontSize: '0.78rem', fontWeight: 800, color: isStaging ? '#60a5fa' : isCurrent ? 'var(--color-gold)' : 'var(--text-primary)' }}>
-                          {isStaging ? '📥 Prep Staging' : isVirtual ? `Virtual Session ${sess.data_json?.session_number || idx}` : `Session ${idx + (displayColumns[0]?.id === 'unscheduled-staging' ? 0 : 1)}`}
-                        </span>
-                        {sess.subtitle && (
-                          <span style={{ fontSize: '0.68rem', color: isStaging ? '#93c5fd' : 'var(--text-muted)' }}>{sess.subtitle}</span>
-                        )}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <span style={{ fontSize: '0.78rem', fontWeight: 800, color: isStaging ? '#60a5fa' : isCurrent ? 'var(--color-gold)' : 'var(--text-primary)' }}>
+                            {isStaging ? '📥 Prep Staging' : isVirtual ? `Virtual Session ${sess.data_json?.session_number || idx}` : `Session ${sessNum}`}
+                          </span>
+                          <span className={`status-pill status-${sess.data_json?.status === 'completed' ? 'completed' : isCurrent ? 'inprogress' : 'planned'}`} style={{ fontSize: '0.6rem', padding: '1px 5px' }}>
+                            {sess.data_json?.status === 'completed' ? '✓ Done' : isCurrent ? '● Active' : 'Plan'}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleSessionCollapse(sess.id);
+                          }}
+                          className="btn btn-ghost"
+                          style={{ fontSize: '0.65rem', padding: '1px 6px', height: '20px', gap: '3px', color: 'var(--text-muted)' }}
+                          title="Fold session column"
+                        >
+                          ◀ Fold
+                        </button>
                       </div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-primary)', marginTop: '4px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {sess.title}
                       </div>
+                      {sess.subtitle && (
+                        <div style={{ fontSize: '0.68rem', color: isStaging ? '#93c5fd' : 'var(--text-muted)' }}>{sess.subtitle}</div>
+                      )}
 
                       {/* Quick Commit button for virtual sessions */}
                       {isVirtual && (
@@ -1511,11 +2125,76 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
             {/* ========================================================================= */}
             {/* 4. THE TAPESTRY MATRIX (QUEST ROWS × SESSION COLUMNS)                    */}
             {/* ========================================================================= */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', position: 'relative' }}>
+            <div
+              ref={matrixContainerRef}
+              style={{ display: 'flex', flexDirection: 'column', gap: '14px', position: 'relative' }}
+            >
+              {/* SVG Precedence Overlay for Encounter Precedence Lines */}
+              {precedenceLines.length > 0 && (
+                <>
+                  <svg className="matrix-svg-overlay">
+                    <defs>
+                      <marker id="arrow-gold" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                        <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#f59e0b"/>
+                      </marker>
+                    </defs>
+                    {precedenceLines.map((line) => {
+                      const isHighlighted = hoveredEncounterId === line.sourceId || hoveredEncounterId === line.targetId;
+                      const isDimmed = Boolean(hoveredEncounterId && !isHighlighted);
+                      return (
+                        <path
+                          key={line.edgeId}
+                          d={line.d}
+                          className={`matrix-curve ${isHighlighted ? 'highlighted' : isDimmed ? 'dimmed' : ''}`}
+                          markerEnd="url(#arrow-gold)"
+                        />
+                      );
+                    })}
+                  </svg>
+
+                  {/* Floating Condition Badges along the lines */}
+                  {precedenceLines.map((line) => {
+                    if (!line.label) return null;
+                    if (line.isTight) {
+                      return (
+                        <div
+                          key={`dot-${line.edgeId}`}
+                          className="matrix-condition-dot"
+                          style={{ left: `${line.midX}px`, top: `${line.midY}px` }}
+                          title={line.label}
+                        >
+                          <span className="dot-icon">➔</span>
+                          <div className={`matrix-condition-tooltip ${line.tooltipBelow ? 'tooltip-below' : ''}`}>
+                            <span style={{ color: 'var(--color-gold)', fontSize: '0.75rem' }}>➔</span>
+                            <span>{line.label}</span>
+                          </div>
+                        </div>
+                      );
+                    }
+                    return (
+                      <div
+                        key={`pill-${line.edgeId}`}
+                        className="matrix-condition-pill"
+                        style={{ left: `${line.midX}px`, top: `${line.midY}px` }}
+                        title={line.label}
+                      >
+                        ➔ {line.label}
+                      </div>
+                    );
+                  })}
+                </>
+              )}
               {displayQuests.map((quest, qIdx) => {
                 const isQuestHovered = hoveredQuestId === quest.id;
                 const isOpenRow = quest.id === 'open-world-events';
-                const questColor = isOpenRow ? '#10b981' : questColors[qIdx % questColors.length];
+                const isSubQuest = Boolean((quest as any).isSubQuest);
+                const subQuestCount = (quest as any).subQuestCount || 0;
+                const completedSubQuestCount = (quest as any).completedSubQuestCount || 0;
+                const isSubQuestsCollapsed = collapsedSubQuestParents.has(quest.id);
+                const incomingPrereqs = questPrereqsMap.get(quest.id) || [];
+                const outgoingBranches = questBranchesMap.get(quest.id) || [];
+
+                const questColor = isOpenRow ? '#10b981' : isSubQuest ? '#60a5fa' : questColors[qIdx % questColors.length];
                 const isCollapsed = collapsedQuestIds.has(quest.id);
                 const rowEncountersCount = isOpenRow
                   ? unassignedQuestEncounters.length
@@ -1524,9 +2203,10 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                 return (
                   <div
                     key={quest.id}
+                    id={`quest-row-${quest.id}`}
                     style={{
                       display: 'grid',
-                      gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${displayColumns.length}, ${SESSION_COL_WIDTH}px)`,
+                      gridTemplateColumns: matrixGridCols,
                       gap: `${COL_GAP}px`,
                       alignItems: isCollapsed ? 'center' : 'stretch',
                       position: 'relative'
@@ -1612,9 +2292,10 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                         style={{
                           borderRadius: '8px',
                           padding: '0 10px',
+                          marginLeft: isSubQuest ? '22px' : '0',
                           background: isQuestHovered ? 'var(--bg-card-hover)' : 'var(--bg-card)',
                           border: `1px solid ${isQuestHovered ? questColor : 'var(--border-subtle)'}`,
-                          borderLeft: `4px solid ${questColor}`,
+                          borderLeft: isSubQuest ? `3px solid #60a5fa` : `4px solid ${questColor}`,
                           cursor: 'pointer',
                           zIndex: 1,
                           display: 'flex',
@@ -1658,6 +2339,9 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                           {!isOpenRow && (
                             <GripVertical size={12} style={{ color: 'var(--text-muted)', cursor: 'grab', flexShrink: 0 }} />
                           )}
+                          {isSubQuest && (
+                            <CornerDownRight size={12} style={{ color: '#60a5fa', flexShrink: 0 }} />
+                          )}
                           <span
                             style={{
                               fontWeight: 700,
@@ -1671,8 +2355,34 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                           >
                             {quest.title}
                           </span>
+                          {isSubQuest && (
+                            <span style={{ fontSize: '0.6rem', padding: '1px 4px', borderRadius: '3px', background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa', fontWeight: 600, flexShrink: 0 }}>
+                              Sub
+                            </span>
+                          )}
+                          {incomingPrereqs.length > 0 && (
+                            <span style={{ fontSize: '0.6rem', color: 'var(--color-gold)', display: 'inline-flex', alignItems: 'center', gap: '2px', flexShrink: 0 }} title={`Prerequisite: ${incomingPrereqs.map((p) => p.quest.title).join(', ')}`}>
+                              <Link2 size={10} />
+                            </span>
+                          )}
+                          {outgoingBranches.length > 0 && (
+                            <span style={{ fontSize: '0.6rem', color: '#60a5fa', display: 'inline-flex', alignItems: 'center', gap: '2px', flexShrink: 0 }} title={`Branches to ${outgoingBranches.length} path(s): ${outgoingBranches.map((b) => b.quest.title).join(', ')}`}>
+                              <GitFork size={10} />
+                            </span>
+                          )}
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0, marginLeft: '6px' }}>
+                          {subQuestCount > 0 && (
+                            <button
+                              type="button"
+                              onClick={(e) => toggleSubQuestsCollapse(quest.id, e)}
+                              className="btn btn-ghost"
+                              style={{ fontSize: '0.62rem', padding: '1px 5px', height: '20px', gap: '3px', color: '#60a5fa', background: 'rgba(59, 130, 246, 0.1)' }}
+                              title="Toggle sub-quests visibility in matrix"
+                            >
+                              {completedSubQuestCount}/{subQuestCount} obj
+                            </button>
+                          )}
                           <span
                             className="status-pill"
                             style={{
@@ -1762,9 +2472,10 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                         style={{
                           borderRadius: '10px',
                           padding: '14px',
+                          marginLeft: isSubQuest ? '22px' : '0',
                           background: isQuestHovered ? 'var(--bg-card-hover)' : 'var(--bg-card)',
                           border: `1px solid ${isQuestHovered ? questColor : 'var(--border-subtle)'}`,
-                          borderLeft: `5px solid ${questColor}`,
+                          borderLeft: isSubQuest ? `4px solid #60a5fa` : `5px solid ${questColor}`,
                           cursor: isOpenRow ? 'default' : 'grab',
                           zIndex: 1,
                           display: 'flex',
@@ -1809,8 +2520,11 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                               {!isOpenRow && (
                                 <GripVertical size={13} style={{ color: 'var(--text-muted)', cursor: 'grab', flexShrink: 0 }} />
                               )}
+                              {isSubQuest && (
+                                <CornerDownRight size={13} style={{ color: '#60a5fa', flexShrink: 0 }} />
+                              )}
                               <span style={{ fontSize: '0.65rem', fontWeight: 700, textTransform: 'uppercase', color: questColor, letterSpacing: '0.5px' }}>
-                                {quest.data_json?.category || (isOpenRow ? 'World Events' : 'Storyline')}
+                                {quest.data_json?.category || (isOpenRow ? 'World Events' : isSubQuest ? 'Sub-Quest' : 'Storyline')}
                               </span>
                             </div>
                             <span className={`status-pill status-${quest.data_json?.status === 'in_progress' ? 'inprogress' : 'planned'}`}>
@@ -1824,6 +2538,75 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                             <p style={{ margin: 0, fontSize: '0.74rem', color: 'var(--text-secondary)', lineClamp: 2, display: '-webkit-box', WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
                               {quest.summary}
                             </p>
+                          )}
+
+                          {/* Sub-Quest Milestone Rollup */}
+                          {subQuestCount > 0 && (
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '6px', padding: '4px 8px', borderRadius: '6px', background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.2)' }}>
+                              <span style={{ fontSize: '0.7rem', color: '#93c5fd', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                <CheckCircle2 size={12} style={{ color: completedSubQuestCount === subQuestCount ? '#10b981' : '#3b82f6' }} />
+                                Objectives: {completedSubQuestCount}/{subQuestCount}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={(e) => toggleSubQuestsCollapse(quest.id, e)}
+                                className="btn btn-ghost"
+                                style={{ fontSize: '0.65rem', padding: '1px 6px', height: '20px', gap: '3px', color: '#60a5fa' }}
+                              >
+                                {isSubQuestsCollapsed ? 'Show Sub-Quests' : 'Hide Sub-Quests'}
+                              </button>
+                            </div>
+                          )}
+
+                          {/* Prerequisites and Branches Badges */}
+                          {(incomingPrereqs.length > 0 || outgoingBranches.length > 0) && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap', marginTop: '6px' }}>
+                              {incomingPrereqs.map((p, pIdx) => (
+                                <span
+                                  key={pIdx}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const targetEl = document.getElementById(`quest-row-${p.quest.id}`);
+                                    if (targetEl) targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                  }}
+                                  style={{
+                                    fontSize: '0.64rem',
+                                    padding: '2px 6px',
+                                    borderRadius: '4px',
+                                    background: 'rgba(255, 255, 255, 0.05)',
+                                    border: '1px solid var(--border-subtle)',
+                                    color: 'var(--text-secondary)',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '3px',
+                                    cursor: 'pointer',
+                                  }}
+                                  title={`Prerequisite: ${p.quest.title}`}
+                                >
+                                  <Link2 size={10} style={{ color: 'var(--color-gold)' }} />
+                                  Prereq: {p.quest.title.length > 14 ? `${p.quest.title.substring(0, 13)}…` : p.quest.title}
+                                </span>
+                              ))}
+                              {outgoingBranches.length > 0 && (
+                                <span
+                                  style={{
+                                    fontSize: '0.64rem',
+                                    padding: '2px 6px',
+                                    borderRadius: '4px',
+                                    background: 'rgba(59, 130, 246, 0.12)',
+                                    border: '1px solid rgba(59, 130, 246, 0.3)',
+                                    color: '#93c5fd',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '3px',
+                                  }}
+                                  title={`Branches to: ${outgoingBranches.map((b) => b.quest.title).join(', ')}`}
+                                >
+                                  <GitFork size={10} />
+                                  {outgoingBranches.length} Branch{outgoingBranches.length > 1 ? 'es' : ''}
+                                </span>
+                              )}
+                            </div>
                           )}
                         </div>
 
@@ -1861,7 +2644,48 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
 
                       const isSessionHovered = hoveredSessionId === sess.id;
                       const isCellHighlighted = isQuestHovered || isSessionHovered;
+                      const isColCollapsed = collapsedSessionIds.has(sess.id);
 
+                      // CASE 1: Column itself is collapsed horizontally into a spine
+                      if (isColCollapsed) {
+                        return (
+                          <div
+                            key={sess.id}
+                            onClick={() => toggleSessionCollapse(sess.id)}
+                            className="tapestry-collapsed-cell"
+                            title={`${matchingEncounters.length} scenes in ${sess.title} (Click to unroll)`}
+                          >
+                            {matchingEncounters.length > 0 ? (
+                              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '3px' }}>
+                                <div style={{ display: 'flex', gap: '2px', flexWrap: 'wrap', justifyContent: 'center', maxWidth: '32px' }}>
+                                  {matchingEncounters.map((e) => (
+                                    <div
+                                      key={e.id}
+                                      style={{
+                                        width: '6px',
+                                        height: '6px',
+                                        borderRadius: '50%',
+                                        background: e.data_json?.status === 'completed'
+                                          ? 'var(--color-emerald)'
+                                          : e.data_json?.status === 'in_progress'
+                                          ? 'var(--color-gold)'
+                                          : 'var(--text-muted)'
+                                      }}
+                                    />
+                                  ))}
+                                </div>
+                                <span style={{ fontSize: '0.62rem', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>
+                                  {matchingEncounters.length}
+                                </span>
+                              </div>
+                            ) : (
+                              <span style={{ color: 'rgba(255, 255, 255, 0.1)', fontSize: '0.7rem' }}>-</span>
+                            )}
+                          </div>
+                        );
+                      }
+
+                      // CASE 2: Quest row is collapsed vertically to a single line
                       if (isCollapsed) {
                         return (
                           <div
@@ -1928,7 +2752,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                           >
                             {matchingEncounters.length > 0 ? (
                               <>
-                                {matchingEncounters.slice(0, 2).map((enc) => {
+                                {matchingEncounters.slice(0, 3).map((enc) => {
                                   const encStatus = enc.data_json?.status || 'planned';
                                   return (
                                     <div
@@ -1950,7 +2774,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                                       }}
                                       onMouseEnter={() => setHoveredEncounterId(enc.id)}
                                       onMouseLeave={() => setHoveredEncounterId(null)}
-                                      title={`${enc.title} (${encStatus === 'completed' ? 'Done' : encStatus === 'in_progress' ? 'Active' : 'Planned'}) - Click to open, drag to move`}
+                                      title={`${enc.title} (${encStatus === 'completed' ? 'Done' : encStatus === 'in_progress' ? 'Active' : 'Planned'})`}
                                       style={{
                                         display: 'inline-flex',
                                         alignItems: 'center',
@@ -1973,17 +2797,12 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                                             ? 'rgba(59, 130, 246, 0.4)'
                                             : 'var(--border-medium)'
                                         }`,
-                                        fontSize: '0.72rem',
-                                        fontWeight: 600,
-                                        color: 'var(--text-primary)',
+                                        fontSize: '0.7rem',
                                         cursor: 'grab',
                                         whiteSpace: 'nowrap',
-                                        maxWidth: matchingEncounters.length > 1 ? '130px' : '100%',
+                                        maxWidth: '140px',
                                         overflow: 'hidden',
-                                        textOverflow: 'ellipsis',
-                                        boxShadow: hoveredEncounterId === enc.id ? `0 0 10px ${questColor}66` : 'none',
-                                        transform: hoveredEncounterId === enc.id ? 'translateY(-1px)' : 'none',
-                                        transition: 'all 0.15s ease'
+                                        textOverflow: 'ellipsis'
                                       }}
                                     >
                                       <Swords size={10} style={{ color: questColor, flexShrink: 0 }} />
@@ -1993,72 +2812,26 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                                     </div>
                                   );
                                 })}
-                                {matchingEncounters.length > 2 && (
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      toggleQuestCollapse(quest.id);
-                                    }}
-                                    className="status-pill"
-                                    title={`${matchingEncounters.length - 2} more scenes. Click to expand story line.`}
-                                    style={{
-                                      cursor: 'pointer',
-                                      fontSize: '0.62rem',
-                                      padding: '2px 6px',
-                                      background: 'var(--bg-surface)',
-                                      border: '1px solid var(--border-medium)',
-                                      color: 'var(--text-secondary)',
-                                      whiteSpace: 'nowrap',
-                                      flexShrink: 0
-                                    }}
-                                  >
-                                    +{matchingEncounters.length - 2} more
-                                  </button>
+                                {matchingEncounters.length > 3 && (
+                                  <span style={{ fontSize: '0.62rem', color: 'var(--text-muted)' }}>
+                                    +{matchingEncounters.length - 3}
+                                  </span>
                                 )}
                               </>
-                            ) : isCellDragOver ? (
-                              <span style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--color-gold)', display: 'flex', alignItems: 'center', gap: '3px' }}>
-                                <Plus size={11} /> Drop
-                              </span>
                             ) : (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setShowAddModal('encounter');
-                                  setTargetQuestId(isOpenRow ? null : quest.id);
-                                  setTargetSessionId(isStagingCol ? null : sess.id);
-                                }}
-                                style={{
-                                  background: 'transparent',
-                                  border: 'none',
-                                  cursor: 'pointer',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center',
-                                  padding: '4px'
-                                }}
-                                title={`Stage encounter for ${quest.title} in ${sess.title}`}
-                              >
-                                <div
-                                  style={{
-                                    width: '8px',
-                                    height: '8px',
-                                    borderRadius: '50%',
-                                    background: `${questColor}44`,
-                                    border: `1px solid ${questColor}88`,
-                                    transition: 'all 0.15s ease'
-                                  }}
-                                />
-                              </button>
+                              <span style={{ color: 'rgba(255, 255, 255, 0.1)', fontSize: '0.7rem' }}>-</span>
                             )}
                           </div>
                         );
                       }
 
+                      // CASE 3: Fully expanded cell with horizontal encounter beat flow & milestones
+                      const cellMilestones = milestoneReceivers.get(`${quest.id}-${sess.id}`) || [];
+
                       return (
                         <div
                           key={sess.id}
+                          className="tapestry-expanded-cell"
                           onDragOver={(e) => {
                             e.preventDefault();
                             e.dataTransfer.dropEffect = 'move';
@@ -2092,36 +2865,66 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                             }
                           }}
                           style={{
-                            position: 'relative',
-                            zIndex: 1,
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: encounterDensity === 'compact' ? '6px' : '8px',
-                            alignItems: 'stretch',
-                            justifyContent: 'center',
                             background: isCellDragOver
                               ? 'rgba(245, 158, 11, 0.12)'
                               : isCellHighlighted
                               ? 'rgba(255, 255, 255, 0.02)'
-                              : 'transparent',
-                            borderRadius: '8px',
-                            minHeight: encounterDensity === 'compact' ? '46px' : '110px',
+                              : 'rgba(15, 20, 32, 0.3)',
                             border: isCellDragOver
                               ? '2px dashed var(--color-gold)'
                               : isSessionHovered
                               ? '1px dashed var(--border-subtle)'
-                              : '1px solid transparent',
-                            transition: 'all 0.15s ease'
+                              : '1px solid rgba(255, 255, 255, 0.04)'
                           }}
                         >
+                          {/* Milestone Sync Receiver Card */}
+                          {cellMilestones.map((ms, msIdx) => (
+                            <div
+                              key={msIdx}
+                              className="tapestry-milestone-sync-card"
+                              title={`Milestone from ${ms.sourceEncounterTitle}: ${ms.summary || ms.label}`}
+                            >
+                              <div
+                                style={{
+                                  width: '22px',
+                                  height: '22px',
+                                  borderRadius: '50%',
+                                  background: 'var(--color-purple)',
+                                  color: '#080b11',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  fontWeight: 900,
+                                  fontSize: '0.7rem',
+                                  flexShrink: 0
+                                }}
+                              >
+                                ✦
+                              </div>
+                              <div style={{ minWidth: 0 }}>
+                                <div style={{ fontSize: '0.74rem', fontWeight: 700, color: '#d8b4fe', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                  {ms.label}
+                                </div>
+                                <div style={{ fontSize: '0.66rem', color: 'var(--text-secondary)', lineHeight: 1.2, marginTop: '2px', lineClamp: 2, display: '-webkit-box', WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                                  {ms.summary || `Unlocked by ${ms.sourceEncounterTitle}`}
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+
+                          {/* Encounter Cards rendered horizontally */}
                           {matchingEncounters.length > 0 ? (
-                            matchingEncounters.map((enc) => {
+                            matchingEncounters.map((enc, encIdx) => {
                               const encStatus = enc.data_json?.status || 'planned';
                               const attached = encounterEntitiesMap.get(enc.id) || { locations: [], monsters: [], items: [], npcs: [] };
+                              const hasMilestoneEmit = milestoneEmitters.has(enc.id);
+                              const orderNum = enc.sort_order || encIdx + 1;
+                              const encType = enc.data_json?.encounter_type || enc.data_json?.type || 'combat';
 
                               return (
                                 <div
                                   key={enc.id}
+                                  id={`enc-${enc.id}`}
                                   draggable={true}
                                   onDragStart={(e) => {
                                     e.stopPropagation();
@@ -2142,117 +2945,71 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                                   onClick={() => setActiveEncounterModal(enc)}
                                   onMouseEnter={() => setHoveredEncounterId(enc.id)}
                                   onMouseLeave={() => setHoveredEncounterId(null)}
+                                  className="tapestry-encounter-card"
                                   style={{
-                                    background: encStatus === 'completed'
-                                      ? 'rgba(16, 185, 129, 0.1)'
+                                    border: hasMilestoneEmit
+                                      ? '1.5px solid var(--color-purple)'
+                                      : encStatus === 'completed'
+                                      ? '1.5px solid #10b981'
                                       : encStatus === 'in_progress'
-                                      ? 'rgba(245, 158, 11, 0.16)'
-                                      : isStagingCol
-                                      ? 'rgba(59, 130, 246, 0.08)'
-                                      : 'var(--bg-surface)',
-                                    border: `1.5px solid ${
-                                      encStatus === 'completed'
-                                        ? '#10b981'
-                                        : encStatus === 'in_progress'
-                                        ? 'var(--color-gold)'
-                                        : isStagingCol
-                                        ? 'rgba(59, 130, 246, 0.35)'
-                                        : 'var(--border-medium)'
-                                    }`,
-                                    borderRadius: '10px',
-                                    padding: encounterDensity === 'compact' ? '6px 8px' : '10px',
-                                    display: 'flex',
-                                    flexDirection: 'column',
-                                    justifyContent: 'space-between',
-                                    cursor: 'grab',
+                                      ? '1.5px solid var(--color-gold)'
+                                      : '1.5px solid var(--border-medium)',
                                     opacity: draggingEncounterId === enc.id ? 0.35 : 1,
-                                    boxShadow: hoveredEncounterId === enc.id
+                                    boxShadow: hasMilestoneEmit
+                                      ? '0 0 14px rgba(168, 85, 247, 0.3)'
+                                      : hoveredEncounterId === enc.id
                                       ? `0 0 16px ${questColor}66`
                                       : encStatus === 'in_progress'
                                       ? '0 0 10px rgba(245, 158, 11, 0.25)'
-                                      : 'none',
-                                    transform: hoveredEncounterId === enc.id ? 'translateY(-2px)' : 'none',
-                                    transition: 'all 0.15s ease'
+                                      : 'var(--shadow-sm)'
                                   }}
                                 >
-                                  <div>
-                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '4px' }}>
-                                      <span style={{ fontSize: '0.68rem', fontWeight: 800, color: questColor, display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                        <GripVertical size={11} style={{ color: 'var(--text-muted)', cursor: 'grab', flexShrink: 0 }} />
-                                        <Swords size={11} /> Scene
-                                      </span>
-                                      <span
-                                        className={`status-pill ${
-                                          encStatus === 'completed'
-                                            ? 'status-completed'
-                                            : encStatus === 'in_progress'
-                                            ? 'status-inprogress'
-                                            : 'status-planned'
-                                        }`}
-                                        style={{ fontSize: '0.62rem', padding: '1px 5px' }}
-                                      >
-                                        {encStatus === 'completed' ? '✓ Done' : encStatus === 'in_progress' ? 'Active' : 'Plan'}
-                                      </span>
-                                    </div>
-
-                                    <div style={{ fontWeight: 700, fontSize: '0.78rem', marginTop: '3px', lineHeight: 1.2, color: 'var(--text-primary)' }}>
-                                      {enc.title}
-                                    </div>
-
-                                    {encounterDensity === 'detailed' && enc.summary && (
-                                      <p style={{ margin: '3px 0 0', fontSize: '0.7rem', color: 'var(--text-secondary)', lineClamp: 2, display: '-webkit-box', WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-                                        {enc.summary}
-                                      </p>
-                                    )}
+                                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65rem', fontWeight: 800, background: 'rgba(245, 158, 11, 0.15)', color: 'var(--color-gold)', padding: '1px 5px', borderRadius: '4px' }}>
+                                      #{orderNum}
+                                    </span>
+                                    <span style={{ fontSize: '0.58rem', padding: '1px 4px', borderRadius: '4px', textTransform: 'uppercase', fontWeight: 700, background: encType === 'combat' ? 'rgba(239, 68, 68, 0.15)' : encType === 'social' ? 'rgba(59, 130, 246, 0.15)' : 'rgba(16, 185, 129, 0.15)', color: encType === 'combat' ? '#f87171' : encType === 'social' ? '#60a5fa' : '#34d399' }}>
+                                      {encType}
+                                    </span>
                                   </div>
+
+                                  <div style={{ fontWeight: 700, fontSize: '0.78rem', marginTop: '2px', lineHeight: 1.2, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={enc.title}>
+                                    {enc.title}
+                                  </div>
+
+                                  {hasMilestoneEmit && (
+                                    <div style={{ fontSize: '0.62rem', fontWeight: 700, color: '#c084fc', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                                      <span>✦ Milestone Emitter</span>
+                                    </div>
+                                  )}
 
                                   {/* Attached Entity Chips (Locations, Monsters, Loot, NPCs) */}
                                   {(attached.locations.length > 0 || attached.monsters.length > 0 || attached.items.length > 0 || attached.npcs.length > 0) && (
-                                    <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: encounterDensity === 'compact' ? '4px' : '6px', paddingTop: '4px', borderTop: '1px solid var(--border-subtle)' }}>
-                                      {attached.locations.map((loc) => (
-                                        <span
-                                          key={loc.id}
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            setActiveEntityModal(loc);
-                                          }}
-                                          style={{ fontSize: '0.64rem', color: '#34d399', background: 'rgba(16, 185, 129, 0.1)', padding: '1px 4px', borderRadius: '3px', cursor: 'pointer' }}
-                                          title={`View Location: ${loc.title}`}
-                                        >
-                                          📍 {loc.title.split(' ')[0]}
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '3px', marginTop: '4px' }}>
+                                      {attached.locations.slice(0, 2).map((loc) => (
+                                        <span key={loc.id} style={{ fontSize: '0.6rem', padding: '1px 4px', borderRadius: '3px', background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa', display: 'flex', alignItems: 'center', gap: '2px' }}>
+                                          <MapPin size={9} /> {loc.title}
                                         </span>
                                       ))}
-                                      {attached.monsters.length > 0 && (
-                                        <span
-                                          key="monsters"
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            if (attached.monsters[0]) setActiveEntityModal(attached.monsters[0]);
-                                          }}
-                                          style={{ fontSize: '0.64rem', color: '#f87171', background: 'rgba(239, 68, 68, 0.1)', padding: '1px 4px', borderRadius: '3px', cursor: 'pointer' }}
-                                          title={attached.monsters.map((m) => m.title).join(', ')}
-                                        >
-                                          👹 {attached.monsters.length}
+                                      {attached.monsters.slice(0, 2).map((m) => (
+                                        <span key={m.id} style={{ fontSize: '0.6rem', padding: '1px 4px', borderRadius: '3px', background: 'rgba(239, 68, 68, 0.15)', color: '#f87171', display: 'flex', alignItems: 'center', gap: '2px' }}>
+                                          <Skull size={9} /> {m.title}
                                         </span>
-                                      )}
-                                      {attached.items.map((it) => (
-                                        <span
-                                          key={it.id}
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            setActiveEntityModal(it);
-                                          }}
-                                          style={{ fontSize: '0.64rem', color: '#c084fc', background: 'rgba(168, 85, 247, 0.1)', padding: '1px 4px', borderRadius: '3px', cursor: 'pointer' }}
-                                          title={`View Item: ${it.title}`}
-                                        >
-                                          🎁 {it.title.split(' ')[0]}
+                                      ))}
+                                      {attached.items.slice(0, 2).map((it) => (
+                                        <span key={it.id} style={{ fontSize: '0.6rem', padding: '1px 4px', borderRadius: '3px', background: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24', display: 'flex', alignItems: 'center', gap: '2px' }}>
+                                          <Package size={9} /> {it.title}
+                                        </span>
+                                      ))}
+                                      {attached.npcs.slice(0, 2).map((n) => (
+                                        <span key={n.id} style={{ fontSize: '0.6rem', padding: '1px 4px', borderRadius: '3px', background: 'rgba(168, 85, 247, 0.15)', color: '#c084fc', display: 'flex', alignItems: 'center', gap: '2px' }}>
+                                          <Users size={9} /> {n.title}
                                         </span>
                                       ))}
                                     </div>
                                   )}
 
-                                  {/* Fast Weave Controls (if unassigned session or unassigned quest) */}
-                                  {encounterDensity === 'detailed' && (isStagingCol || isOpenRow) && (
+                                  {(isStagingCol || isOpenRow) && (
                                     <div
                                       style={{
                                         display: 'flex',
@@ -2375,6 +3132,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
           </div>
         )}
       </div>
+      )}
 
       {/* ========================================================================= */}
       {/* 5. MODAL SUITE                                                           */}
@@ -2594,6 +3352,321 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                     </div>
                   </div>
                 </div>
+
+                {/* Milestone Consequences & Cross-Quest Impacts */}
+                {(() => {
+                  const outgoingMilestones = graphData.edges.filter(
+                    (e) =>
+                      e.source_id === activeEncounterNode.id &&
+                      (e.relation_type === 'advances_quest' || e.metadata_json?.is_milestone)
+                  );
+
+                  return (
+                    <div
+                      style={{
+                        background: 'rgba(168, 85, 247, 0.06)',
+                        border: '1px solid rgba(168, 85, 247, 0.3)',
+                        borderRadius: '12px',
+                        padding: '14px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '12px'
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <span style={{ fontSize: '0.78rem', fontWeight: 800, textTransform: 'uppercase', color: '#c084fc', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          ✦ Milestone Consequences
+                        </span>
+                        <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                          Advances Other Quests
+                        </span>
+                      </div>
+
+                      {outgoingMilestones.length > 0 && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                          {outgoingMilestones.map((edge) => {
+                            const targetQ = nodeMap.get(edge.target_id);
+                            return (
+                              <div
+                                key={edge.id}
+                                style={{
+                                  background: 'rgba(168, 85, 247, 0.12)',
+                                  border: '1px solid rgba(168, 85, 247, 0.35)',
+                                  borderRadius: '8px',
+                                  padding: '8px 10px',
+                                  display: 'flex',
+                                  alignItems: 'flex-start',
+                                  justifyContent: 'space-between',
+                                  gap: '8px'
+                                }}
+                              >
+                                <div>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                    <span style={{ fontSize: '0.66rem', fontWeight: 800, textTransform: 'uppercase', color: '#e9d5ff', background: 'rgba(168, 85, 247, 0.3)', padding: '1px 5px', borderRadius: '4px' }}>
+                                      Impacts
+                                    </span>
+                                    <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                                      {targetQ ? targetQ.title : 'Target Quest'}
+                                    </span>
+                                  </div>
+                                  {edge.metadata_json?.summary && (
+                                    <div style={{ fontSize: '0.72rem', color: '#d8b4fe', marginTop: '4px', lineHeight: 1.3 }}>
+                                      {edge.metadata_json.summary}
+                                    </div>
+                                  )}
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteMilestoneImpact(edge.id)}
+                                  className="btn btn-ghost"
+                                  style={{ padding: '3px', color: 'var(--color-crimson)', flexShrink: 0 }}
+                                  title="Remove milestone impact"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* Add new milestone impact */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', paddingTop: outgoingMilestones.length > 0 ? '8px' : '0', borderTop: outgoingMilestones.length > 0 ? '1px dashed rgba(168, 85, 247, 0.25)' : 'none' }}>
+                        <span style={{ fontSize: '0.72rem', color: '#e9d5ff', fontWeight: 600 }}>
+                          Link to Storyline or Sub-Quest:
+                        </span>
+                        <select
+                          value={newMilestoneQuestId}
+                          onChange={(e) => setNewMilestoneQuestId(e.target.value)}
+                          style={{
+                            width: '100%',
+                            padding: '5px 8px',
+                            fontSize: '0.78rem',
+                            borderRadius: '6px',
+                            background: 'var(--bg-surface)',
+                            border: '1px solid rgba(168, 85, 247, 0.3)',
+                            color: 'var(--text-primary)'
+                          }}
+                        >
+                          <option value="">Select Impacted Quest...</option>
+                          {quests.map((q) => (
+                            <option key={q.id} value={q.id}>{q.title}</option>
+                          ))}
+                        </select>
+                        <input
+                          type="text"
+                          placeholder="Consequence / milestone note (e.g. Unlocks Chapter 2)"
+                          value={newMilestoneSummary}
+                          onChange={(e) => setNewMilestoneSummary(e.target.value)}
+                          style={{
+                            width: '100%',
+                            padding: '5px 8px',
+                            fontSize: '0.78rem',
+                            borderRadius: '6px',
+                            background: 'var(--bg-surface)',
+                            border: '1px solid rgba(168, 85, 247, 0.3)',
+                            color: 'var(--text-primary)'
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleAddMilestoneImpact(activeEncounterNode.id)}
+                          disabled={!newMilestoneQuestId || isSavingMilestone}
+                          className="btn btn-secondary"
+                          style={{
+                            fontSize: '0.74rem',
+                            padding: '4px 10px',
+                            color: '#c084fc',
+                            borderColor: 'rgba(168, 85, 247, 0.4)',
+                            background: 'rgba(168, 85, 247, 0.1)',
+                            opacity: (!newMilestoneQuestId || isSavingMilestone) ? 0.5 : 1,
+                            cursor: (!newMilestoneQuestId || isSavingMilestone) ? 'not-allowed' : 'pointer'
+                          }}
+                        >
+                          ✦ Link Milestone Consequence
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Scene Precedence & Branching Flows */}
+                {(() => {
+                  const incomingEdges = graphData.edges.filter(
+                    (e) => e.target_id === activeEncounterNode.id && e.relation_type === 'precedes'
+                  );
+                  const outgoingEdges = graphData.edges.filter(
+                    (e) => e.source_id === activeEncounterNode.id && e.relation_type === 'precedes'
+                  );
+
+                  return (
+                    <div
+                      style={{
+                        background: 'rgba(245, 158, 11, 0.06)',
+                        border: '1px solid rgba(245, 158, 11, 0.3)',
+                        borderRadius: '12px',
+                        padding: '14px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '12px'
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <span style={{ fontSize: '0.78rem', fontWeight: 800, textTransform: 'uppercase', color: 'var(--color-gold)', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          ⚡ Scene Flow &amp; Precedence
+                        </span>
+                        <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                          Golden Connecting Lines
+                        </span>
+                      </div>
+
+                      {/* Existing Precursor Scenes */}
+                      {incomingEdges.length > 0 && (
+                        <div>
+                          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', display: 'block', marginBottom: '4px' }}>
+                            Preceded By:
+                          </span>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                            {incomingEdges.map((edge) => {
+                              const srcNode = nodeMap.get(edge.source_id);
+                              return (
+                                <div
+                                  key={edge.id}
+                                  style={{
+                                    background: 'rgba(245, 158, 11, 0.12)',
+                                    border: '1px solid rgba(245, 158, 11, 0.3)',
+                                    borderRadius: '6px',
+                                    padding: '5px 8px',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'space-between',
+                                    gap: '6px'
+                                  }}
+                                >
+                                  <span style={{ fontSize: '0.76rem', color: 'var(--text-primary)', fontWeight: 600 }}>
+                                    ← {srcNode?.title || 'Unknown Encounter'} {edge.label ? `(${edge.label})` : ''}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeletePrecedenceEdge(edge.id)}
+                                    className="btn btn-ghost"
+                                    style={{ padding: '2px', color: 'var(--color-crimson)' }}
+                                    title="Remove link"
+                                  >
+                                    <Trash2 size={12} />
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Existing Downstream Branches */}
+                      {outgoingEdges.length > 0 && (
+                        <div>
+                          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', display: 'block', marginBottom: '4px' }}>
+                            Leads To (Branches):
+                          </span>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                            {outgoingEdges.map((edge) => {
+                              const tgtNode = nodeMap.get(edge.target_id);
+                              return (
+                                <div
+                                  key={edge.id}
+                                  style={{
+                                    background: 'rgba(245, 158, 11, 0.12)',
+                                    border: '1px solid rgba(245, 158, 11, 0.3)',
+                                    borderRadius: '6px',
+                                    padding: '5px 8px',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'space-between',
+                                    gap: '6px'
+                                  }}
+                                >
+                                  <span style={{ fontSize: '0.76rem', color: 'var(--text-primary)', fontWeight: 600 }}>
+                                    → {tgtNode?.title || 'Unknown Encounter'} {edge.label ? `[${edge.label}]` : ''}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeletePrecedenceEdge(edge.id)}
+                                    className="btn btn-ghost"
+                                    style={{ padding: '2px', color: 'var(--color-crimson)' }}
+                                    title="Remove link"
+                                  >
+                                    <Trash2 size={12} />
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Add Branch Link Controls */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', paddingTop: '6px', borderTop: '1px dashed rgba(245, 158, 11, 0.25)' }}>
+                        <span style={{ fontSize: '0.72rem', color: 'var(--color-gold)', fontWeight: 600 }}>
+                          Link to Next Scene / Branch:
+                        </span>
+                        <select
+                          value={newBranchTargetEncounterId}
+                          onChange={(e) => setNewBranchTargetEncounterId(e.target.value)}
+                          style={{
+                            width: '100%',
+                            padding: '5px 8px',
+                            fontSize: '0.78rem',
+                            borderRadius: '6px',
+                            background: 'var(--bg-surface)',
+                            border: '1px solid var(--border-medium)',
+                            color: 'var(--text-primary)'
+                          }}
+                        >
+                          <option value="">Select Next Scene...</option>
+                          {encounters
+                            .filter((e) => e.id !== activeEncounterNode.id)
+                            .map((e) => (
+                              <option key={e.id} value={e.id}>
+                                {e.title}
+                              </option>
+                            ))}
+                        </select>
+                        <input
+                          type="text"
+                          placeholder="Condition / branch label (e.g. Stealth, Combat, Success)"
+                          value={newBranchLabel}
+                          onChange={(e) => setNewBranchLabel(e.target.value)}
+                          style={{
+                            width: '100%',
+                            padding: '5px 8px',
+                            fontSize: '0.78rem',
+                            borderRadius: '6px',
+                            background: 'var(--bg-surface)',
+                            border: '1px solid var(--border-medium)',
+                            color: 'var(--text-primary)'
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleAddBranchEncounter(activeEncounterNode.id)}
+                          disabled={!newBranchTargetEncounterId || isSavingPrecedence}
+                          className="btn btn-secondary"
+                          style={{
+                            fontSize: '0.74rem',
+                            padding: '4px 10px',
+                            color: 'var(--color-gold)',
+                            borderColor: 'rgba(245, 158, 11, 0.4)',
+                            background: 'rgba(245, 158, 11, 0.1)',
+                            opacity: (!newBranchTargetEncounterId || isSavingPrecedence) ? 0.5 : 1,
+                            cursor: (!newBranchTargetEncounterId || isSavingPrecedence) ? 'not-allowed' : 'pointer'
+                          }}
+                        >
+                          ⚡ Connect Precedence Line
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Attached Entities (Monsters, Locations, Items, NPCs) */}
                 {(() => {

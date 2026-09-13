@@ -127,6 +127,31 @@ export async function createSubLocation(
   return { node, edge };
 }
 
+export async function createSubQuest(
+  campaignId: string,
+  parentQuestId: string,
+  title: string,
+  summary?: string,
+  extraData?: Record<string, any>
+): Promise<{ node: NodeItem; edge: EdgeItem }> {
+  const node = await createNode({
+    campaign_id: campaignId,
+    type: 'quest',
+    title: title.trim(),
+    summary: summary?.trim() || '',
+    data_json: { status: 'planned', ...(extraData || {}) },
+  });
+  const edge = await createEdge({
+    campaign_id: campaignId,
+    source_id: parentQuestId,
+    target_id: node.id,
+    relation_type: 'contains',
+    label: 'Contains',
+    revealed_to_players: false,
+  });
+  return { node, edge };
+}
+
 export async function searchNodes(query: string, campaignId?: string, playerMode: boolean = false): Promise<NodeItem[]> {
   const url = new URL(`${window.location.origin}/api/search`);
   url.searchParams.set('q', query);

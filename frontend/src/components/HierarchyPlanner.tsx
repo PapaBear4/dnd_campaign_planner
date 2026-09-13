@@ -509,6 +509,21 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
               </button>
             )}
 
+            {/* Add Sub-Quest (if node is a Quest) */}
+            {node.type === 'quest' && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openAddChild(node.id, 'quest');
+                }}
+                className="btn btn-secondary"
+                style={{ padding: '4px 8px', fontSize: '0.75rem', gap: '3px', color: '#60a5fa' }}
+                title="Add nested Sub-Quest or Milestone objective"
+              >
+                <Plus size={13} /> Sub-Quest
+              </button>
+            )}
+
             {/* Add Child */}
             {nextChildType && (
               <button

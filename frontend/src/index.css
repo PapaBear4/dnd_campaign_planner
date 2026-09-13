@@ -699,3 +699,265 @@ input::placeholder, textarea::placeholder {
   animation: spin 1s linear infinite;
 }
 
+/* Tapestry Evolved 2D Matrix Styles */
+.tapestry-col-spine {
+  width: 48px;
+  min-width: 48px;
+  max-width: 48px;
+  padding: 8px 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(15, 20, 32, 0.85);
+  border: 1.5px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+
+.tapestry-col-spine:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--color-gold);
+  transform: translateY(-1px);
+}
+
+.tapestry-spine-vtitle {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-family: var(--font-heading);
+  font-size: 0.72rem;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-height: 140px;
+  margin: 8px 0;
+}
+
+.tapestry-collapsed-cell {
+  width: 48px;
+  min-width: 48px;
+  max-width: 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 8px 2px;
+  background: rgba(15, 20, 32, 0.4);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.tapestry-collapsed-cell:hover {
+  background: rgba(245, 158, 11, 0.08);
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.tapestry-expanded-cell {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 14px;
+  overflow-x: auto;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: rgba(15, 20, 32, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  min-height: 96px;
+  position: relative;
+  scrollbar-width: thin;
+}
+
+.tapestry-encounter-card {
+  width: 185px;
+  min-width: 185px;
+  max-width: 185px;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  background: var(--bg-card);
+  border: 1.5px solid var(--border-medium);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  position: relative;
+  cursor: grab;
+  box-shadow: var(--shadow-sm);
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.tapestry-encounter-card:hover {
+  border-color: var(--color-gold);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5), 0 0 14px rgba(245, 158, 11, 0.2);
+}
+
+.tapestry-milestone-sync-card {
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.12) 0%, rgba(20, 22, 31, 0.9) 100%);
+  border: 1.5px dashed var(--color-purple);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  min-width: 220px;
+  max-width: 260px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+  z-index: 2;
+  box-shadow: 0 4px 14px rgba(168, 85, 247, 0.2);
+  flex-shrink: 0;
+}
+
+/* Precedence Curves & Condition Badges */
+.matrix-svg-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 5;
+  overflow: visible;
+}
+
+.matrix-curve {
+  fill: none;
+  stroke: var(--color-gold);
+  stroke-width: 2.5px;
+  stroke-linecap: round;
+  opacity: 0.85;
+  filter: drop-shadow(0 0 6px rgba(245, 158, 11, 0.45));
+  transition: all 0.15s ease;
+}
+
+.matrix-curve.dimmed {
+  opacity: 0.18;
+  stroke-dasharray: 4 4;
+  stroke-width: 1.5px;
+}
+
+.matrix-curve.highlighted {
+  opacity: 1;
+  stroke-width: 3.5px;
+  filter: drop-shadow(0 0 12px rgba(245, 158, 11, 0.8));
+}
+
+.matrix-condition-pill {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  background: rgba(15, 20, 32, 0.94);
+  border: 1px solid var(--color-gold);
+  border-radius: 12px;
+  padding: 2px 8px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: var(--color-gold);
+  white-space: nowrap;
+  pointer-events: auto;
+  z-index: 14;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.7);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.matrix-condition-pill:hover {
+  transform: translate(-50%, -50%) scale(1.05);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.9), 0 0 10px rgba(245, 158, 11, 0.5);
+  z-index: 50;
+}
+
+.matrix-condition-dot {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(15, 20, 32, 0.95);
+  border: 1.5px solid var(--color-gold);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.65rem;
+  color: var(--color-gold);
+  cursor: pointer;
+  pointer-events: auto;
+  z-index: 15;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.4);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.matrix-condition-dot:hover {
+  transform: translate(-50%, -50%) scale(1.2);
+  box-shadow: 0 0 14px rgba(245, 158, 11, 0.75), 0 2px 8px rgba(0, 0, 0, 0.8);
+  z-index: 60;
+}
+
+.matrix-condition-dot .dot-icon {
+  display: inline-block;
+  line-height: 1;
+  transform: translateY(-0.5px);
+}
+
+.matrix-condition-tooltip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  background: rgba(10, 15, 26, 0.97);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--color-gold);
+  border-radius: 8px;
+  padding: 5px 11px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #fef3c7;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.92), 0 0 12px rgba(245, 158, 11, 0.35);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.matrix-condition-tooltip::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border-width: 5px 5px 0 5px;
+  border-style: solid;
+  border-color: var(--color-gold) transparent transparent transparent;
+}
+
+.matrix-condition-tooltip.tooltip-below {
+  bottom: auto;
+  top: calc(100% + 8px);
+  transform: translateX(-50%) translateY(-4px);
+}
+
+.matrix-condition-tooltip.tooltip-below::after {
+  top: auto;
+  bottom: 100%;
+  border-width: 0 5px 5px 5px;
+  border-style: solid;
+  border-color: transparent transparent var(--color-gold) transparent;
+}
+
+.matrix-condition-dot:hover .matrix-condition-tooltip {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(-50%) translateY(0);
+}
+
+
