@@ -200,3 +200,96 @@ def test_chat_history_safe_json_serialization():
     )
     assert msg["id"] is not None
     assert msg["content"] == "Test reply"
+
+
+def test_agent_node_reordering_tools():
+    """Verify create_node, update_node, and reorder_nodes handle sort_order in agent tool dispatch."""
+    from app.models import CampaignCreate
+    camp = graph_service.create_campaign(CampaignCreate(name="Reorder Test Campaign"))
+    cid = camp.id
+
+    # 1. Create nodes with initial sort_order
+    res1 = _dispatch_tool_call(
+        "create_node",
+        {"type": "quest", "title": "Quest 1", "sort_order": 10},
+        cid,
+    )
+    assert res1["created"] is True
+    assert res1["sort_order"] == 10
+    n1_id = res1["node_id"]
+
+    res2 = _dispatch_tool_call(
+        "create_node",
+        {"type": "quest", "title": "Quest 2", "sort_order": 20},
+        cid,
+    )
+    assert res2["created"] is True
+    assert res2["sort_order"] == 20
+    n2_id = res2["node_id"]
+
+    # 2. Update node sort_order directly
+    res_upd = _dispatch_tool_call(
+        "update_node",
+        {"node_id": n1_id, "sort_order": 50},
+        cid,
+    )
+    assert res_upd["updated"] is True
+    assert res_upd["sort_order"] == 50
+    assert graph_service.get_node(n1_id).sort_order == 50
+
+    # 3. Use reorder_nodes tool to swap order (n2 first, then n1)
+    res_reorder = _dispatch_tool_call(
+        "reorder_nodes",
+        {"node_ids": [n2_id, n1_id]},
+        cid,
+    )
+    assert res_reorder["reordered"] is True
+    assert res_reorder["count"] == 2
+    assert graph_service.get_node(n2_id).sort_order == 10
+    assert graph_service.get_node(n1_id).sort_order == 20
+
+
+def test_token_efficient_database_context():
+    """Verify build_campaign_database_context produces a compact, capped summary even with many nodes."""
+    from app.models import CampaignCreate, NodeCreate
+    from app.services.ai_agent_service import build_campaign_database_context
+    camp = graph_service.create_campaign(CampaignCreate(name="Token Test Campaign", setting="Faerun"))
+    cid = camp.id
+
+    # Create 1 Arc, 12 Quests, 20 NPCs, 15 Locations
+    graph_service.create_node(NodeCreate(type="arc", title="Arc 1: Rising Shadows", campaign_id=cid), default_campaign_id=cid)
+    for i in range(12):
+        graph_service.create_node(
+            NodeCreate(type="quest", title=f"Quest {i+1}", campaign_id=cid, data_json={"status": "active" if i < 3 else "planned"}),
+            default_campaign_id=cid,
+        )
+    for i in range(20):
+        graph_service.create_node(
+            NodeCreate(type="npc", title=f"Townsperson {i+1}", campaign_id=cid),
+            default_campaign_id=cid,
+        )
+    for i in range(15):
+        graph_service.create_node(
+            NodeCreate(type="location", title=f"Crypt Room {i+1}", campaign_id=cid),
+            default_campaign_id=cid,
+        )
+
+    ctx = build_campaign_database_context(cid)
+
+    # Must contain high-level metrics
+    assert "Active Campaign Overview" in ctx
+    assert "Token Test Campaign" in ctx
+    assert "Faerun" in ctx
+    assert "Total Entities" in ctx
+    assert "Arc 1: Rising Shadows" in ctx
+    # Must cap quests to 8 and show overflow note
+    assert "Showing 8 of 12" in ctx
+    assert "(+ 4 more quests indexed" in ctx
+    # Must NOT vomit 20 NPCs or 15 Locations into the text
+    assert "Townsperson 19" not in ctx
+    assert "Crypt Room 14" not in ctx
+    # Must include the on-demand query directive
+    assert "On-Demand Graph Discovery" in ctx
+    assert "search_nodes" in ctx
+
+

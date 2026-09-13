@@ -262,5 +262,13 @@ class ApplySessionAdaptationRequest(BaseModel):
     parent_quest_id: Optional[str] = None
     player_note: Optional[Dict[str, Any]] = None
 
+class RedraftNodeRequest(BaseModel):
+    campaign_id: str
+    node: Dict[str, Any]
+    directive: str
+    current_edges: Optional[List[Dict[str, Any]]] = []
+    matched_node_id: Optional[str] = None
+
+
 
 

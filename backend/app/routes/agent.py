@@ -14,6 +14,7 @@ from app.models import (
     EdgeCreate,
     NodeCreate,
     NodeUpdate,
+    RedraftNodeRequest,
     WeaveHookRequest,
 )
 from app.services import ai_agent_service, chat_history_service, graph_service
@@ -282,6 +283,27 @@ def stop_decomposition_job(job_id: str):
         "scratchpads": job.get("scratchpads", {}),
         "message": "Decomposition halted. Intermediate progress preserved."
     }
+
+
+@router.post("/redraft-node")
+def redraft_node(request: RedraftNodeRequest):
+    """
+    Re-draft a single extracted node using AI based on a DM steering directive,
+    reconcile its structured stats (data_json), update connected edges,
+    and re-evaluate conflicts against the campaign database.
+    """
+    try:
+        res = ai_agent_service.redraft_single_node(
+            campaign_id=request.campaign_id,
+            node=request.node,
+            directive=request.directive,
+            current_edges=request.current_edges or [],
+            matched_node_id=request.matched_node_id,
+        )
+        return res
+    except Exception as e:
+        logger.exception(f"Unhandled error in redraft_node: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/apply-extracted")

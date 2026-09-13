@@ -185,3 +185,64 @@ def test_decomposition_steering_incorporates_directives(client, monkeypatch):
     assert meepo.get("custom_directive") is None
     assert meepo.get("action") in ("create", "merge")
 
+
+def test_redraft_single_node_resolves_conflict(client, monkeypatch):
+    """
+    Test that calling /api/agent/redraft-node with a resolution directive
+    updates data_json, resolves conflict_reason, and transitions match_status to exact_match.
+    """
+    from app.services import graph_service
+    from app.models import NodeCreate
+
+    monkeypatch.setattr(ai_agent_service, "_get_configured_gemini_client", lambda: (None, "offline-decomposer"))
+
+    # Ensure a canon node exists in SQLite
+    cid = "default-campaign"
+    existing = graph_service.create_node(
+        NodeCreate(
+            campaign_id=cid,
+            type="npc",
+            title="Davil Starsong",
+            subtitle="CR 5 Sun Elf",
+            summary="Doom Raiders leader",
+            content_markdown="Operates out of Waterdeep.",
+            data_json={"cr": 5, "alignment": "Neutral Good"}
+        ),
+        default_campaign_id=cid
+    )
+
+    conflict_node = {
+        "type": "npc",
+        "title": "Davil Starsong",
+        "subtitle": "CR 6 Sun Elf Bard",
+        "summary": "Imported NPC",
+        "content_markdown": "Charismatic sun elf coordinator.",
+        "data_json": {"cr": 6, "alignment": "Neutral"},
+        "match_status": "conflict",
+        "matched_node_id": existing.id,
+        "matched_node_title": "Davil Starsong",
+        "conflict_reason": "CR conflict (existing: 5 vs imported: 6) | Alignment conflict (existing: 'Neutral Good' vs imported: 'Neutral')",
+    }
+
+    resp = client.post(
+        "/api/agent/redraft-node",
+        json={
+            "campaign_id": cid,
+            "node": conflict_node,
+            "directive": "Canon stats win: keep CR 5 and Neutral Good. Link to The Yawning Portal.",
+            "current_edges": []
+        }
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    redrafted = data["node"]
+
+    assert redrafted["data_json"]["cr"] == 5
+    assert redrafted["data_json"]["alignment"] == "Neutral Good"
+    assert redrafted["match_status"] == "exact_match"
+    assert redrafted.get("conflict_reason") is None
+    assert redrafted.get("conflict_resolved") is True
+    assert redrafted.get("action") == "merge"
+    assert "DM Directive Applied" in redrafted["content_markdown"]
+
+

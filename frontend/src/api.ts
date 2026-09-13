@@ -477,6 +477,30 @@ export async function stopDecompositionJob(jobId: string): Promise<Decomposition
   return handleResponse<DecompositionJob>(res);
 }
 
+export interface RedraftNodeResponse {
+  node: any;
+  edges: any[];
+  summary: string;
+  model: string;
+  error?: string;
+}
+
+export async function agentRedraftNode(data: {
+  campaign_id: string;
+  node: any;
+  directive: string;
+  current_edges?: any[];
+  matched_node_id?: string;
+}): Promise<RedraftNodeResponse> {
+  const res = await fetch(`${BASE_URL}/api/agent/redraft-node`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return handleResponse<RedraftNodeResponse>(res);
+}
+
+
 
 
 // --- Session Transcript Adaptation ---

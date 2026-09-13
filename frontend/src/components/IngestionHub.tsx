@@ -45,6 +45,7 @@ import {
   agentApplyExtracted,
   agentApplySessionAdaptation,
   agentDecomposeAdventure,
+  agentRedraftNode,
   checkDuplicateUpload,
   createNode,
   deleteUploadedFile,
@@ -239,6 +240,8 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
   const [steeringConversation, setSteeringConversation] = useState<SteeringMessage[]>([]);
   const [feedbackInput, setFeedbackInput] = useState<string>('');
   const [isRefining, setIsRefining] = useState<boolean>(false);
+  const [redraftingNodeIndex, setRedraftingNodeIndex] = useState<number | null>(null);
+  const [redraftError, setRedraftError] = useState<{ index: number; message: string } | null>(null);
   const chatBottomRef = useRef<HTMLDivElement | null>(null);
 
   // Live Decomposition Progress Feedback & Multi-Agent Manifest
@@ -852,6 +855,53 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
       return next;
     });
   };
+
+  const handleRedraftSingleNode = async (index: number, directiveOverride?: string) => {
+    const targetNode = extractedNodes[index];
+    if (!targetNode) return;
+    const directive = (directiveOverride ?? targetNode.custom_directive ?? '').trim();
+    if (!directive) {
+      alert('Please enter a steering directive for this node.');
+      return;
+    }
+
+    setRedraftingNodeIndex(index);
+    setRedraftError(null);
+    try {
+      const res = await agentRedraftNode({
+        campaign_id: campaignId,
+        node: targetNode,
+        directive,
+        current_edges: extractedEdges,
+        matched_node_id: targetNode.matched_node_id || undefined,
+      });
+
+      if (res.error) {
+        setRedraftError({ index, message: res.error });
+      }
+
+      const updated = res.node || targetNode;
+      updated.show_other_input = false;
+      updated.custom_directive = undefined;
+      const processedUpdated = processIncomingNodes([updated])[0];
+
+      setExtractedNodes((prev) => {
+        const next = [...prev];
+        next[index] = processedUpdated;
+        return next;
+      });
+
+      if (res.edges && res.edges.length > 0) {
+        setExtractedEdges(res.edges);
+      }
+    } catch (err: any) {
+      console.error('Failed to redraft node:', err);
+      setRedraftError({ index, message: err.message || 'Failed to re-draft node' });
+    } finally {
+      setRedraftingNodeIndex(null);
+    }
+  };
+
 
   const handleSelectAll = (select: boolean) => {
     if (select) {
@@ -3595,6 +3645,30 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                               </div>
                             )}
 
+                            {/* Conflict Resolved Confirmation Banner */}
+                            {n.conflict_resolved && (
+                              <div
+                                style={{
+                                  padding: '8px 12px',
+                                  borderRadius: '6px',
+                                  background: 'rgba(16, 185, 129, 0.1)',
+                                  border: '1px solid rgba(16, 185, 129, 0.35)',
+                                  fontSize: '0.76rem',
+                                  color: 'var(--text-primary)',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '8px',
+                                  marginBottom: '6px',
+                                }}
+                              >
+                                <Check size={14} style={{ color: '#34d399', flexShrink: 0 }} />
+                                <div>
+                                  <span style={{ color: '#34d399', fontWeight: 700 }}>✓ Conflict Resolved per Directive: </span>
+                                  <span>Stats & lore aligned with canon. Staged for clean merge into <strong>{n.matched_node_title || 'existing node'}</strong>.</span>
+                                </div>
+                              </div>
+                            )}
+
                             {/* Potential Match Candidate Box with Explicit Dilemma Card */}
                             {isPotential && (
                               <div
@@ -3796,60 +3870,121 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                               </div>
                             )}
 
-                            {/* Inline Other / Custom Instruction Input */}
+                            {/* Inline Other / Custom Instruction Input with Dual Re-Drafting Option */}
                             {n.show_other_input && (
                               <div
                                 style={{
                                   display: 'flex',
-                                  alignItems: 'center',
-                                  gap: '6px',
+                                  flexDirection: 'column',
+                                  gap: '8px',
                                   marginTop: '8px',
-                                  padding: '6px 8px',
-                                  borderRadius: '6px',
-                                  background: 'var(--bg-surface)',
-                                  border: '1px solid var(--border-medium)',
+                                  padding: '10px 12px',
+                                  borderRadius: '8px',
+                                  background: 'rgba(15, 23, 42, 0.75)',
+                                  border: '1px solid var(--color-gold)',
+                                  boxShadow: '0 4px 12px rgba(0, 0, 0, 0.25)',
                                 }}
                                 onClick={(e) => e.stopPropagation()}
                               >
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.74rem', color: 'var(--color-gold)', fontWeight: 600 }}>
+                                    <Sparkles size={12} />
+                                    <span>Single-Node Steering & Conflict Resolution</span>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleOtherInput(idx)}
+                                    className="btn btn-ghost"
+                                    style={{ padding: '2px', color: 'var(--text-muted)', cursor: 'pointer' }}
+                                    title="Close steering drawer"
+                                  >
+                                    <X size={12} />
+                                  </button>
+                                </div>
+
                                 <input
                                   type="text"
                                   id={`custom-directive-${idx}`}
                                   defaultValue={n.custom_directive || ''}
-                                  placeholder='E.g. "Merge with Braford, but mark him as missing in action..."'
+                                  placeholder='E.g. "Canon stats win: keep CR 5 and Neutral Good. Link to The Yawning Portal..."'
                                   style={{
-                                    flex: 1,
-                                    background: 'transparent',
-                                    border: 'none',
+                                    width: '100%',
+                                    padding: '7px 10px',
+                                    borderRadius: '6px',
+                                    background: 'var(--bg-surface)',
+                                    border: '1px solid var(--border-medium)',
                                     color: 'var(--text-primary)',
-                                    fontSize: '0.75rem',
+                                    fontSize: '0.78rem',
                                     outline: 'none',
                                   }}
                                   onKeyDown={(e) => {
                                     if (e.key === 'Enter') {
-                                      handleSaveCustomDirective(idx, (e.target as HTMLInputElement).value);
+                                      handleRedraftSingleNode(idx, (e.target as HTMLInputElement).value);
                                     }
                                   }}
                                 />
-                                <button
-                                  type="button"
-                                  className="btn btn-sm"
-                                  style={{
-                                    padding: '2px 8px',
-                                    fontSize: '0.70rem',
-                                    borderRadius: '4px',
-                                    background: 'var(--color-gold)',
-                                    color: '#000',
-                                    fontWeight: 600,
-                                    border: 'none',
-                                    cursor: 'pointer',
-                                  }}
-                                  onClick={() => {
-                                    const input = document.getElementById(`custom-directive-${idx}`) as HTMLInputElement;
-                                    handleSaveCustomDirective(idx, input?.value || '');
-                                  }}
-                                >
-                                  Apply Directive
-                                </button>
+
+                                {redraftError && redraftError.index === idx && (
+                                  <div style={{ fontSize: '0.70rem', color: '#f87171' }}>
+                                    ⚠️ {redraftError.message}
+                                  </div>
+                                )}
+
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px', flexWrap: 'wrap' }}>
+                                  <button
+                                    type="button"
+                                    className="btn btn-ghost"
+                                    style={{
+                                      padding: '3px 10px',
+                                      fontSize: '0.72rem',
+                                      borderRadius: '6px',
+                                      color: 'var(--text-secondary)',
+                                      cursor: 'pointer',
+                                    }}
+                                    onClick={() => {
+                                      const input = document.getElementById(`custom-directive-${idx}`) as HTMLInputElement;
+                                      handleSaveCustomDirective(idx, input?.value || '');
+                                    }}
+                                    title="Save directive as note without calling AI"
+                                  >
+                                    Save as Note Only
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    disabled={redraftingNodeIndex === idx}
+                                    className="btn btn-primary"
+                                    style={{
+                                      padding: '4px 12px',
+                                      fontSize: '0.72rem',
+                                      borderRadius: '6px',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '6px',
+                                      background: 'var(--color-gold)',
+                                      color: '#000',
+                                      fontWeight: 700,
+                                      cursor: redraftingNodeIndex === idx ? 'not-allowed' : 'pointer',
+                                    }}
+                                    onClick={() => {
+                                      const input = document.getElementById(`custom-directive-${idx}`) as HTMLInputElement;
+                                      handleRedraftSingleNode(idx, input?.value || '');
+                                    }}
+                                    title="Have the AI re-draft this node and immediately re-evaluate conflicts"
+                                  >
+                                    {redraftingNodeIndex === idx ? (
+                                      <>
+                                        <Loader2 size={12} className="animate-spin" />
+                                        Re-drafting & Checking...
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Wand2 size={12} />
+                                        Re-draft Node & Re-check
+                                      </>
+                                    )}
+                                  </button>
+                                </div>
                               </div>
                             )}
                           </div>

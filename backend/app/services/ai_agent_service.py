@@ -47,31 +47,11 @@ Every node and relationship edge in the campaign supports a **Confidence Factor*
 
 ---
 
-## CRITICAL: You Have Live Database Tools — USE THEM
+## CRITICAL: LIVE DATABASE TOOLS — EXECUTE DIRECTLY
 
-You have real Python tool functions that directly read and write the campaign's SQLite database. When the DM asks you to do something, **DO IT** using your tools. Do NOT describe SQL. Do NOT tell the DM to run commands themselves. Execute the operation, confirm what you did, then summarize the outcome.
-
-### Your Tools and When to Use Them
-
-- **search_nodes(type_filter?, title_fragment?)** — Browse or filter existing graph nodes. Use first to understand what exists before creating duplicates.
-- **traverse_graph(start_node_id, depth?, relation_types?, node_types?, direction?)** — Intelligently and selectively traverse connected paths from a starting node. Selectively follows relationship types (e.g. ['contains', 'leads_to', 'located_at']) and filters by node types (e.g. ['encounter', 'npc']). Returns the rich neighborhood of nodes (titles, types, summaries, statuses) and connecting edge metadata in one operation. Use this instead of issuing dozens of serial get_node_detail queries.
-- **get_node_detail(node_id)** — Read the full content, notes, and relationships of a specific node.
-- **find_nodes_by_title(title_fragment)** — Find nodes whose title contains a word or phrase. Use to detect duplicates.
-- **list_edges_for_node(node_id)** — See every relationship touching a node. Use before merging or deleting.
-- **create_node(type, title, subtitle?, summary?, content_markdown?, data_json?, is_canon?, confidence?, lore_status?)** — Create a new graph node.
-- **update_node(node_id, type?, title?, subtitle?, summary?, content_markdown?, data_json?, confidence?, lore_status?)** — Update an existing node's type, content, metadata, or confidence without breaking connected relationships or edges.
-- **update_node_status(node_id, status)** — Quickly set a node's status (planned/active/completed/abandoned).
-- **bulk_update_node_status(updates)** — Quickly set the status ('planned', 'active', 'completed', 'abandoned') for multiple nodes at once in a single call. Use this to update entire quest tracks or encounter chains efficiently.
-- **bulk_update_node_confidence(updates)** — Quickly set the epistemic truth level ('confidence': 0.0 to 1.0) and/or status ('lore_status': 'fact', 'suspicion', 'rumor') for multiple nodes in a single call. Use this to update entire questlines, encounter groups, or rumor tracks at once.
-- **delete_node(node_id)** — Delete a single node and clean up its edges.
-- **bulk_delete_nodes(node_ids)** — Delete multiple nodes at once.
-- **merge_nodes(primary_id, duplicate_ids, merged_title?, merged_summary?, merged_content?)** — Merge duplicate nodes into one: re-points all relationships to the primary, combines content, then deletes the duplicates.
-- **deduplicate_campaign()** — Automatically audit and merge all duplicate nodes across the entire campaign graph, re-pointing relationships to canonical nodes and deleting duplicate entries from the SQLite database.
-- **set_node_canon(node_id, is_canon)** — Promote a node to official protected Canon lore (is_canon=True), or mark it as a working draft (is_canon=False).
-- **create_edge(source_id, target_id, relation_type, label?, confidence?, lore_status?)** — Create a relationship between two nodes.
-- **bulk_create_edges(edges)** — Create multiple relationships between existing nodes in a single tool call. Use this to wire multiple encounters, NPCs, and locations to their parent quests or sessions without wasting turns.
-- **delete_edge(edge_id)** — Remove a specific relationship.
-- **update_scratchpad(plan_notes)** — Maintain your internal working memory, execution plan, and progress checklist. Call this on multi-step tasks to outline your step-by-step checklist, check off completed steps, or record intermediate findings and remaining steps.
+You have live Python tool functions wired directly to the campaign's SQLite database (see attached function declarations for parameter schemas).
+- When the DM asks you to inspect, search, create, update, reorder, connect, or delete campaign content: **INVOKE YOUR TOOLS DIRECTLY**.
+- Do NOT describe hypothetical SQL or instruct the DM to run manual queries. Execute the operations, verify the receipt, and synthesize a clear summary.
 
 ### Workflow Rules
 
@@ -324,6 +304,7 @@ AGENT_TOOLS = [
                 "is_canon": {"type": "boolean", "description": "Set to true for official Canon lore (default), or false for provisional working drafts."},
                 "confidence": {"type": "number", "description": "Epistemic confidence rating from 0.0 to 1.0 (default 1.0 for facts, 0.6-0.8 for suspicions, 0.2-0.5 for rumors)."},
                 "lore_status": {"type": "string", "description": "Truth level: 'fact' (Canon 🔒), 'suspicion' (Hypothesis 🔍), or 'rumor' (Hearsay 🗣️).", "enum": ["fact", "suspicion", "rumor"]},
+                "sort_order": {"type": "integer", "description": "Explicit sort order integer for visual ordering (e.g. 10, 20, 30 for quest stack or session sequence)."},
             },
             "required": ["type", "title"],
         },
@@ -363,6 +344,7 @@ AGENT_TOOLS = [
                 "confidence": {"type": "number", "description": "New epistemic confidence rating (0.0 to 1.0, e.g. 1.0 for fact, 0.7 for suspicion, 0.4 for rumor)."},
                 "lore_status": {"type": "string", "description": "New truth status: 'fact', 'suspicion', or 'rumor'.", "enum": ["fact", "suspicion", "rumor"]},
                 "is_canon": {"type": "boolean", "description": "Set to true for official Canon lore (protected), or false for provisional working draft."},
+                "sort_order": {"type": "integer", "description": "New sort order integer for explicit visual ordering (e.g. 10, 20, 30 for quest stack or session sequence)."},
             },
             "required": ["node_id"],
         },
@@ -422,6 +404,21 @@ AGENT_TOOLS = [
                 },
             },
             "required": ["updates"],
+        },
+    },
+    {
+        "name": "reorder_nodes",
+        "description": "Reorder a sequence of nodes (such as the quest stack, session sequence, or encounter list in Campaign Tapestry or Hierarchy Planner) by setting their sort_order sequentially (10, 20, 30, ...). Pass the node IDs in the desired top-to-bottom or start-to-finish order.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "node_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Ordered list of node IDs representing the desired sequence from first to last.",
+                },
+            },
+            "required": ["node_ids"],
         },
     },
     {
@@ -663,6 +660,12 @@ def _dispatch_tool_call(tool_name: str, args: dict, campaign_id: str, scratchpad
             except (ValueError, TypeError):
                 conf_val = 1.0
             lore_status_val = str(args.get("lore_status", "fact")) if args.get("lore_status") else "fact"
+            sort_order_val = 0
+            if "sort_order" in args and args["sort_order"] is not None:
+                try:
+                    sort_order_val = int(args["sort_order"])
+                except (ValueError, TypeError):
+                    sort_order_val = 0
 
             node = graph_service.create_node(
                 NodeCreate(
@@ -676,6 +679,7 @@ def _dispatch_tool_call(tool_name: str, args: dict, campaign_id: str, scratchpad
                     is_canon=args.get("is_canon", True),
                     confidence=conf_val,
                     lore_status=lore_status_val,
+                    sort_order=sort_order_val,
                 ),
                 default_campaign_id=campaign_id,
             )
@@ -688,6 +692,7 @@ def _dispatch_tool_call(tool_name: str, args: dict, campaign_id: str, scratchpad
                 "is_canon": node.is_canon,
                 "confidence": node.confidence,
                 "lore_status": node.lore_status,
+                "sort_order": node.sort_order,
             }
 
         elif tool_name == "update_node":
@@ -709,6 +714,12 @@ def _dispatch_tool_call(tool_name: str, args: dict, campaign_id: str, scratchpad
                 conf_val = None
             lore_status_val = str(args.get("lore_status")) if args.get("lore_status") is not None else None
             is_canon_val = bool(args["is_canon"]) if "is_canon" in args and args["is_canon"] is not None else None
+            sort_order_val = None
+            if "sort_order" in args and args["sort_order"] is not None:
+                try:
+                    sort_order_val = int(args["sort_order"])
+                except (ValueError, TypeError):
+                    sort_order_val = None
 
             updated = graph_service.update_node(
                 args["node_id"],
@@ -722,6 +733,7 @@ def _dispatch_tool_call(tool_name: str, args: dict, campaign_id: str, scratchpad
                     confidence=conf_val,
                     lore_status=lore_status_val,
                     is_canon=is_canon_val,
+                    sort_order=sort_order_val,
                 ),
             )
             if not updated:
@@ -734,6 +746,7 @@ def _dispatch_tool_call(tool_name: str, args: dict, campaign_id: str, scratchpad
                 "confidence": updated.confidence,
                 "lore_status": updated.lore_status,
                 "is_canon": updated.is_canon,
+                "sort_order": updated.sort_order,
             }
 
         elif tool_name == "bulk_update_node_confidence":
@@ -749,6 +762,20 @@ def _dispatch_tool_call(tool_name: str, args: dict, campaign_id: str, scratchpad
         elif tool_name == "bulk_update_node_status":
             updates = args.get("updates", [])
             return graph_service.bulk_update_node_status(updates)
+
+        elif tool_name == "reorder_nodes":
+            node_ids = args.get("node_ids", [])
+            updated_nodes = []
+            for idx, nid in enumerate(node_ids):
+                new_order = (idx + 1) * 10
+                upd = graph_service.update_node(nid, NodeUpdate(sort_order=new_order))
+                if upd:
+                    updated_nodes.append({"id": upd.id, "title": upd.title, "sort_order": new_order})
+            return {
+                "reordered": True,
+                "count": len(updated_nodes),
+                "nodes": updated_nodes,
+            }
 
         elif tool_name == "delete_node":
             node = graph_service.get_node(args["node_id"])
@@ -1310,84 +1337,96 @@ def _get_configured_gemini_client():
 
 def build_campaign_database_context(campaign_id: str) -> str:
     """
-    Compiles a structured snapshot of the active SQLite Campaign Graph.
-    Grounds the AI agent in existing Arcs, Quests, NPCs, Factions, Locations, Monsters, and Edges.
+    Compiles a token-efficient, structured overview of the active SQLite Campaign Graph.
+    Presents total entity metrics, story backbone (Arcs & active Quests), party,
+    and prominent factions, directing the agent to use live tools
+    (search_nodes, traverse_graph, get_node_detail) for granular inspection.
     """
     campaign = get_campaign(campaign_id)
     nodes = list_nodes(campaign_id)
     edges = list_edges(campaign_id)
 
-    if not nodes:
-        return f"Campaign: {campaign.name if campaign else 'Active Campaign'}\nDatabase: Empty campaign graph. Ready for new creation."
+    camp_name = campaign.name if campaign else "Active Campaign"
+    camp_setting = campaign.setting if campaign else "D&D 5e"
 
-    id_to_title = {n.id: n.title for n in nodes}
+    if not nodes:
+        return f"Campaign: {camp_name} (Setting: {camp_setting})\nDatabase: Empty campaign graph. Ready for new creation."
 
     # Group nodes by type
     by_type: Dict[str, List[Any]] = {}
     for n in nodes:
         by_type.setdefault(n.type, []).append(n)
 
+    # Build entity distribution summary
+    type_counts = {t: len(node_list) for t, node_list in sorted(by_type.items(), key=lambda x: -len(x[1]))}
+    counts_str = ", ".join(f"{t.capitalize()}s: {cnt}" for t, cnt in type_counts.items())
+
     lines = [
-        f"### Current Campaign State (Live SQLite Database Ground Truth)",
-        f"**Campaign**: {campaign.name if campaign else 'Active Campaign'} (Setting: {campaign.setting if campaign else 'D&D 5e'})",
-        ""
+        f"### Active Campaign Overview (SQLite Database Ground Truth)",
+        f"**Campaign**: {camp_name} | **Setting**: {camp_setting}",
+        f"**Graph Metrics**: {len(nodes)} Total Entities ({counts_str}) | {len(edges)} Relationships (Edges)",
+        "",
     ]
 
     def _c_tag(node) -> str:
         return "[Canon 🔒]" if getattr(node, "is_canon", True) else "[Draft 📝]"
 
-    # Arcs & Quests hierarchy
-    if "arc" in by_type or "quest" in by_type:
-        lines.append("**Story Structure (Arcs & Quests)**:")
-        for arc in by_type.get("arc", []):
+    # 1. Story Backbone: Arcs (all Arcs, typically 2-10)
+    arcs = by_type.get("arc", [])
+    if arcs:
+        lines.append(f"**Campaign Arcs ({len(arcs)})**:")
+        for arc in arcs:
             status = arc.data_json.get("status", "planned") if arc.data_json else "planned"
-            lines.append(f"- [Arc] {_c_tag(arc)} {arc.title} [id: {arc.id}] (Status: {status}): {arc.summary}")
-        for q in by_type.get("quest", []):
+            lines.append(f"- [Arc] {_c_tag(arc)} {arc.title} [id: {arc.id}] (Status: {status})")
+        lines.append("")
+
+    # 2. Key / Active Quests (cap to top 8, prioritize active or planned)
+    quests = by_type.get("quest", [])
+    if quests:
+        status_priority = {"active": 0, "in_progress": 0, "planned": 1, "completed": 2, "abandoned": 3}
+        sorted_quests = sorted(
+            quests,
+            key=lambda q: (
+                status_priority.get(q.data_json.get("status", "planned") if q.data_json else "planned", 4),
+                q.sort_order or 0,
+            ),
+        )
+        display_quests = sorted_quests[:8]
+        lines.append(f"**Key Quests (Showing {len(display_quests)} of {len(quests)})**:")
+        for q in display_quests:
             status = q.data_json.get("status", "planned") if q.data_json else "planned"
-            lines.append(f"  * [Quest] {_c_tag(q)} {q.title} [id: {q.id}] (Status: {status}): {q.summary}")
+            lines.append(f"- [Quest] {_c_tag(q)} {q.title} [id: {q.id}] (Status: {status})")
+        if len(quests) > 8:
+            lines.append(f"  *(+ {len(quests) - 8} more quests indexed — use `search_nodes(type_filter='quest')` to inspect)*")
         lines.append("")
 
-    # Factions & NPCs
-    if "faction" in by_type or "npc" in by_type:
-        lines.append("**Factions & Key NPCs**:")
-        for f in by_type.get("faction", []):
-            lines.append(f"- [Faction] {_c_tag(f)} {f.title} [id: {f.id}]: {f.summary}")
-        for npc in by_type.get("npc", []):
-            lines.append(f"- [NPC] {_c_tag(npc)} {npc.title} [id: {npc.id}] ({npc.subtitle or 'NPC'}): {npc.summary}")
+    # 3. Player Characters (PCs - always show all, typically 3-6)
+    pcs = by_type.get("pc", [])
+    if pcs:
+        lines.append(f"**Player Characters (PCs - {len(pcs)})**:")
+        for pc in pcs:
+            lines.append(f"- [PC] {_c_tag(pc)} {pc.title} [id: {pc.id}]")
         lines.append("")
 
-    # Locations
-    if "location" in by_type:
-        lines.append("**Key Locations**:")
-        for loc in by_type.get("location", []):
-            lines.append(f"- [Location] {_c_tag(loc)} {loc.title} [id: {loc.id}] ({loc.subtitle or ''}): {loc.summary}")
+    # 4. Factions (cap to top 6)
+    factions = by_type.get("faction", [])
+    if factions:
+        lines.append(f"**Factions ({len(factions)})**:")
+        for f in factions[:6]:
+            lines.append(f"- [Faction] {_c_tag(f)} {f.title} [id: {f.id}]")
+        if len(factions) > 6:
+            lines.append(f"  *(+ {len(factions) - 6} more factions indexed)*")
         lines.append("")
 
-    # Monsters
-    if "monster" in by_type:
-        lines.append("**Monsters & Bosses**:")
-        for m in by_type.get("monster", []):
-            cr = m.data_json.get("cr", "?") if m.data_json else "?"
-            lines.append(f"- [Monster] {_c_tag(m)} {m.title} [id: {m.id}] (CR {cr}): {m.summary}")
-        lines.append("")
-
-    # Player Characters (PCs)
-    if "pc" in by_type:
-        lines.append("**Player Characters (PCs)**:")
-        for pc in by_type.get("pc", []):
-            lines.append(f"- [PC] {_c_tag(pc)} {pc.title} [id: {pc.id}]: {pc.summary}")
-        lines.append("")
-
-    # Key Relationships (Edges)
-    if edges:
-        lines.append("**Known Relationships & Connections (Edges)**:")
-        for e in edges[:25]: # Cap to 25 prominent relations
-            src = id_to_title.get(e.source_id, "Unknown")
-            tgt = id_to_title.get(e.target_id, "Unknown")
-            rel = e.relation_type.replace("_", " ")
-            label_extra = f" ('{e.label}')" if e.label and e.label != rel else ""
-            lines.append(f"- {src} --[{rel}{label_extra}]--> {tgt}")
-        lines.append("")
+    # 5. On-Demand Graph Discovery Directive
+    loc_count = type_counts.get("location", 0)
+    npc_count = type_counts.get("npc", 0)
+    mon_count = type_counts.get("monster", 0)
+    enc_count = type_counts.get("encounter", 0)
+    item_count = type_counts.get("item", 0)
+    lines.append(
+        f"> 💡 **On-Demand Graph Discovery**: The database indexes {len(nodes)} entities (including {loc_count} Locations, {npc_count} NPCs, {mon_count} Monsters, {enc_count} Encounters, and {item_count} Items). Do not assume missing entities do not exist — query them via `search_nodes`, `find_nodes_by_title`, `get_node_detail`, or `traverse_graph`."
+    )
 
     return "\n".join(lines)
 
@@ -1836,6 +1875,7 @@ def _reconcile_extracted_nodes_with_campaign(
         matched_id = n.get("matched_node_id")
         if matched_id and matched_id in id_to_existing:
             matched_node = id_to_existing[matched_id]
+            match_confidence = 1.0
         elif norm_title in exact_title_map:
             # Deterministic exact match by normalized title
             matched_node = exact_title_map[norm_title]
@@ -1909,13 +1949,23 @@ def _reconcile_extracted_nodes_with_campaign(
             if ext_fac and exist_fac and str(ext_fac).lower().strip() != str(exist_fac).lower().strip():
                 conflicts.append(f"Faction conflict (existing: '{exist_fac}' vs imported: '{ext_fac}')")
 
-            if conflicts:
+            if conflicts and not n.get("conflict_resolved"):
                 match_status = "conflict"
                 conflict_reason = " | ".join(conflicts)
+                n["conflict_resolved"] = False
+            else:
+                if n.get("conflict_resolved") or match_status == "conflict":
+                    n["conflict_resolved"] = True
+                    match_status = "exact_match" if (matched_id or norm_title == matched_node.title.lower().strip() or match_confidence >= 0.99) else "potential_match"
+                    conflict_reason = None
+                    n["dilemma_explanation"] = None
+                    if not n.get("action") or n.get("action") == "other":
+                        n["action"] = "merge"
+                elif match_status not in ("exact_match", "potential_match"):
+                    match_status = "exact_match" if (matched_id or norm_title == matched_node.title.lower().strip()) else "potential_match"
 
             n["match_status"] = match_status
-            if conflict_reason:
-                n["conflict_reason"] = conflict_reason
+            n["conflict_reason"] = conflict_reason
             if not n.get("merge_notes"):
                 n["merge_notes"] = f"Will merge with existing '{matched_node.title}' in campaign graph without losing canon notes."
 
@@ -3448,6 +3498,7 @@ CRITICAL INSTRUCTIONS FOR REFINING THE WORKING DRAFT:
    - For every node that has a 'custom_directive' or was targeted by DM feedback: rewrite or adjust its title, subtitle, summary, content_markdown, stats (data_json), or relationships to fully bake in the directive.
    - For nodes whose custom directives have been incorporated: CLEAR 'custom_directive' (set to null or omit) and set 'action' to 'merge' or 'create' as appropriate.
    - If the DM asked to split a quest or add an element, output the new node(s).
+   - CONFLICT RESOLUTION: If DM feedback or a card directive resolves a flagged contradiction (e.g. alignment, CR, disposition, faction), you MUST update 'data_json' and 'subtitle' to reflect the resolution, set 'conflict_resolved': true, and set 'action': 'merge'.
    - If all nodes are modified, you may output all; otherwise returning the modified subset prevents token truncation.
 3. "extracted_edges": Return any new or updated working draft edges.
 4. DECONFLICTION: Ensure match_status, match_confidence, matched_node_id/matched_node_title remain accurate.
@@ -3466,6 +3517,7 @@ Respond strictly in JSON matching this structure:
          "status": "planned"
       }},
       "revealed_to_players": false,
+      "conflict_resolved": false,
       "match_status": "new|exact_match|potential_match|conflict",
       "matched_node_id": "optional existing node id if matched",
       "matched_node_title": "optional existing node title if matched",
@@ -3528,6 +3580,216 @@ Respond strictly in JSON matching this structure:
             "error": str(e),
             "model": "fallback"
         }
+
+def redraft_single_node(
+    campaign_id: str,
+    node: Dict[str, Any],
+    directive: str,
+    current_edges: Optional[List[Dict[str, Any]]] = None,
+    matched_node_id: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Re-drafts a single extracted entity using AI based on a DM steering directive,
+    updates structured stats (data_json), generates/updates relevant graph edges,
+    and immediately re-evaluates conflicts against the SQLite campaign database.
+    """
+    model, model_name = _get_configured_gemini_client()
+    campaign_nodes = list_nodes(campaign_id) if campaign_id else []
+    id_to_existing = {n.id: n for n in campaign_nodes}
+
+    # Locate target matched campaign node if any
+    target_id = matched_node_id or node.get("matched_node_id")
+    matched_campaign_node = None
+    if target_id and target_id in id_to_existing:
+        matched_campaign_node = id_to_existing[target_id]
+    else:
+        norm_title = (node.get("title") or "").strip().lower()
+        for cand in campaign_nodes:
+            if cand.title.strip().lower() == norm_title:
+                matched_campaign_node = cand
+                break
+
+    matched_info = "None (this is a new entity without an existing campaign match)"
+    if matched_campaign_node:
+        matched_info = json.dumps({
+            "id": matched_campaign_node.id,
+            "title": matched_campaign_node.title,
+            "subtitle": matched_campaign_node.subtitle,
+            "type": matched_campaign_node.type,
+            "summary": matched_campaign_node.summary,
+            "content_markdown": (matched_campaign_node.content_markdown or "")[:1500],
+            "data_json": matched_campaign_node.data_json or {}
+        }, indent=2)
+
+    node_title = node.get("title", "")
+    related_edges = [
+        e for e in (current_edges or [])
+        if e.get("source_title") == node_title or e.get("target_title") == node_title
+    ]
+
+    # Offline mode handler
+    if not model:
+        updated = dict(node)
+        dir_lower = directive.lower()
+        curr_content = (updated.get("content_markdown") or "").strip()
+        data = dict(updated.get("data_json") or {})
+
+        conflict_resolved = False
+        if matched_campaign_node:
+            exist_data = matched_campaign_node.data_json or {}
+            if any(k in dir_lower for k in ("canon", "keep", "resolve", "agree", "accept", "cr", "alignment", "disposition", "faction")):
+                if "canon" in dir_lower or "keep" in dir_lower or "resolve" in dir_lower:
+                    for field in ("cr", "alignment", "disposition", "faction"):
+                        if field in exist_data:
+                            data[field] = exist_data[field]
+                if "cr" in dir_lower and "cr" in exist_data:
+                    data["cr"] = exist_data["cr"]
+                if ("alignment" in dir_lower or "neutral" in dir_lower or "good" in dir_lower or "evil" in dir_lower or "lawful" in dir_lower or "chaotic" in dir_lower) and "alignment" in exist_data:
+                    data["alignment"] = exist_data["alignment"]
+                if "faction" in dir_lower and "faction" in exist_data:
+                    data["faction"] = exist_data["faction"]
+                if "disposition" in dir_lower and "disposition" in exist_data:
+                    data["disposition"] = exist_data["disposition"]
+                conflict_resolved = True
+
+        updated["data_json"] = data
+        directive_tag = f"**DM Directive Applied**: {directive}"
+        if directive_tag not in curr_content:
+            updated["content_markdown"] = f"{curr_content}\n\n{directive_tag}".strip()
+        updated["summary"] = f"{updated.get('summary', '')} ({directive})".strip()
+        updated["custom_directive"] = None
+        if conflict_resolved:
+            updated["conflict_resolved"] = True
+            updated["action"] = "merge"
+            updated["conflict_reason"] = None
+            updated["match_status"] = "exact_match"
+
+        # Edge generation for offline mode
+        new_edges = list(current_edges or [])
+        for cn in campaign_nodes:
+            if cn.title.lower() in dir_lower and cn.title.lower() != node_title.lower():
+                edge_exists = any(
+                    e.get("source_title") == node_title and e.get("target_title") == cn.title
+                    for e in new_edges
+                )
+                if not edge_exists:
+                    new_edges.append({
+                        "source_title": node_title,
+                        "target_title": cn.title,
+                        "relation_type": "allied_with" if any(w in dir_lower for w in ("allied", "ally", "friend")) else "located_at" if any(w in dir_lower for w in ("located", "portal", "tavern", "room", "in")) else "connected_to",
+                        "label": f"Connected per DM directive: '{directive}'"
+                    })
+
+        reconciled_list = _reconcile_extracted_nodes_with_campaign([updated], campaign_id)
+        final_node = reconciled_list[0] if reconciled_list else updated
+        return {
+            "node": final_node,
+            "edges": new_edges,
+            "summary": f"Re-drafted '{node_title}' per directive: '{directive}'.",
+            "model": "offline-decomposer"
+        }
+
+    # Online Gemini prompt
+    db_context = build_campaign_database_context(campaign_id)
+    prompt = f"""You are an expert D&D 5e adventure analyst and Co-DM architect.
+The Dungeon Master has provided a specific steering directive to re-draft this single entity node, resolve any contradictions with existing campaign canon, and update connected edges.
+
+CURRENT DRAFT NODE:
+{json.dumps(node, indent=2)}
+
+EXISTING CANON CAMPAIGN RECORD (IF MATCHED):
+{matched_info}
+
+CURRENT DRAFT EDGES CONNECTED TO THIS NODE:
+{json.dumps(related_edges, indent=2)}
+
+DM'S SPECIFIC DIRECTIVE FOR THIS NODE:
+\"\"\"{directive}\"\"\"
+
+EXISTING CAMPAIGN CONTEXT:
+{db_context}
+
+CRITICAL INSTRUCTIONS:
+1. Re-draft this node: Update 'title', 'subtitle', 'summary', 'content_markdown', and 'data_json' (attributes, CR, alignment, disposition, faction).
+2. CONFLICT RESOLUTION:
+   - If the directive resolves a contradiction with canon (e.g. "Canon wins", "Keep CR 5", "Make him Neutral Good", "Accept book stats", etc.), you MUST adjust 'data_json' (and 'subtitle'/'content_markdown') so the contradiction is resolved.
+   - Set "conflict_resolved": true and "action": "merge" (or "create" if DM explicitly wants a separate entity).
+3. RE-DRAFT EDGES:
+   - Propose any new or updated edges connecting this node to other draft entities or existing campaign records (locations, factions, NPCs) mentioned in the directive or narrative context.
+4. "resolution_summary": Address the DM directly explaining what changes you made and how the conflict was settled.
+
+Respond strictly in JSON matching this schema:
+{{
+  "resolution_summary": "Explanation of changes made to the node and how contradictions were resolved",
+  "node": {{
+    "type": "{node.get('type', 'npc')}",
+    "title": "{node.get('title', '')}",
+    "subtitle": "Updated subtitle or CR/Role",
+    "summary": "1-2 sentence synopsis",
+    "content_markdown": "Full formatted markdown details with directive incorporated",
+    "data_json": {{}},
+    "revealed_to_players": false,
+    "conflict_resolved": true,
+    "action": "merge|create|skip"
+  }},
+  "edges": [
+    {{
+      "source_title": "Source Name",
+      "target_title": "Target Name",
+      "relation_type": "allied_with|located_at|member_of|hostile_to|gives_quest|connected_to",
+      "label": "Relationship description"
+    }}
+  ]
+}}
+"""
+    try:
+        response = model.generate_content(
+            prompt,
+            generation_config={"response_mime_type": "application/json", "max_output_tokens": 4096}
+        )
+        data = _safe_json_loads(response.text)
+        res_node = data.get("node") or dict(node)
+
+        # Merge with existing preserving provenance & metadata
+        merged_node = dict(node)
+        for k, v in res_node.items():
+            if v is not None:
+                merged_node[k] = v
+        merged_node["custom_directive"] = None
+        if data.get("node", {}).get("conflict_resolved"):
+            merged_node["conflict_resolved"] = True
+
+        reconciled_list = _reconcile_extracted_nodes_with_campaign([merged_node], campaign_id)
+        final_node = reconciled_list[0] if reconciled_list else merged_node
+
+        out_edges = list(current_edges or [])
+        returned_edges = data.get("edges") or []
+        for re in returned_edges:
+            st = re.get("source_title")
+            tt = re.get("target_title")
+            if st and tt and not any(e.get("source_title") == st and e.get("target_title") == tt for e in out_edges):
+                out_edges.append(re)
+
+        return {
+            "node": final_node,
+            "edges": out_edges,
+            "summary": data.get("resolution_summary", f"Re-drafted {node_title} per directive."),
+            "model": model_name
+        }
+    except Exception as e:
+        logger.error(f"Error in redraft_single_node: {e}")
+        updated = dict(node)
+        updated["content_markdown"] = f"{updated.get('content_markdown', '')}\n\n**DM Directive Applied**: {directive}".strip()
+        updated["custom_directive"] = None
+        reconciled = _reconcile_extracted_nodes_with_campaign([updated], campaign_id)
+        return {
+            "node": reconciled[0] if reconciled else updated,
+            "edges": current_edges or [],
+            "summary": f"Directive applied (local fallback): {e}",
+            "error": str(e),
+            "model": "fallback"
+        }
+
 
 def adapt_campaign_from_transcript(
     transcript_text: str,

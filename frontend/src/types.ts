@@ -177,6 +177,7 @@ export interface ExtractedDraftNode {
   matched_node_title?: string | null;
   match_confidence?: number;
   conflict_reason?: string | null;
+  conflict_resolved?: boolean;
   dilemma_explanation?: string | null;
   review_options?: string[];
   needs_statblock?: boolean;

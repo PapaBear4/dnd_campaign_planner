@@ -8,6 +8,8 @@ Completed:
 
 Next:
 
+- [ ] Color corrections in parchment chat
+- [ ] horizontal collaps of Sessions and Arcs for better visualization
 - [ ] Multimodal Map Vision & Pin Alignment:
   - Enable Gemini vision on uploaded map images to detect keyed rooms, labels, landmarks, and relative `(x, y)` coordinates.
   - Ability to direct the agent to place pins for **existing nodes** (Locations, Encounters, NPCs, Clues) by matching room numbers or landmarks without creating duplicates.
@@ -20,3 +22,5 @@ Later:
 - Different "modes" or views for the player portal (e.g. story view, map view, character view, etc.)
 - build a faction and renown management mechanic
 - integrate battle buddy and the tavern modules
+- Role/Task-Specific System Prompts (Mode Switching): Separate operational mode (ultra-lean prompt for graph updates, reordering, status toggles) from creative Co-DM mode (worldbuilding, dialogue, boxed text)
+- Explicit Context Caching (`genai.caching.CachedContent`) for large campaigns, sourcebooks, and adventure modules exceeding 32k tokens
