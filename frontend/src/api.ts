@@ -693,4 +693,34 @@ export async function placeMapPin(data: {
   return handleResponse<any>(res);
 }
 
+export interface GenerateRunSheetResponse {
+  success: boolean;
+  session_id: string;
+  session_title: string;
+  run_sheet_markdown: string;
+  previous_session_title: string;
+  next_session_title?: string | null;
+  beat_count: number;
+  saved: boolean;
+  model: string;
+  error?: string;
+}
+
+export async function generateSessionRunSheet(
+  sessionId: string,
+  data: {
+    campaign_id?: string;
+    custom_instruction?: string;
+    save_to_node?: boolean;
+    use_llm?: boolean;
+  } = {}
+): Promise<GenerateRunSheetResponse> {
+  const res = await fetch(`${BASE_URL}/api/agent/session/${sessionId}/generate-run-sheet`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return handleResponse<GenerateRunSheetResponse>(res);
+}
+
 

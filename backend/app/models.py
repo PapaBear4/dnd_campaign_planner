@@ -296,3 +296,10 @@ class PlaceMapPinRequest(BaseModel):
     node_id: Optional[str] = None
     revealed: Optional[bool] = True
     target_map_id: Optional[str] = None
+
+class GenerateRunSheetRequest(BaseModel):
+    campaign_id: Optional[str] = None
+    custom_instruction: Optional[str] = ""
+    save_to_node: Optional[bool] = True
+    use_llm: Optional[bool] = False
+

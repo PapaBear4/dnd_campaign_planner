@@ -495,14 +495,17 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
       const res = await uploadFile(file, category, campaignId, replace);
       setUploadedFilename(res.filename);
       setOriginalName(res.original_name);
+      let parsedPdfText = '';
       if (res.page_count) {
         setTotalPages(res.page_count);
         setEndPage(res.page_count); // Default to full document — DM can narrow range if needed
-      } else if (res.original_name.toLowerCase().endsWith('.pdf')) {
+      }
+      if (res.original_name.toLowerCase().endsWith('.pdf')) {
         try {
-          const pdfInfo = await parsePdfDocument(res.filename, 50);
-          setTotalPages(pdfInfo.total_pages || 1);
-          setEndPage(pdfInfo.total_pages || 1); // Full document by default
+          const pdfInfo = await parsePdfDocument(res.filename, 100);
+          setTotalPages(pdfInfo.total_pages || res.page_count || 1);
+          setEndPage(pdfInfo.total_pages || res.page_count || 1);
+          parsedPdfText = pdfInfo.combined_text || '';
         } catch {
           // fallback default
         }
@@ -510,8 +513,12 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
 
       if (category === 'transcript') {
         try {
-          const text = await file.text();
-          setSessionTranscript(text);
+          if (res.original_name.toLowerCase().endsWith('.pdf') && parsedPdfText) {
+            setSessionTranscript(parsedPdfText);
+          } else {
+            const text = await file.text();
+            setSessionTranscript(text);
+          }
         } catch {}
       }
 
@@ -533,9 +540,14 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
     if (doc.category === 'transcript') {
       setActiveCategory('session');
       try {
-        const resp = await fetch(doc.url);
-        const text = await resp.text();
-        setSessionTranscript(text);
+        if (doc.filename.toLowerCase().endsWith('.pdf') || doc.original_name.toLowerCase().endsWith('.pdf')) {
+          const pdfInfo = await parsePdfDocument(doc.filename, 100);
+          setSessionTranscript(pdfInfo.combined_text || '');
+        } else {
+          const resp = await fetch(doc.url);
+          const text = await resp.text();
+          setSessionTranscript(text);
+        }
       } catch {}
     } else if (doc.category === 'pdf') {
       setActiveCategory('book');

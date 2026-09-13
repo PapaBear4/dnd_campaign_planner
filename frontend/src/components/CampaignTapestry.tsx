@@ -49,6 +49,7 @@ import {
 import { GraphData, NodeItem, NodeType } from '../types';
 import { MarkdownView } from './MarkdownView';
 import { QuestFlowchart } from './QuestFlowchart';
+import { RunSheetModal } from './RunSheetModal';
 
 interface CampaignTapestryProps {
   campaignId: string;
@@ -153,6 +154,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
   const [activeEncounterNode, setActiveEncounterNode] = useState<NodeItem | null>(null);
   const [activeQuestNode, setActiveQuestNode] = useState<NodeItem | null>(null);
   const [activeSessionNode, setActiveSessionNode] = useState<NodeItem | null>(null);
+  const [runSheetSessionNode, setRunSheetSessionNode] = useState<NodeItem | null>(null);
   const [activeArcNode, setActiveArcNode] = useState<NodeItem | null>(null);
   const [activeEntityNode, setActiveEntityNode] = useState<NodeItem | null>(null);
 
@@ -2082,18 +2084,32 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                             {sess.data_json?.status === 'completed' ? '✓ Done' : isCurrent ? '● Active' : 'Plan'}
                           </span>
                         </div>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleSessionCollapse(sess.id);
-                          }}
-                          className="btn btn-ghost"
-                          style={{ fontSize: '0.65rem', padding: '1px 6px', height: '20px', gap: '3px', color: 'var(--text-muted)' }}
-                          title="Fold session column"
-                        >
-                          ◀ Fold
-                        </button>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setRunSheetSessionNode(sess);
+                            }}
+                            className="btn btn-ghost"
+                            style={{ fontSize: '0.62rem', padding: '1px 5px', height: '20px', gap: '3px', color: 'var(--color-gold)' }}
+                            title="Open Session Run-Sheet"
+                          >
+                            <BookOpen size={10} /> Run-Sheet
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleSessionCollapse(sess.id);
+                            }}
+                            className="btn btn-ghost"
+                            style={{ fontSize: '0.65rem', padding: '1px 6px', height: '20px', gap: '3px', color: 'var(--text-muted)' }}
+                            title="Fold session column"
+                          >
+                            ◀ Fold
+                          </button>
+                        </div>
                       </div>
                       <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-primary)', marginTop: '4px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {sess.title}
@@ -3968,19 +3984,42 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                   <Mic size={14} /> Ingest Audio Transcript
                 </button>
               )}
-              <button
-                onClick={() => {
-                  onSelectNode(activeSessionNode);
-                  setActiveSessionNode(null);
-                }}
-                className="btn btn-primary"
-                style={{ fontSize: '0.8rem' }}
-              >
-                Inspect Session
-              </button>
+                <button
+                  onClick={() => {
+                    setRunSheetSessionNode(activeSessionNode);
+                    setActiveSessionNode(null);
+                  }}
+                  className="btn btn-secondary"
+                  style={{ fontSize: '0.8rem', color: 'var(--color-gold)', borderColor: 'rgba(245, 158, 11, 0.4)' }}
+                >
+                  <BookOpen size={14} /> Open Run-Sheet
+                </button>
+                <button
+                  onClick={() => {
+                    onSelectNode(activeSessionNode);
+                    setActiveSessionNode(null);
+                  }}
+                  className="btn btn-primary"
+                  style={{ fontSize: '0.8rem' }}
+                >
+                  Inspect Session
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        )}
+
+      {/* C2. RUN-SHEET STUDIO MODAL */}
+      {runSheetSessionNode && (
+        <RunSheetModal
+          sessionNode={runSheetSessionNode}
+          campaignId={campaignId || graphData.nodes[0]?.campaign_id || 'default-campaign'}
+          onClose={() => setRunSheetSessionNode(null)}
+          onSaveNode={(updatedNode) => {
+            onRefresh();
+            setRunSheetSessionNode(updatedNode);
+          }}
+        />
       )}
 
       {/* D. ARC MODAL */}

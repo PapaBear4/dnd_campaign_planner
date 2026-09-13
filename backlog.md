@@ -35,9 +35,21 @@ Completed:
   - Cross-quest milestone emitter/receiver flow badges with jump navigation
   - Full authoring controls in encounter and quest modals (precedence edges, milestone connections, reordering)
 
+- [x] Timeline-Centric Session Run-Sheet Studio:
+  - Sequential chronological timeline pipeline (Recap -> Atmosphere -> Sequential Beats -> Climax -> Cliffhanger).
+  - Automated discovery and synthesis of previous session recap ("The Story So Far").
+  - Concise roleplay/tactical profiles for NPCs and monsters without full stat blocks.
+  - Dedicated `RunSheetModal` with interactive timeline view, live markdown editor, and SQLite persistence.
+  - One-click Download (.md) and dedicated print stylesheet (`@media print`) for paper-optimized DM screen handouts.
+  - Co-DM agent generation endpoint (`POST /api/agent/session/{session_id}/generate-run-sheet`) and function tool `generate_session_run_sheet`.
+  - Accessible via session column headers in Campaign Tapestry and within TimelineModal.
+
 Next:
 
 - [ ] Color corrections in parchment chat
+- [ ] Create a specialized prompt for ingesting PC sheets that don't chunk.
+- [ ] encounters without a predecessor should stack at the beginning of whatever session they're part of. Or if there's a lot of them (like in world events) it should be a grid.
+- [ ] Prep staging and world events should both default to folded.
 
 Later:
 

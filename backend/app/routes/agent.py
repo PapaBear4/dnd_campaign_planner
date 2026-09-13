@@ -19,6 +19,7 @@ from app.models import (
     RedraftNodeRequest,
     ScanMapVisionRequest,
     WeaveHookRequest,
+    GenerateRunSheetRequest,
 )
 from app.services import ai_agent_service, chat_history_service, graph_service, map_vision_service
 
@@ -502,6 +503,27 @@ def apply_session_adaptation(request: ApplySessionAdaptationRequest):
         parent_quest_id=request.parent_quest_id,
         player_note=request.player_note
     )
+
+
+@router.post("/session/{session_id}/generate-run-sheet")
+def generate_session_run_sheet_endpoint(session_id: str, request: GenerateRunSheetRequest):
+    cid = request.campaign_id or graph_service.get_setting("active_campaign_id", "default-campaign")
+    try:
+        res = ai_agent_service.generate_session_run_sheet(
+            session_id=session_id,
+            campaign_id=cid,
+            custom_instruction=request.custom_instruction or "",
+            save_to_node=request.save_to_node if request.save_to_node is not None else True,
+            use_llm=bool(request.use_llm)
+        )
+        if not res.get("success", False):
+            raise HTTPException(status_code=400, detail=res.get("error", "Failed to generate run-sheet"))
+        return res
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating run-sheet for session {session_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # --- Map Vision & Alignment Endpoints ---

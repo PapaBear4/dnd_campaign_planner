@@ -1,8 +1,10 @@
 import difflib
+from datetime import datetime
 import json
 import logging
 import os
 from pathlib import Path
+import re
 from typing import Any, Dict, List, Optional, Tuple
 import uuid
 import pypdf
@@ -206,6 +208,21 @@ When roleplaying an NPC or brainstorming monster tactics, dialogue, or dilemmas:
   - **Beast (`beast`)**: Wildlife, primal reactions to territory, fire, hunger, and wounded prey.
   - **Minion / Grunt (`minion`)**: Swarm tactics, cowardly when isolated, panics or flees if commander falls.
   - **Patron (`patron`)**: Cosmic, transactional, grants boons with hidden prices, communicates through visions, tests, and omens.
+
+---
+
+### SESSION RUN-SHEET DESIGN STANDARDS (TIMELINE-CENTRIC DM COMPANION)
+
+When generating a game session run-sheet, table agenda, or session prep guide:
+1. **Strict Timeline-Centric Flow**: The run-sheet MUST flow sequentially and chronologically from table start to table finish. The DM should never have to flip back and forth between disparate sections or tabs during play.
+2. **Brief Recap of Last Session ("The Story So Far")**: Always lead with a 2-4 bullet point executive recap of what transpired in the previous session (or campaign kickoff prologue if Session 1), highlighting active cliffhangers, ongoing party conditions, and immediate stakes.
+3. **Pacing Time Budgets**: Provide a realistic 3.5 to 4.0 hour table budget broken down across the beats (e.g. `0:00 - 0:30 Opening Atmosphere`, `0:30 - 1:30 The Brawl`, etc.).
+4. **NPC & Monster Descriptions (LEAVE FULL STAT BLOCKS OUT)**:
+   - Do NOT output full stat blocks (no AC, HP, spell lists, or stat arrays — the DM manages stat blocks elsewhere).
+   - DO provide concise, evocative roleplay/tactical profiles: 1-2 sentence sensory description and demeanor, alignment, 5e tactical role, and primary goal/motive.
+5. **Read-Aloud Boxed Text**: Include 2-4 punchy, multi-sensory sentences formatted in blockquotes (`> ...`) for the opening scene and major transition reveals.
+6. **Inline Table Cues & Fail-Forward**: Embed relevant Skill DCs (Perception, Insight, Athletics), secrets/clues, and explicit fail-forward branches directly inside each beat so play never stalls on a failed roll.
+7. **Session Climax & Cliffhanger Hook**: Conclude with the dramatic session climax and a suspenseful cliffhanger bridging directly into the next planned session.
 """
 
 # ---------------------------------------------------------------------------
@@ -591,6 +608,20 @@ AGENT_TOOLS = [
             "required": ["map_id"],
         },
     },
+    {
+        "name": "generate_session_run_sheet",
+        "description": "Generate a comprehensive, timeline-centric DM run-sheet for a game session. Automatically gathers the previous session recap, chronological timeline beats, encounters in sequence, NPCs/monsters (with brief descriptions and tactical motives, no full stat blocks), read-aloud boxed text, and inline DCs. Can also save directly to the session node.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "description": "ID of the session node to generate the run-sheet for."},
+                "custom_instruction": {"type": "string", "description": "Optional instructions, e.g. pacing focus, character spotlight, or specific table duration."},
+                "save_to_node": {"type": "boolean", "description": "Whether to save the generated run-sheet directly to the session node (default True)."},
+                "use_llm": {"type": "boolean", "description": "Whether to use LLM for creative embellishment (default False: uses instant, rich deterministic graph generation)."}
+            },
+            "required": ["session_id"],
+        },
+    },
 ]
 
 
@@ -931,6 +962,15 @@ def _dispatch_tool_call(tool_name: str, args: dict, campaign_id: str, scratchpad
                 apply_changes=True,
             )
             return res
+
+        elif tool_name == "generate_session_run_sheet":
+            return generate_session_run_sheet(
+                session_id=args["session_id"],
+                campaign_id=campaign_id,
+                custom_instruction=args.get("custom_instruction", ""),
+                save_to_node=bool(args.get("save_to_node", True)),
+                use_llm=bool(args.get("use_llm", False)),
+            )
 
         else:
             return {"error": f"Unknown tool: {tool_name}"}
@@ -1907,6 +1947,571 @@ Return JSON with this schema:
             "suggested_nodes": [],
             "model": "fallback"
         }
+
+
+def _format_encounter_content_for_beat(raw_content: str) -> str:
+    """
+    Cleans and nests an encounter's markdown content to fit seamlessly
+    under a timeline beat without duplicating titles or breaking outline hierarchy.
+    """
+    if not raw_content or not raw_content.strip():
+        return ""
+    lines = raw_content.strip().split("\n")
+    cleaned_lines = []
+    in_preamble = True
+
+    for line in lines:
+        stripped = line.strip()
+        if in_preamble:
+            if stripped.lower().startswith("# encounter:") or (stripped.startswith("# ") and not stripped.startswith("###")):
+                continue
+            if any(stripped.lower().startswith(prefix) for prefix in ("**type:", "**level:", "**location:")):
+                continue
+            if stripped in ("---", "***") or not stripped:
+                continue
+            in_preamble = False
+
+        # Demote H1, H2, and H3 headings so they nest properly under Beat (which is H3)
+        if line.startswith("# "):
+            line = "#### " + line[2:]
+        elif line.startswith("## "):
+            line = "#### " + line[3:]
+        elif line.startswith("### "):
+            line = "#### " + line[4:]
+
+        cleaned_lines.append(line)
+
+    return "\n".join(cleaned_lines).strip()
+
+
+def _build_detailed_graph_run_sheet(
+    session_node,
+    prev_session_info: dict,
+    next_session_info: Optional[dict],
+    camp_name: str,
+    camp_setting: str,
+    structured_beats: list,
+    pc_summaries: list,
+    custom_instruction: str = ""
+) -> str:
+    """
+    Deterministically builds an exceptionally detailed, timeline-centric DM run-sheet
+    from the SQLite graph without calling an external LLM.
+    Embeds full read-aloud boxed text, tactical mechanics, DCs, fail-forwards,
+    connected NPCs/monsters (without raw stat blocks), clues, items, and next-session hooks.
+    """
+    session_data = session_node.data_json or {}
+    session_date = session_data.get("session_date", "Session Day")
+    session_agenda = session_data.get("agenda", session_node.summary or "Progress the main adventure arc.")
+
+    lines = [
+        f"# 📜 Run-Sheet: {session_node.title}",
+        f"",
+        f"> **Campaign:** {camp_name} ({camp_setting}) | **Date / Timing:** {session_date} | **Target Duration:** 3.5 – 4.0 Hours",
+        f"> **Core Agenda / Objective:** {session_agenda}",
+        f"",
+        f"---",
+        f"",
+        f"## ⏱️ Table Pacing & Time Budget",
+        f"| Table Time | Segment / Beat | Dramatic Focus & Mode |",
+        f"| :--- | :--- | :--- |",
+        f"| **0:00 – 0:20** | **Recap & Opening Atmosphere** | Table settle, 'Story So Far' recap, sensory scene setting |",
+    ]
+
+    # Dynamically allocate beat time slots across a 4-hour window
+    num_beats = len(structured_beats)
+    if num_beats == 1:
+        time_slots = [("0:20 – 3:30", "Main Adventure Arc")]
+    elif num_beats == 2:
+        time_slots = [("0:20 – 1:50", "Part I"), ("1:50 – 3:35", "Part II")]
+    elif num_beats == 3:
+        time_slots = [("0:20 – 1:15", "Beat 1"), ("1:15 – 2:30", "Beat 2"), ("2:30 – 3:35", "Beat 3")]
+    elif num_beats == 4:
+        time_slots = [("0:20 – 1:10", "Beat 1"), ("1:10 – 2:00", "Beat 2"), ("2:00 – 2:50", "Beat 3"), ("2:50 – 3:40", "Beat 4")]
+    else:
+        time_slots = [(f"Beat {idx + 1}", f"Beat {idx + 1}") for idx in range(num_beats)]
+
+    for idx, beat in enumerate(structured_beats):
+        slot = time_slots[idx][0] if idx < len(time_slots) else f"Beat {idx + 1}"
+        clean_beat_name = re.sub(r'^(Encounter:\s*)+', '', beat['title'], flags=re.IGNORECASE).strip()
+        lines.append(
+            f"| **{slot}** | **{clean_beat_name}** | {beat['encounter_type']} ({beat['difficulty']}) — {beat['summary'][:60]}... |"
+        )
+
+    lines.extend([
+        f"| **3:35 – 4:00** | **Climax & Session Wrap-Up** | Final resolution, cliffhanger hook, loot & milestones |",
+        f"",
+        f"---",
+        f"",
+        f"## 📜 The Story So Far (Last Session Recap)",
+        f"*Read or paraphrase directly to the party as the game begins:*",
+        f"",
+        f"> 📖 **Recap — Following: {prev_session_info['title']}**",
+        f"> ",
+    ])
+
+    prev_summary = prev_session_info.get("summary", "").strip()
+    if prev_summary:
+        lines.append(f"> - {prev_summary}")
+    else:
+        lines.append(f"> - The party gathered their gear and forged their initial bond amidst the backdrop of {camp_setting}.")
+
+    prev_excerpt = prev_session_info.get("content_excerpt", "").strip()
+    if prev_excerpt and len(prev_excerpt) > 40:
+        cleaned_excerpt = re.sub(r'#+\s*', '', prev_excerpt[:250]).strip()
+        lines.append(f"> - *Prior events:* {cleaned_excerpt}...")
+
+    lines.extend([
+        f"> - *Current Momentum:* The party opens this session with immediate decisions and unresolved tensions from their previous exploits.",
+        f"",
+    ])
+
+    # Party Roster
+    if pc_summaries:
+        lines.extend([
+            f"### 🛡️ Active Adventurers (Party Roster)",
+            f"*Keep player backgrounds and passive awareness in mind during social & tactical checks:*",
+        ])
+        for pc_line in pc_summaries:
+            lines.append(pc_line)
+        lines.append("")
+
+    lines.extend([
+        f"---",
+        f"",
+        f"## 🎭 Scene 1: Setting the Atmosphere & Immediate Spark",
+        f"*{session_node.title} — Opening table read-aloud prompt:*",
+        f"",
+        f"> 📜 The air carries the distinctive chill and ambient hum of {camp_setting}. Shadows stretch across "
+        f"worn flagstones and murmurs of local gossip drift through the air. The choices of yesterday linger, "
+        f"but an immediate disturbance demands your attention before you can finish your drink.",
+        f"",
+        f"- **Sensory Details:** Faint smell of roasted meats, pipeweed, and damp earth; muffled clinking of coins and tankards; sudden cessation of ambient chatter.",
+        f"- **Immediate Catalyst:** A confrontation, commotion, or urgent arrival pulls the party directly into the action without hesitation.",
+        f"",
+        f"---",
+        f"",
+        f"## ⏳ Chronological Beat Timeline",
+        f"",
+    ])
+
+    if not structured_beats:
+        lines.extend([
+            f"### ⏳ Beat 1: Initial Discovery & Inciting Spark (~45 min)",
+            f"- **Dramatic Question:** How will the heroes respond to the initial threat?",
+            f"- **Encounter Setup:** {session_agenda}",
+            f"- **Tactical Cues:** Watch for character backstories to hook player interest early.",
+            f"- **Skill Checks:** DC 12 Wisdom (Perception) to notice hidden movement; DC 12 Charisma (Persuasion) to calm bystanders.",
+            f"- **Fail-Forward:** If skill checks fail, bystanders panic or the adversary gains tactical surprise, complicating the encounter without stalling the game.",
+            f"",
+        ])
+    else:
+        for i, beat in enumerate(structured_beats, 1):
+            clean_beat_name = re.sub(r'^(Encounter:\s*)+', '', beat['title'], flags=re.IGNORECASE).strip()
+            slot = time_slots[i - 1][0] if (i - 1) < len(time_slots) else f"Beat {i}"
+
+            lines.extend([
+                f"### ⏳ Beat {i}: {clean_beat_name} ({slot} | {beat['encounter_type']})",
+                f"",
+            ])
+
+            # Beat Metadata Callout
+            meta_items = [f"**Type:** {beat['encounter_type']}", f"**Difficulty:** {beat['difficulty']}"]
+            if beat.get("locations"):
+                meta_items.append(f"**Location:** {', '.join(beat['locations'])}")
+            if beat.get("quests"):
+                meta_items.append(f"**Quest:** {', '.join(beat['quests'])}")
+            lines.append(f"> " + " | ".join(meta_items))
+            lines.append("")
+
+            # Opponents / Hazards from encounter data
+            if beat.get("combatants_text"):
+                lines.append(f"- **Opponents & Hazards:** {beat['combatants_text']}")
+
+            # Key Cast & Combatants (Profiles without raw stat blocks)
+            if beat.get("entities"):
+                lines.append(f"- **Cast & Combatants (Tactical & Roleplay Profiles — No Stat Blocks):**")
+                for ent in beat["entities"]:
+                    ent_desc = ent.get("summary") or "Active in this scene."
+                    ent_type_str = ent.get("type", "npc").upper()
+                    ent_role_str = ent.get("role", "combatant").capitalize()
+                    ent_align_str = ent.get("alignment", "unspecified")
+                    lines.append(
+                        f"  - **{ent['title']}** *({ent_type_str} | {ent_role_str} | {ent_align_str})*: {ent_desc}"
+                    )
+                lines.append("")
+
+            # Connected Clues & Secrets
+            if beat.get("clues"):
+                lines.append(f"- **Linked Clues, Secrets & Knowledge:**")
+                for clue in beat["clues"]:
+                    lines.append(f"  - 🔍 **{clue['title']}**: {clue['summary'] or 'Crucial insight for the party.'}")
+                lines.append("")
+
+            # Connected Items & Handouts
+            if beat.get("items"):
+                lines.append(f"- **Linked Items & Handouts:**")
+                for itm in beat["items"]:
+                    lines.append(f"  - 🗝️ **{itm['title']}**: {itm['summary'] or 'Notable item or handout.'}")
+                lines.append("")
+
+            # Detailed Encounter Content & Running Guide
+            encounter_content = beat.get("content", "").strip()
+            formatted_content = _format_encounter_content_for_beat(encounter_content)
+
+            if formatted_content and len(formatted_content) > 60:
+                lines.extend([
+                    formatted_content,
+                    "",
+                ])
+            else:
+                # High-quality structured fallback for encounters lacking pre-written markdown
+                lines.extend([
+                    f"#### 🎭 Scene Setup & Read-Aloud",
+                    f"> 📜 Tensions reach a boiling point. The surrounding sounds fade as the challenge of {clean_beat_name} "
+                    f"manifests directly in front of the party. Eyes turn to the adventurers as the decisive moment arrives.",
+                    f"",
+                    f"#### 🎲 Tactical Flow & Mechanics",
+                    f"- **Dramatic Question:** Can the party overcome the {beat['encounter_type'].lower()} obstacle without catastrophic resource expenditure?",
+                    f"- **Tactical Check:** DC 12 Wisdom (Insight / Perception) to anticipate the opponent's opening gambit.",
+                    f"- **Interactive Terrain:** DC 13 Dexterity (Acrobatics) or Strength (Athletics) check to use cover, chandeliers, or barricades for advantage.",
+                    f"- **Fail-Forward Complication:** A failed check results in collateral damage, reinforcement alerts, or lost tactical surprise, escalating the threat without stalling forward momentum.",
+                    f"",
+                ])
+
+            lines.append("---")
+            lines.append("")
+
+    # Climax & Cliffhanger Hook
+    lines.extend([
+        f"## 🎯 Session Climax & Cliffhanger",
+        f"- **The Climax:** The culmination of today's encounters forces a pivotal decision or concludes the primary battle.",
+    ])
+
+    if next_session_info and next_session_info.get("title"):
+        lines.extend([
+            f"- **Cliffhanger & Bridge to Next Session:**",
+            f"> ⚡ **Next Session: {next_session_info['title']}**",
+            f"> {next_session_info.get('summary') or 'The adventure continues as the party steps into deeper danger.'}",
+            f"> ",
+            f"> *Cut to black just as the immediate smoke clears and the next revelation looms on the horizon!*",
+        ])
+    else:
+        lines.extend([
+            f"- **Cliffhanger Hook:** Cut to black just as the party catches their breath and an unexpected shadow, messenger, or discovery appears at the threshold!",
+        ])
+
+    lines.extend([
+        f"",
+        f"---",
+        f"",
+        f"## 💎 Session Rewards, Loot & Table Handouts",
+        f"- **Milestone Progression:** Progress toward Level 2 / Key Campaign Milestone.",
+        f"- **Notable Coin & Items:** Distribute encounter treasure, advance commission pouches, and clues uncovered.",
+        f"- **Table Housekeeping:** Record character HP, spent spell slots, hit dice, and new faction reputations.",
+    ])
+
+    return "\n".join(lines)
+
+
+# Backwards compatibility alias
+_build_offline_run_sheet_template = _build_detailed_graph_run_sheet
+
+
+def generate_session_run_sheet(
+    session_id: str,
+    campaign_id: str,
+    custom_instruction: str = "",
+    save_to_node: bool = True,
+    use_llm: bool = False
+) -> Dict[str, Any]:
+    """
+    Generates a comprehensive, timeline-centric DM run-sheet for a game session.
+    Features:
+    - Zero-LLM by default (use_llm=False): Instantly and deterministically synthesizes
+      an author-grade run-sheet directly from the SQLite graph, embedding full encounter
+      markdown (read-aloud boxes, tactical flows, DCs, fail-forwards, secrets).
+    - Discovers preceding session for the 'The Story So Far' recap.
+    - Discovers succeeding session for the climactic cliffhanger bridge.
+    - Collects contained encounters in strict chronological precedence order.
+    - Pulls connected NPCs and monsters with concise descriptions and tactical motives (NO stat blocks).
+    - Collects linked locations, clues, lore, and items.
+    - Uses Gemini if use_llm=True (with deterministic graph fallback if offline).
+    - Persists markdown directly to the session node if save_to_node is True.
+    """
+    session_node = graph_service.get_node(session_id)
+    if not session_node:
+        return {"error": f"Session node '{session_id}' not found.", "success": False}
+
+    campaign = graph_service.get_campaign(campaign_id)
+    camp_name = campaign.name if campaign else "D&D Campaign"
+    camp_setting = campaign.setting if campaign else "D&D 5e"
+
+    # 1. Identify Preceding Session
+    prev_session = None
+    session_edges = graph_service.list_edges_for_node(campaign_id, session_id)
+    for e in session_edges:
+        if e.get("relation_type") == "precedes" and e.get("target_id") == session_id:
+            cand = graph_service.get_node(e.get("source_id"))
+            if cand and cand.type == "session":
+                prev_session = cand
+                break
+
+    all_sessions = graph_service.list_nodes(campaign_id, node_type="session")
+    sorted_sessions = sorted(all_sessions, key=lambda s: (s.sort_order or 0, s.title))
+
+    if not prev_session:
+        for idx, s in enumerate(sorted_sessions):
+            if s.id == session_id and idx > 0:
+                prev_session = sorted_sessions[idx - 1]
+                break
+
+    prev_session_info = {
+        "title": prev_session.title if prev_session else "Campaign Kickoff / Prologue",
+        "summary": prev_session.summary if prev_session else f"The grand opening of the {camp_name} campaign in {camp_setting}.",
+        "content_excerpt": (prev_session.content_markdown[:600] if prev_session and prev_session.content_markdown else ""),
+    }
+
+    # 2. Identify Succeeding Session (for Cliffhanger Bridge)
+    next_session = None
+    for e in session_edges:
+        if e.get("relation_type") == "precedes" and e.get("source_id") == session_id:
+            cand = graph_service.get_node(e.get("target_id"))
+            if cand and cand.type == "session":
+                next_session = cand
+                break
+
+    if not next_session:
+        for idx, s in enumerate(sorted_sessions):
+            if s.id == session_id and idx + 1 < len(sorted_sessions):
+                next_session = sorted_sessions[idx + 1]
+                break
+
+    next_session_info = {
+        "title": next_session.title if next_session else "",
+        "summary": next_session.summary if next_session else "",
+    } if next_session else None
+
+    # 3. Gather Contained Encounters
+    encounter_ids = set()
+    for e in session_edges:
+        if e.get("relation_type") == "contains":
+            other_id = e["target_id"] if e["source_id"] == session_id else e["source_id"]
+            cand = graph_service.get_node(other_id)
+            if cand and cand.type == "encounter":
+                encounter_ids.add(cand.id)
+
+    all_encounters = graph_service.list_nodes(campaign_id, node_type="encounter")
+    for enc in all_encounters:
+        if enc.data_json and enc.data_json.get("session_id") == session_id:
+            encounter_ids.add(enc.id)
+
+    encounter_nodes = [graph_service.get_node(eid) for eid in encounter_ids if graph_service.get_node(eid)]
+    encounter_nodes.sort(key=lambda x: (x.sort_order or 0, x.title))
+
+    # 4. For each encounter, extract connected NPCs, Monsters, Locations, Clues, Items, and Quests
+    structured_beats = []
+    for enc in encounter_nodes:
+        enc_edges = graph_service.list_edges_for_node(campaign_id, enc.id)
+        connected_entities = []
+        connected_locations = []
+        connected_clues = []
+        connected_items = []
+        connected_quests = []
+
+        for ee in enc_edges:
+            target_id = ee["target_id"] if ee["source_id"] == enc.id else ee["source_id"]
+            target_node = graph_service.get_node(target_id)
+            if not target_node:
+                continue
+            if target_node.type in ("npc", "monster"):
+                d = target_node.data_json or {}
+                connected_entities.append({
+                    "id": target_node.id,
+                    "type": target_node.type,
+                    "title": target_node.title,
+                    "subtitle": target_node.subtitle or "",
+                    "summary": target_node.summary or "",
+                    "role": d.get("role", "combatant" if target_node.type == "monster" else "npc"),
+                    "alignment": d.get("alignment", "unspecified"),
+                    "size_type": f"{d.get('creature_size', '')} {d.get('creature_type', '')}".strip(),
+                })
+            elif target_node.type == "location":
+                if target_node.title not in connected_locations:
+                    connected_locations.append(target_node.title)
+            elif target_node.type in ("lore", "clue"):
+                connected_clues.append({
+                    "title": target_node.title,
+                    "summary": target_node.summary or "",
+                    "relation": ee.get("relation_type", "linked")
+                })
+            elif target_node.type == "item":
+                connected_items.append({
+                    "title": target_node.title,
+                    "summary": target_node.summary or ""
+                })
+            elif target_node.type == "quest":
+                if target_node.title not in connected_quests:
+                    connected_quests.append(target_node.title)
+
+        enc_data = enc.data_json or {}
+        structured_beats.append({
+            "id": enc.id,
+            "title": enc.title,
+            "summary": enc.summary or "",
+            "encounter_type": enc_data.get("encounter_type", "Combat"),
+            "difficulty": enc_data.get("difficulty", "Medium"),
+            "combatants_text": enc_data.get("combatants", ""),
+            "content": enc.content_markdown or "",
+            "entities": connected_entities,
+            "locations": connected_locations,
+            "clues": connected_clues,
+            "items": connected_items,
+            "quests": connected_quests,
+        })
+
+    # 5. Gather Party Context (PCs)
+    pcs = graph_service.list_nodes(campaign_id, node_type="pc")
+    if not pcs:
+        from app.db.database import get_db
+        with get_db() as conn:
+            c = conn.cursor()
+            c.execute("SELECT id, title, summary, data_json FROM nodes WHERE type='pc' LIMIT 6")
+            rows = c.fetchall()
+            pcs = [
+                type("PCMock", (), {
+                    "id": r["id"],
+                    "title": r["title"],
+                    "summary": r["summary"] or "",
+                    "data_json": json.loads(r["data_json"]) if r["data_json"] else {}
+                })()
+                for r in rows
+            ]
+
+    pc_summaries = [f"- **{p.title}**: {p.summary}" for p in pcs]
+
+    # 6. Generate Run-Sheet
+    run_sheet_md = ""
+    model_name = "graph-deterministic-engine"
+
+    if use_llm:
+        model, model_name = _get_configured_gemini_client()
+        if model:
+            beats_context_str = ""
+            for i, b in enumerate(structured_beats, 1):
+                entities_str = ", ".join(
+                    f"{ent['title']} ({ent['type']}, {ent['role']}, {ent['alignment']})"
+                    for ent in b["entities"]
+                )
+                locations_str = ", ".join(b["locations"]) if b["locations"] else "Scene Location"
+                clues_str = ", ".join(c["title"] for c in b["clues"]) if b["clues"] else "None"
+                beats_context_str += f"""
+### Beat {i}: {b['title']}
+- Encounter Type: {b['encounter_type']} | Difficulty: {b['difficulty']}
+- Location: {locations_str}
+- Overview: {b['summary']}
+- Combatants / Hazards: {b['combatants_text'] or 'Standard'}
+- Cast / Monsters: {entities_str or 'None linked directly'}
+- Linked Clues / Secrets: {clues_str}
+- Full Encounter Details & Text:
+{b['content']}
+"""
+
+            session_data = session_node.data_json or {}
+            session_date = session_data.get("session_date", "Day 1")
+            session_agenda = session_data.get("agenda", session_node.summary or "")
+
+            prompt = f"""You are the Arcane Weaver, master D&D 5e Co-DM and campaign director.
+Generate a complete, table-ready, **Timeline-Centric Session Run-Sheet** for the DM to run at the game table.
+
+## CRITICAL RUN-SHEET RULES (STRICT ADHERENCE REQUIRED):
+1. **Strict Timeline-Centric Flow**: Organize sequentially from table start to table finish. The DM runs top to bottom and should never have to flip back and forth.
+2. **Last Session Recap ("The Story So Far")**: Include a punchy 2-4 bullet point executive recap of what happened in '{prev_session_info['title']}', active cliffhangers, and player momentum.
+3. **Pacing Time Budgets**: Provide a realistic 3.5 - 4.0 hour table budget broken down across the beats (e.g. 0:00 - 0:20, 0:20 - 1:15, etc.).
+4. **NPC & Monster Descriptions (LEAVE FULL STAT BLOCKS OUT)**:
+   - Do NOT output full stat blocks (no AC, HP, spell lists, or stat arrays).
+   - DO provide concise, evocative roleplay/tactical profiles: 1-2 sentence sensory description, disposition, 5e tactical role, and primary goal/motive.
+5. **Read-Aloud Boxed Text**: Preserve or expand punchy, multi-sensory sentences formatted in quote blocks (`> 📜 ...`) for each encounter and opening scene.
+6. **Detailed Encounter Mechanics**: Embed the actual tactical flow, mechanics, DCs (Insight, Athletics, Perception), and fail-forwards directly inside each beat.
+7. **Session Climax & Cliffhanger**: Conclude with the climactic resolution and a suspenseful cliffhanger hook bridging into '{next_session_info['title'] if next_session_info else 'the next session'}'.
+
+---
+
+### CAMPAIGN & SESSION GROUND TRUTH:
+- **Campaign**: {camp_name} ({camp_setting})
+- **Session Node**: {session_node.title}
+- **Session In-World/Real Date**: {session_date}
+- **Session Core Summary/Agenda**: {session_agenda}
+- **Previous Session**: {prev_session_info['title']}
+  - Previous Summary: {prev_session_info['summary']}
+  - Previous Content Excerpt: {prev_session_info['content_excerpt']}
+- **Next Session**: {next_session_info['title'] if next_session_info else 'Unspecified'}
+- **Party Members (PCs)**:
+{chr(10).join(pc_summaries) if pc_summaries else "- 4 Level 1 Adventurers"}
+
+### SEQUENTIAL ENCOUNTERS & BEATS WITH FULL DETAILS:
+{beats_context_str if beats_context_str.strip() else "- No discrete encounters linked yet; synthesize an immersive opening, 3 dramatic beats, and a cliffhanger from the session summary."}
+
+### CUSTOM DM INSTRUCTIONS:
+{custom_instruction or "None provided. Prioritize natural table pacing, sensory immersion, and crisp timeline flow."}
+
+---
+
+Output the complete Run-Sheet in beautifully formatted GitHub Markdown.
+"""
+            try:
+                response = model.generate_content(prompt)
+                run_sheet_md = _extract_text_from_response(response)
+            except Exception as err:
+                logger.error(f"Error calling Gemini for session run-sheet: {err}", exc_info=True)
+
+    # If use_llm is False or Gemini was unavailable/errored, use our rich deterministic graph engine
+    if not run_sheet_md:
+        run_sheet_md = _build_detailed_graph_run_sheet(
+            session_node=session_node,
+            prev_session_info=prev_session_info,
+            next_session_info=next_session_info,
+            camp_name=camp_name,
+            camp_setting=camp_setting,
+            structured_beats=structured_beats,
+            pc_summaries=pc_summaries,
+            custom_instruction=custom_instruction
+        )
+        if not use_llm:
+            model_name = "graph-deterministic-engine"
+
+    if save_to_node:
+        try:
+            new_data = dict(session_node.data_json or {})
+            new_data["run_sheet"] = {
+                "generated_at": datetime.now().isoformat(),
+                "previous_session_title": prev_session_info["title"],
+                "next_session_title": next_session_info["title"] if next_session_info else None,
+                "beat_count": len(structured_beats),
+                "engine": model_name,
+            }
+            graph_service.update_node(
+                node_id=session_node.id,
+                data=NodeUpdate(
+                    content_markdown=run_sheet_md,
+                    data_json=new_data
+                )
+            )
+        except Exception as save_err:
+            logger.error(f"Failed to persist run-sheet to node {session_node.id}: {save_err}")
+
+    return {
+        "success": True,
+        "session_id": session_node.id,
+        "session_title": session_node.title,
+        "run_sheet_markdown": run_sheet_md,
+        "previous_session_title": prev_session_info["title"],
+        "next_session_title": next_session_info["title"] if next_session_info else None,
+        "beat_count": len(structured_beats),
+        "saved": save_to_node,
+        "model": model_name
+    }
+
 
 def extract_entities_from_text(
     text_content: str,

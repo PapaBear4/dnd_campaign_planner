@@ -21,10 +21,12 @@ import {
   ArrowRight,
   X,
   Check,
-  Edit2
+  Edit2,
+  BookOpen
 } from 'lucide-react';
 import { NodeItem, EdgeItem } from '../../types';
 import { createEdge, deleteEdge, createSubQuest, updateNode } from '../../api';
+import { RunSheetModal } from '../RunSheetModal';
 
 interface TimelineModalProps {
   node: NodeItem;
@@ -57,6 +59,7 @@ export const TimelineModal: React.FC<TimelineModalProps> = ({
   onNavigateNode,
 }) => {
   const status = dataJson.status || 'planned';
+  const [showRunSheet, setShowRunSheet] = useState<boolean>(false);
 
   // Sub-quest and branching state
   const [newSubQuestTitle, setNewSubQuestTitle] = useState('');
@@ -877,6 +880,28 @@ export const TimelineModal: React.FC<TimelineModalProps> = ({
               />
             </div>
           </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px', paddingTop: '10px', borderTop: '1px solid rgba(14, 165, 233, 0.15)' }}>
+            <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+              {dataJson.run_sheet?.generated_at ? `⚡ Run-Sheet Active (${new Date(dataJson.run_sheet.generated_at).toLocaleDateString()})` : 'Timeline-centric run-sheet available'}
+            </span>
+            <button
+              type="button"
+              onClick={() => setShowRunSheet(true)}
+              className="btn btn-secondary"
+              style={{
+                fontSize: '0.76rem',
+                padding: '5px 12px',
+                color: 'var(--color-gold, #f59e0b)',
+                borderColor: 'rgba(245, 158, 11, 0.4)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+              }}
+            >
+              <BookOpen size={13} /> Open Table Run-Sheet
+            </button>
+          </div>
         </div>
       )}
 
@@ -949,6 +974,18 @@ export const TimelineModal: React.FC<TimelineModalProps> = ({
             />
           </div>
         </div>
+      )}
+
+      {/* RUN-SHEET MODAL */}
+      {showRunSheet && (
+        <RunSheetModal
+          sessionNode={node}
+          campaignId={campaignId}
+          onClose={() => setShowRunSheet(false)}
+          onSaveNode={(updated) => {
+            onChangeDataJson(updated.data_json || {});
+          }}
+        />
       )}
     </div>
   );
