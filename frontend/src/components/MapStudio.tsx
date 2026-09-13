@@ -1,18 +1,22 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  ArrowRight,
   Check,
   Compass,
   Edit2,
   ExternalLink,
   Eye,
   EyeOff,
+  GitBranch,
   Image as ImageIcon,
   Layers,
+  Loader2,
   MapPin,
   Maximize2,
   Move,
   Plus,
   RotateCcw,
+  ShieldCheck,
   Sparkles,
   Target,
   Trash2,
@@ -21,7 +25,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
-import { createNode, deleteNode, updateNode, uploadFile } from '../api';
+import { applyMapScan, createNode, deleteNode, scanMapVision, ScanMapVisionResponse, updateNode, uploadFile } from '../api';
 import { NodeItem } from '../types';
 
 interface MapStudioProps {
@@ -69,6 +73,19 @@ export const MapStudio: React.FC<MapStudioProps> = ({
 
   // Pin dragging state
   const [draggingPinId, setDraggingPinId] = useState<string | null>(null);
+
+  // Multimodal Map Vision & Pin Alignment state
+  const [showVisionModal, setShowVisionModal] = useState(false);
+  const [isScanningVision, setIsScanningVision] = useState(false);
+  const [isApplyingVision, setIsApplyingVision] = useState(false);
+  const [visionInstruction, setVisionInstruction] = useState('');
+  const [visionAutoAlign, setVisionAutoAlign] = useState(true);
+  const [visionCreateMissing, setVisionCreateMissing] = useState(true);
+  const [visionConnectPassages, setVisionConnectPassages] = useState(true);
+  const [visionResult, setVisionResult] = useState<ScanMapVisionResponse | null>(null);
+  const [selectedVisionPinIds, setSelectedVisionPinIds] = useState<Set<string>>(new Set());
+  const [selectedVisionEdgeIndices, setSelectedVisionEdgeIndices] = useState<Set<number>>(new Set());
+  const [visionStatusMessage, setVisionStatusMessage] = useState('');
 
   // Google Maps-Style Pan & Zoom State
   const [scale, setScale] = useState(1);
@@ -472,6 +489,70 @@ export const MapStudio: React.FC<MapStudioProps> = ({
     }
   };
 
+  // --- Multimodal Map Vision Handlers ---
+  const handleStartVisionScan = async () => {
+    if (!activeMap) return;
+    setIsScanningVision(true);
+    setVisionStatusMessage('Gemini Multimodal Vision is analyzing map geometry and keyed markers...');
+    try {
+      const res = await scanMapVision({
+        map_id: activeMap.id,
+        campaign_id: campaignId,
+        instruction: visionInstruction.trim(),
+        auto_align_existing: visionAutoAlign,
+        create_missing_nodes: visionCreateMissing,
+        connect_passages: visionConnectPassages,
+        apply_changes: false, // Preview mode
+      });
+      setVisionResult(res);
+      // Select all detected pins by default
+      const allPinIds = new Set(res.detected_pins.map((p) => p.id));
+      setSelectedVisionPinIds(allPinIds);
+      // Select all connections by default
+      const allEdgeIndices = new Set(res.suggested_connections.map((_, i) => i));
+      setSelectedVisionEdgeIndices(allEdgeIndices);
+      setVisionStatusMessage('');
+    } catch (err: any) {
+      alert('Map Vision Scan failed: ' + (err.message || err));
+      setVisionStatusMessage('');
+    } finally {
+      setIsScanningVision(false);
+    }
+  };
+
+  const handleApplyVisionResults = async () => {
+    if (!activeMap || !visionResult) return;
+    setIsApplyingVision(true);
+    try {
+      const approvedPins = visionResult.detected_pins.filter((p) => selectedVisionPinIds.has(p.id));
+      const approvedPinNodeIds = new Set(approvedPins.map((p) => p.nodeId));
+
+      const approvedNodes = (visionResult.new_nodes_to_create || []).filter(
+        (n) => approvedPinNodeIds.has(n.temp_id)
+      );
+
+      const approvedEdges = (visionResult.suggested_connections || []).filter((_, i) =>
+        selectedVisionEdgeIndices.has(i)
+      );
+
+      await applyMapScan({
+        map_id: activeMap.id,
+        campaign_id: campaignId,
+        pins: approvedPins,
+        new_nodes: approvedNodes,
+        new_edges: approvedEdges,
+      });
+
+      setShowVisionModal(false);
+      setVisionResult(null);
+      onRefresh();
+    } catch (err: any) {
+      alert('Failed to apply map scan: ' + (err.message || err));
+    } finally {
+      setIsApplyingVision(false);
+    }
+  };
+
   return (
     <div style={{ padding: '20px 24px', maxWidth: '1400px', margin: '0 auto', display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* Header & Main Controls */}
@@ -529,6 +610,35 @@ export const MapStudio: React.FC<MapStudioProps> = ({
               }}
             >
               <MapPin size={15} /> {isPlacingPin ? 'Cancel Pin Mode' : 'Drop Pin on Map'}
+            </button>
+          )}
+
+          {/* AI Multimodal Vision Scan Button */}
+          {activeMap && mapImage && (
+            <button
+              onClick={() => {
+                setShowVisionModal(true);
+                setVisionResult(null);
+                setVisionStatusMessage('');
+              }}
+              className="btn"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                fontSize: '0.8rem',
+                padding: '6px 13px',
+                background: 'linear-gradient(135deg, rgba(245, 158, 11, 0.25) 0%, rgba(180, 83, 9, 0.4) 100%)',
+                border: '1px solid var(--color-gold)',
+                color: 'var(--text-gold)',
+                fontWeight: 600,
+                boxShadow: '0 2px 8px rgba(245, 158, 11, 0.25)',
+                cursor: 'pointer',
+              }}
+              title="Use Gemini Multimodal Vision to auto-detect keyed rooms and align pins"
+            >
+              <Sparkles size={15} style={{ color: 'var(--color-gold)' }} />
+              Co-DM Vision Scan
             </button>
           )}
 
@@ -1207,6 +1317,544 @@ export const MapStudio: React.FC<MapStudioProps> = ({
                   <Check size={15} /> Save Pin to Map
                 </button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Multimodal Map Vision & Pin Alignment Modal */}
+        {showVisionModal && activeMap && (
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              background: 'rgba(5, 8, 15, 0.82)',
+              backdropFilter: 'blur(8px)',
+              zIndex: 45,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '24px',
+            }}
+          >
+            <div
+              className="glass-panel animate-fade-in"
+              style={{
+                width: '100%',
+                maxWidth: visionResult ? '920px' : '580px',
+                maxHeight: '90vh',
+                borderRadius: '14px',
+                padding: '24px',
+                boxShadow: '0 20px 60px rgba(0,0,0,0.9), 0 0 25px rgba(245, 158, 11, 0.15)',
+                border: '1px solid var(--border-gold)',
+                display: 'flex',
+                flexDirection: 'column',
+                overflow: 'hidden',
+                background: 'linear-gradient(180deg, #131b2e 0%, #0c1120 100%)',
+              }}
+            >
+              {/* Modal Header */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', flexShrink: 0 }}>
+                <div>
+                  <h3 style={{ fontSize: '1.2rem', color: 'var(--text-primary)', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Sparkles size={20} style={{ color: 'var(--color-gold)' }} /> Multimodal Map Vision &amp; Pin Alignment
+                  </h3>
+                  <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: '3px 0 0 0' }}>
+                    Scanning: <strong style={{ color: 'var(--text-gold)' }}>{activeMap.title}</strong>
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    setShowVisionModal(false);
+                    setVisionResult(null);
+                  }}
+                  className="btn btn-ghost"
+                  style={{ padding: '6px' }}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Status banner if analyzing */}
+              {isScanningVision && (
+                <div
+                  style={{
+                    padding: '28px 20px',
+                    textAlign: 'center',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: '12px',
+                  }}
+                >
+                  <div
+                    style={{
+                      width: '54px',
+                      height: '54px',
+                      borderRadius: '50%',
+                      border: '3px solid rgba(245, 158, 11, 0.2)',
+                      borderTopColor: 'var(--color-gold)',
+                      animation: 'spin 1s linear infinite',
+                    }}
+                  />
+                  <div style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text-gold)' }}>
+                    Arcane Vision Scanning Map Geometry...
+                  </div>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', maxWidth: '420px' }}>
+                    Gemini Multimodal Vision is parsing room numbers, boundary chambers, and corridors. Matching against existing campaign entities...
+                  </div>
+                </div>
+              )}
+
+              {/* Mode A: Pre-Scan Configuration */}
+              {!isScanningVision && !visionResult && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', overflowY: 'auto', paddingRight: '4px' }}>
+                  <div
+                    style={{
+                      background: 'rgba(15, 23, 42, 0.65)',
+                      border: '1px solid var(--border-subtle)',
+                      borderRadius: '8px',
+                      padding: '12px 14px',
+                      fontSize: '0.8rem',
+                      color: 'var(--text-secondary)',
+                      lineHeight: '1.45',
+                    }}
+                  >
+                    AI vision will inspect your map image, pinpoint keyed room markers (1, 2, 3...), calculate exact (x, y) coordinates, cross-reference existing campaign locations without duplicating entries, and link corridor paths.
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '6px' }}>
+                      Custom Directive (Optional):
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g., Focus on dungeon areas 1-15, match with goblin encounters..."
+                      value={visionInstruction}
+                      onChange={(e) => setVisionInstruction(e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '9px 12px',
+                        background: 'var(--bg-surface)',
+                        border: '1px solid var(--border-medium)',
+                        borderRadius: '6px',
+                        color: 'var(--text-primary)',
+                        fontSize: '0.85rem',
+                      }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                      Alignment &amp; Generation Options:
+                    </label>
+
+                    {/* Option 1 */}
+                    <div
+                      onClick={() => setVisionAutoAlign(!visionAutoAlign)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px',
+                        padding: '10px 14px',
+                        background: visionAutoAlign ? 'rgba(16, 185, 129, 0.12)' : 'rgba(255,255,255,0.03)',
+                        border: `1px solid ${visionAutoAlign ? '#10b981' : 'var(--border-subtle)'}`,
+                        borderRadius: '8px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={visionAutoAlign}
+                        onChange={() => {}}
+                        style={{ accentColor: '#10b981', width: '16px', height: '16px' }}
+                      />
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: '0.82rem', fontWeight: 600, color: '#f8fafc' }}>
+                          Auto-Align with Existing Campaign Entities
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                          Matches detected numbers &amp; room names against current campaign Locations and Encounters to avoid duplicate nodes.
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Option 2 */}
+                    <div
+                      onClick={() => setVisionCreateMissing(!visionCreateMissing)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px',
+                        padding: '10px 14px',
+                        background: visionCreateMissing ? 'rgba(245, 158, 11, 0.12)' : 'rgba(255,255,255,0.03)',
+                        border: `1px solid ${visionCreateMissing ? 'var(--color-gold)' : 'var(--border-subtle)'}`,
+                        borderRadius: '8px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={visionCreateMissing}
+                        onChange={() => {}}
+                        style={{ accentColor: 'var(--color-gold)', width: '16px', height: '16px' }}
+                      />
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: '0.82rem', fontWeight: 600, color: '#f8fafc' }}>
+                          Draft Location Nodes for Unindexed Rooms
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                          Creates provisional Draft locations (<span style={{ color: 'var(--text-gold)' }}>is_canon=false</span>) for newly discovered rooms with parent hierarchy.
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Option 3 */}
+                    <div
+                      onClick={() => setVisionConnectPassages(!visionConnectPassages)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px',
+                        padding: '10px 14px',
+                        background: visionConnectPassages ? 'rgba(59, 130, 246, 0.12)' : 'rgba(255,255,255,0.03)',
+                        border: `1px solid ${visionConnectPassages ? '#3b82f6' : 'var(--border-subtle)'}`,
+                        borderRadius: '8px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={visionConnectPassages}
+                        onChange={() => {}}
+                        style={{ accentColor: '#3b82f6', width: '16px', height: '16px' }}
+                      />
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: '0.82rem', fontWeight: 600, color: '#f8fafc' }}>
+                          Auto-Connect Passageways &amp; Corridors (leads_to)
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                          Traces hallways, doors, and stairs between adjacent chambers to wire graph edges.
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '10px' }}>
+                    <button
+                      onClick={() => setShowVisionModal(false)}
+                      className="btn btn-ghost"
+                      style={{ fontSize: '0.82rem', padding: '7px 16px' }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleStartVisionScan}
+                      className="btn btn-primary"
+                      style={{
+                        fontSize: '0.84rem',
+                        padding: '7px 20px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        background: 'linear-gradient(135deg, #f59e0b 0%, #b45309 100%)',
+                        boxShadow: '0 4px 14px rgba(245, 158, 11, 0.35)',
+                      }}
+                    >
+                      <Sparkles size={16} /> Start Vision Analysis
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Mode B: Scan Results Preview & Selective Confirmation */}
+              {!isScanningVision && visionResult && (
+                <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, gap: '14px' }}>
+                  {/* Results Summary Bar */}
+                  <div
+                    style={{
+                      background: 'rgba(245, 158, 11, 0.12)',
+                      border: '1px solid var(--border-gold)',
+                      borderRadius: '8px',
+                      padding: '8px 14px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      fontSize: '0.78rem',
+                      color: 'var(--text-primary)',
+                      flexShrink: 0,
+                    }}
+                  >
+                    <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+                      <span><strong>📍 Total Pins:</strong> {visionResult.detected_pins.length}</span>
+                      <span style={{ color: '#10b981' }}><strong>🟢 Matched Existing:</strong> {visionResult.matched_existing_nodes.length}</span>
+                      <span style={{ color: 'var(--text-gold)' }}><strong>📝 New Draft Rooms:</strong> {visionResult.new_nodes_to_create.length}</span>
+                      <span style={{ color: '#60a5fa' }}><strong>🚪 Passages:</strong> {visionResult.suggested_connections.length}</span>
+                    </div>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                      {selectedVisionPinIds.size} pins selected
+                    </span>
+                  </div>
+
+                  {/* Split Layout: Map Thumbnail Overlay vs Pin List */}
+                  <div style={{ display: 'flex', gap: '16px', flex: 1, minHeight: 0 }}>
+                    {/* Visual Overlay Map Column */}
+                    <div
+                      style={{
+                        width: '340px',
+                        height: '100%',
+                        background: '#070b14',
+                        borderRadius: '10px',
+                        overflow: 'hidden',
+                        position: 'relative',
+                        border: '1px solid var(--border-medium)',
+                        flexShrink: 0,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <img
+                        src={mapImage}
+                        alt="Scan Preview"
+                        style={{ width: '100%', height: '100%', objectFit: 'contain', pointerEvents: 'none' }}
+                      />
+                      {/* Render preview pins on thumbnail */}
+                      {visionResult.detected_pins.map((p) => {
+                        const isSelected = selectedVisionPinIds.has(p.id);
+                        return (
+                          <div
+                            key={p.id}
+                            onClick={() => {
+                              const next = new Set(selectedVisionPinIds);
+                              if (next.has(p.id)) next.delete(p.id);
+                              else next.add(p.id);
+                              setSelectedVisionPinIds(next);
+                            }}
+                            style={{
+                              position: 'absolute',
+                              left: `${p.x}%`,
+                              top: `${p.y}%`,
+                              transform: 'translate(-50%, -50%)',
+                              width: '18px',
+                              height: '18px',
+                              borderRadius: '50%',
+                              background: isSelected
+                                ? p.is_new
+                                  ? '#f59e0b'
+                                  : '#10b981'
+                                : '#475569',
+                              border: '1.5px solid #000',
+                              boxShadow: isSelected
+                                ? p.is_new
+                                  ? '0 0 8px #f59e0b'
+                                  : '0 0 8px #10b981'
+                                : 'none',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontSize: '0.62rem',
+                              fontWeight: 700,
+                              color: '#000',
+                              cursor: 'pointer',
+                              zIndex: 10,
+                            }}
+                            title={`${p.label} (${p.x}%, ${p.y}%)`}
+                          >
+                            {p.room_number || '•'}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Pin and Connections Checklist Column */}
+                    <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '14px', paddingRight: '4px' }}>
+                      {/* Pins Header */}
+                      <div>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                          <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                            Keyed Room Pins ({visionResult.detected_pins.length}):
+                          </span>
+                          <button
+                            onClick={() => {
+                              if (selectedVisionPinIds.size === visionResult.detected_pins.length) {
+                                setSelectedVisionPinIds(new Set());
+                              } else {
+                                setSelectedVisionPinIds(new Set(visionResult.detected_pins.map((p) => p.id)));
+                              }
+                            }}
+                            className="btn btn-ghost"
+                            style={{ fontSize: '0.72rem', padding: '2px 8px' }}
+                          >
+                            {selectedVisionPinIds.size === visionResult.detected_pins.length ? 'Deselect All' : 'Select All'}
+                          </button>
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          {visionResult.detected_pins.map((pin) => {
+                            const isSelected = selectedVisionPinIds.has(pin.id);
+                            return (
+                              <div
+                                key={pin.id}
+                                onClick={() => {
+                                  const next = new Set(selectedVisionPinIds);
+                                  if (next.has(pin.id)) next.delete(pin.id);
+                                  else next.add(pin.id);
+                                  setSelectedVisionPinIds(next);
+                                }}
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '8px',
+                                  padding: '7px 10px',
+                                  background: isSelected ? 'var(--bg-card-active)' : 'var(--bg-surface)',
+                                  border: `1px solid ${isSelected ? (pin.is_new ? 'var(--border-gold)' : 'rgba(16, 185, 129, 0.4)') : 'var(--border-subtle)'}`,
+                                  borderRadius: '6px',
+                                  cursor: 'pointer',
+                                  transition: 'all 0.15s ease',
+                                }}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={() => {}}
+                                  style={{
+                                    accentColor: pin.is_new ? 'var(--color-gold)' : '#10b981',
+                                    width: '15px',
+                                    height: '15px',
+                                  }}
+                                />
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px' }}>
+                                    <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#f8fafc', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                      {pin.label}
+                                    </span>
+                                    {pin.is_new ? (
+                                      <span style={{ fontSize: '0.65rem', padding: '1px 5px', borderRadius: '4px', background: 'rgba(245, 158, 11, 0.2)', color: 'var(--text-gold)', border: '1px solid rgba(245, 158, 11, 0.4)' }}>
+                                        New Draft Room 📝
+                                      </span>
+                                    ) : (
+                                      <span style={{ fontSize: '0.65rem', padding: '1px 5px', borderRadius: '4px', background: 'rgba(16, 185, 129, 0.2)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.4)' }}>
+                                        Matched Existing 🔒
+                                      </span>
+                                    )}
+                                  </div>
+                                  <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                                    Coords: ({pin.x}%, {pin.y}%) {pin.room_number ? `• Room ${pin.room_number}` : ''}
+                                  </span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Passages Section */}
+                      {visionResult.suggested_connections.length > 0 && (
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                            <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                              🚪 Corridor Connections ({visionResult.suggested_connections.length}):
+                            </span>
+                            <button
+                              onClick={() => {
+                                if (selectedVisionEdgeIndices.size === visionResult.suggested_connections.length) {
+                                  setSelectedVisionEdgeIndices(new Set());
+                                } else {
+                                  setSelectedVisionEdgeIndices(new Set(visionResult.suggested_connections.map((_, i) => i)));
+                                }
+                              }}
+                              className="btn btn-ghost"
+                              style={{ fontSize: '0.72rem', padding: '2px 8px' }}
+                            >
+                              {selectedVisionEdgeIndices.size === visionResult.suggested_connections.length ? 'Deselect All' : 'Select All'}
+                            </button>
+                          </div>
+
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                            {visionResult.suggested_connections.map((conn, idx) => {
+                              const isChecked = selectedVisionEdgeIndices.has(idx);
+                              return (
+                                <div
+                                  key={idx}
+                                  onClick={() => {
+                                    const next = new Set(selectedVisionEdgeIndices);
+                                    if (next.has(idx)) next.delete(idx);
+                                    else next.add(idx);
+                                    setSelectedVisionEdgeIndices(next);
+                                  }}
+                                  style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '8px',
+                                    padding: '5px 10px',
+                                    background: isChecked ? 'rgba(59, 130, 246, 0.12)' : 'var(--bg-surface)',
+                                    border: `1px solid ${isChecked ? 'rgba(59, 130, 246, 0.4)' : 'var(--border-subtle)'}`,
+                                    borderRadius: '5px',
+                                    cursor: 'pointer',
+                                    fontSize: '0.75rem',
+                                    color: '#cbd5e1',
+                                  }}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={isChecked}
+                                    onChange={() => {}}
+                                    style={{ accentColor: '#3b82f6' }}
+                                  />
+                                  <span>{conn.source_title || 'Room'}</span>
+                                  <ArrowRight size={13} style={{ color: '#60a5fa' }} />
+                                  <span>{conn.target_title || 'Room'}</span>
+                                  {conn.label && <span style={{ color: 'var(--text-muted)' }}>({conn.label})</span>}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Footer Actions */}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: '10px', borderTop: '1px solid var(--border-subtle)', flexShrink: 0 }}>
+                    <button
+                      onClick={() => setVisionResult(null)}
+                      className="btn btn-ghost"
+                      style={{ fontSize: '0.8rem', padding: '6px 14px' }}
+                    >
+                      ← Reconfigure Scan
+                    </button>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button
+                        onClick={() => {
+                          setShowVisionModal(false);
+                          setVisionResult(null);
+                        }}
+                        className="btn btn-ghost"
+                        style={{ fontSize: '0.8rem', padding: '6px 14px' }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleApplyVisionResults}
+                        disabled={isApplyingVision || selectedVisionPinIds.size === 0}
+                        className="btn btn-primary"
+                        style={{
+                          fontSize: '0.82rem',
+                          padding: '7px 18px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          background: 'linear-gradient(135deg, #10b981 0%, #047857 100%)',
+                          boxShadow: '0 2px 10px rgba(16, 185, 129, 0.35)',
+                        }}
+                      >
+                        {isApplyingVision ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />}
+                        {isApplyingVision ? 'Saving to Map...' : `Apply ${selectedVisionPinIds.size} Pins to Map`}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}

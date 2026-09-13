@@ -564,4 +564,108 @@ export async function agentApplySessionAdaptation(data: {
   return handleResponse<any>(res);
 }
 
+// --- Multimodal Map Vision & Pin Alignment ---
+export interface ScanMapVisionResponse {
+  map_id: string;
+  map_title: string;
+  vision_notes: string;
+  detected_pins: {
+    id: string;
+    nodeId: string;
+    label: string;
+    x: number;
+    y: number;
+    revealed: boolean;
+    room_number?: string;
+    is_new: boolean;
+  }[];
+  matched_existing_nodes: {
+    pin_id: string;
+    node_id: string;
+    node_title: string;
+    node_type: string;
+    label: string;
+    x: number;
+    y: number;
+  }[];
+  new_nodes_to_create: {
+    temp_id: string;
+    type: string;
+    title: string;
+    summary: string;
+    content_markdown?: string;
+    data_json?: Record<string, any>;
+    is_canon: boolean;
+    revealed_to_players: boolean;
+  }[];
+  suggested_connections: {
+    source_id: string;
+    target_id: string;
+    relation_type: string;
+    label: string;
+    source_title?: string;
+    target_title?: string;
+  }[];
+  applied: boolean;
+  summary: string;
+  applied_details?: any;
+}
+
+export async function scanMapVision(data: {
+  map_id: string;
+  campaign_id?: string;
+  instruction?: string;
+  auto_align_existing?: boolean;
+  create_missing_nodes?: boolean;
+  connect_passages?: boolean;
+  apply_changes?: boolean;
+}): Promise<ScanMapVisionResponse> {
+  const res = await fetch(`${BASE_URL}/api/agent/map/scan`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return handleResponse<ScanMapVisionResponse>(res);
+}
+
+export async function applyMapScan(data: {
+  map_id: string;
+  campaign_id?: string;
+  pins: any[];
+  new_nodes?: any[];
+  new_edges?: any[];
+}): Promise<{
+  success: boolean;
+  map_id: string;
+  pins_count: number;
+  new_nodes_created: number;
+  new_edges_created: number;
+  message: string;
+}> {
+  const res = await fetch(`${BASE_URL}/api/agent/map/apply-scan`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return handleResponse<any>(res);
+}
+
+export async function placeMapPin(data: {
+  map_id: string;
+  campaign_id?: string;
+  label: string;
+  x: number;
+  y: number;
+  node_id?: string;
+  revealed?: boolean;
+  target_map_id?: string;
+}): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/agent/map/place-pin`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return handleResponse<any>(res);
+}
+
 

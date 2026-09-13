@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 from app.models import (
     AgentChatRequest,
+    ApplyMapScanRequest,
     BoxedTextRequest,
     ChatThreadCreate,
     ChatThreadResponse,
@@ -14,10 +15,12 @@ from app.models import (
     EdgeCreate,
     NodeCreate,
     NodeUpdate,
+    PlaceMapPinRequest,
     RedraftNodeRequest,
+    ScanMapVisionRequest,
     WeaveHookRequest,
 )
-from app.services import ai_agent_service, chat_history_service, graph_service
+from app.services import ai_agent_service, chat_history_service, graph_service, map_vision_service
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 
@@ -499,4 +502,72 @@ def apply_session_adaptation(request: ApplySessionAdaptationRequest):
         parent_quest_id=request.parent_quest_id,
         player_note=request.player_note
     )
+
+
+# --- Map Vision & Alignment Endpoints ---
+
+@router.post("/map/scan")
+def scan_map_vision(request: ScanMapVisionRequest):
+    """
+    Multimodal Gemini vision analysis of an uploaded map image.
+    Detects keyed rooms/labels/landmarks, normalizes coordinates (0-100%),
+    aligns existing nodes without duplication, drafts missing rooms,
+    and identifies passageways (leads_to).
+    """
+    cid = request.campaign_id or graph_service.get_setting("active_campaign_id", "default-campaign")
+    try:
+        return map_vision_service.scan_map_with_gemini_vision(
+            map_id=request.map_id,
+            campaign_id=cid,
+            instruction=request.instruction or "",
+            auto_align_existing=request.auto_align_existing if request.auto_align_existing is not None else True,
+            create_missing_nodes=request.create_missing_nodes if request.create_missing_nodes is not None else True,
+            connect_passages=request.connect_passages if request.connect_passages is not None else True,
+            apply_changes=request.apply_changes or False,
+        )
+    except Exception as e:
+        logger.error(f"Error in scan_map_vision endpoint: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/map/apply-scan")
+def apply_map_scan(request: ApplyMapScanRequest):
+    """
+    Commits approved pins, draft room nodes, and passageway edges
+    from a vision scan into SQLite.
+    """
+    cid = request.campaign_id or graph_service.get_setting("active_campaign_id", "default-campaign")
+    try:
+        return map_vision_service.apply_map_scan_results(
+            map_id=request.map_id,
+            campaign_id=cid,
+            pins=request.pins,
+            new_nodes=request.new_nodes or [],
+            new_edges=request.new_edges or [],
+        )
+    except Exception as e:
+        logger.error(f"Error in apply_map_scan endpoint: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/map/place-pin")
+def place_map_pin(request: PlaceMapPinRequest):
+    """
+    Places or updates a single pin on a map node.
+    """
+    cid = request.campaign_id or graph_service.get_setting("active_campaign_id", "default-campaign")
+    try:
+        return map_vision_service.place_single_map_pin(
+            map_id=request.map_id,
+            campaign_id=cid,
+            label=request.label,
+            x=request.x,
+            y=request.y,
+            node_id=request.node_id,
+            revealed=request.revealed if request.revealed is not None else True,
+            target_map_id=request.target_map_id,
+        )
+    except Exception as e:
+        logger.error(f"Error in place_map_pin endpoint: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 

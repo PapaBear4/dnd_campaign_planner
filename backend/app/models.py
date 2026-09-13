@@ -269,6 +269,29 @@ class RedraftNodeRequest(BaseModel):
     current_edges: Optional[List[Dict[str, Any]]] = []
     matched_node_id: Optional[str] = None
 
+# --- Map Vision & Alignment Models ---
+class ScanMapVisionRequest(BaseModel):
+    map_id: str
+    campaign_id: Optional[str] = None
+    instruction: Optional[str] = ""
+    auto_align_existing: Optional[bool] = True
+    create_missing_nodes: Optional[bool] = True
+    connect_passages: Optional[bool] = True
+    apply_changes: Optional[bool] = False
 
+class ApplyMapScanRequest(BaseModel):
+    map_id: str
+    campaign_id: Optional[str] = None
+    pins: List[Dict[str, Any]]
+    new_nodes: Optional[List[Dict[str, Any]]] = []
+    new_edges: Optional[List[Dict[str, Any]]] = []
 
-
+class PlaceMapPinRequest(BaseModel):
+    map_id: str
+    campaign_id: Optional[str] = None
+    label: str
+    x: float
+    y: float
+    node_id: Optional[str] = None
+    revealed: Optional[bool] = True
+    target_map_id: Optional[str] = None

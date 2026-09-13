@@ -559,6 +559,38 @@ AGENT_TOOLS = [
             "required": ["plan_notes"],
         },
     },
+    {
+        "name": "place_map_pin",
+        "description": "Place or update an interactive location pin on a campaign battle map or regional map at exact (x, y) percentage coordinates (0.0 to 100.0). Optionally connects to an existing entity node (location, encounter, NPC, clue) or creates a new draft location node.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "map_id": {"type": "string", "description": "ID of the map node to drop the pin on."},
+                "label": {"type": "string", "description": "Pin label or room name (e.g. 'Area 3: White Wyrmling Shrine')."},
+                "x": {"type": "number", "description": "Horizontal position percentage across the map from 0.0 (left) to 100.0 (right)."},
+                "y": {"type": "number", "description": "Vertical position percentage down the map from 0.0 (top) to 100.0 (bottom)."},
+                "node_id": {"type": "string", "description": "Optional ID of an existing campaign node (location, encounter, NPC, etc.) to link to this pin."},
+                "revealed": {"type": "boolean", "description": "True to reveal this pin to players on the player portal; False for DM secret fog of war (default True)."},
+                "target_map_id": {"type": "string", "description": "Optional ID of a linked sub-map for fast-travel drilldown."},
+            },
+            "required": ["map_id", "label", "x", "y"],
+        },
+    },
+    {
+        "name": "scan_map_and_align_nodes",
+        "description": "Perform multimodal computer vision analysis on an uploaded map image using Gemini. Detects keyed room numbers, labels, landmarks, and passage connections; aligns them with existing campaign nodes (without creating duplicates); auto-generates room hierarchy and leads_to corridors; and saves the pins to the map.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "map_id": {"type": "string", "description": "ID of the map node to scan."},
+                "instruction": {"type": "string", "description": "Optional instructions for the vision scan (e.g. 'Focus on the kobold lair rooms 1-10')."},
+                "auto_align_existing": {"type": "boolean", "description": "Whether to match detected rooms to existing campaign nodes (default True)."},
+                "create_missing_nodes": {"type": "boolean", "description": "Whether to draft new location nodes for unindexed keyed rooms (default True)."},
+                "connect_passages": {"type": "boolean", "description": "Whether to create leads_to edges between adjacent connected rooms (default True)."},
+            },
+            "required": ["map_id"],
+        },
+    },
 ]
 
 
@@ -872,6 +904,33 @@ def _dispatch_tool_call(tool_name: str, args: dict, campaign_id: str, scratchpad
         elif tool_name == "delete_edge":
             deleted = graph_service.delete_edge(args["edge_id"])
             return {"deleted": deleted, "edge_id": args["edge_id"]}
+
+        elif tool_name == "place_map_pin":
+            from app.services import map_vision_service
+            res = map_vision_service.place_single_map_pin(
+                map_id=args["map_id"],
+                campaign_id=campaign_id,
+                label=args["label"],
+                x=float(args["x"]),
+                y=float(args["y"]),
+                node_id=args.get("node_id"),
+                revealed=bool(args.get("revealed", True)),
+                target_map_id=args.get("target_map_id"),
+            )
+            return res
+
+        elif tool_name == "scan_map_and_align_nodes":
+            from app.services import map_vision_service
+            res = map_vision_service.scan_map_with_gemini_vision(
+                map_id=args["map_id"],
+                campaign_id=campaign_id,
+                instruction=args.get("instruction", ""),
+                auto_align_existing=bool(args.get("auto_align_existing", True)),
+                create_missing_nodes=bool(args.get("create_missing_nodes", True)),
+                connect_passages=bool(args.get("connect_passages", True)),
+                apply_changes=True,
+            )
+            return res
 
         else:
             return {"error": f"Unknown tool: {tool_name}"}
@@ -1416,6 +1475,15 @@ def build_campaign_database_context(campaign_id: str) -> str:
             lines.append(f"- [Faction] {_c_tag(f)} {f.title} [id: {f.id}]")
         if len(factions) > 6:
             lines.append(f"  *(+ {len(factions) - 6} more factions indexed)*")
+        lines.append("")
+
+    # 5. Maps & Tactical Handouts
+    maps = by_type.get("map", [])
+    if maps:
+        lines.append(f"**Maps ({len(maps)})**:")
+        for m in maps:
+            pin_count = len((m.data_json or {}).get("pins", []))
+            lines.append(f"- [Map] {_c_tag(m)} {m.title} [id: {m.id}] ({pin_count} pins placed)")
         lines.append("")
 
     # 5. On-Demand Graph Discovery Directive
