@@ -44,12 +44,21 @@ Completed:
   - Co-DM agent generation endpoint (`POST /api/agent/session/{session_id}/generate-run-sheet`) and function tool `generate_session_run_sheet`.
   - Accessible via session column headers in Campaign Tapestry and within TimelineModal.
 
+- [x] In-App Feedback & Backlog Studio Modal:
+  - Top navigation bug launcher (`<Bug size={18} />`) beside Settings.
+  - Switch between Bug Report 🐞 and Feature Request 💡.
+  - Screen capture support: paste screenshots directly with `Ctrl+V` / `Cmd+V`, or drag-and-drop / file browser.
+  - Auto-captures environment context (active campaign, active tab, screen resolution, theme, timestamp).
+  - Built-in Backlog viewer with category, priority (`low`, `medium`, `high`, `blocker`), status tags (`open`, `in_progress`, `resolved`, `closed`), and screenshot lightbox.
+  - Backend endpoints (`/api/feedback` CRUD & `/api/feedback/upload-image`) persisted in SQLite with static screenshot storage.
+
+
 Next:
 
 - [ ] Color corrections in parchment chat
 - [ ] Create a specialized prompt for ingesting PC sheets that don't chunk.
 - [ ] encounters without a predecessor should stack at the beginning of whatever session they're part of. Or if there's a lot of them (like in world events) it should be a grid.
-- [ ] Prep staging and world events should both default to folded.
+- [x] Prep staging and world events should both default to folded.
 
 Later:
 

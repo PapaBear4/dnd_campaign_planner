@@ -339,7 +339,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
   const [isAdaptingSession, setIsAdaptingSession] = useState<boolean>(false);
   const [sessionAdaptationResult, setSessionAdaptationResult] = useState<{
     overview: string;
-    status_updates: { node_id: string; title: string; node_type: string; new_status: string; reason: string }[];
+    status_updates: { node_id: string; title: string; node_type: string; new_status: string; reason: string; node_title?: string }[];
     npc_updates: { node_id?: string; name: string; disposition: string; state_changes: string; notes: string }[];
     emergent_nodes: any[];
     emergent_edges: any[];
@@ -1110,7 +1110,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
       });
 
       setSessionAdaptationResult(res);
-      setSelectedStatusUpdates(new Set((res.status_updates || []).map((u) => u.node_id)));
+      setSelectedStatusUpdates(new Set((res.status_updates || []).map((u, i) => u.node_id || u.node_title || u.title || `status-${i}`)));
       setSelectedEmergentNodeIndices(new Set((res.emergent_nodes || []).map((_, i) => i)));
       setApplyNextSessionPrep(Boolean(res.next_session_prep?.title));
       setApplyPlayerRecap(Boolean(res.player_recap));
@@ -1158,7 +1158,7 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
       });
 
       setSessionAdaptationResult(res);
-      setSelectedStatusUpdates(new Set((res.status_updates || []).map((u) => u.node_id)));
+      setSelectedStatusUpdates(new Set((res.status_updates || []).map((u, i) => u.node_id || u.node_title || u.title || `status-${i}`)));
       setSelectedEmergentNodeIndices(new Set((res.emergent_nodes || []).map((_, i) => i)));
 
       const assistantReply: SteeringMessage = {
@@ -1180,11 +1180,11 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
     }
   };
 
-  const toggleSelectStatusUpdate = (nodeId: string) => {
+  const toggleSelectStatusUpdate = (nodeIdOrKey: string) => {
     setSelectedStatusUpdates((prev) => {
       const next = new Set(prev);
-      if (next.has(nodeId)) next.delete(nodeId);
-      else next.add(nodeId);
+      if (next.has(nodeIdOrKey)) next.delete(nodeIdOrKey);
+      else next.add(nodeIdOrKey);
       return next;
     });
   };
@@ -1203,9 +1203,10 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
 
     setSessionCommitStatus('committing');
     try {
-      const statusUpdatesToApply = (sessionAdaptationResult.status_updates || []).filter((u) =>
-        selectedStatusUpdates.has(u.node_id)
-      );
+      const statusUpdatesToApply = (sessionAdaptationResult.status_updates || []).filter((u, i) => {
+        const k = u.node_id || u.node_title || u.title || `status-${i}`;
+        return selectedStatusUpdates.has(k) || (u.node_id && selectedStatusUpdates.has(u.node_id));
+      });
       const emergentNodesToApply = (sessionAdaptationResult.emergent_nodes || []).filter((_, i) =>
         selectedEmergentNodeIndices.has(i)
       );
@@ -1846,12 +1847,13 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                         <Clock size={15} /> Timeline Status Updates ({sessionAdaptationResult.status_updates.length}):
                       </span>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        {sessionAdaptationResult.status_updates.map((u) => {
-                          const isChecked = selectedStatusUpdates.has(u.node_id);
+                        {sessionAdaptationResult.status_updates.map((u, idx) => {
+                          const itemKey = u.node_id || u.node_title || u.title || `status-${idx}`;
+                          const isChecked = selectedStatusUpdates.has(itemKey) || (u.node_id && selectedStatusUpdates.has(u.node_id));
                           return (
                             <div
-                              key={u.node_id}
-                              onClick={() => toggleSelectStatusUpdate(u.node_id)}
+                              key={itemKey}
+                              onClick={() => toggleSelectStatusUpdate(itemKey)}
                               style={{
                                 display: 'flex',
                                 alignItems: 'center',
@@ -1865,8 +1867,8 @@ export const IngestionHub: React.FC<IngestionHubProps> = ({
                             >
                               <input
                                 type="checkbox"
-                                checked={isChecked}
-                                onChange={() => toggleSelectStatusUpdate(u.node_id)}
+                                checked={Boolean(isChecked)}
+                                onChange={() => toggleSelectStatusUpdate(itemKey)}
                                 style={{ cursor: 'pointer' }}
                               />
                               <div style={{ flex: 1, fontSize: '0.8rem' }}>

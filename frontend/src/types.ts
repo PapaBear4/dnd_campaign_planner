@@ -279,3 +279,22 @@ export interface DecomposeAdventureResponse {
   error?: string;
 }
 
+export type FeedbackType = 'bug' | 'feature';
+export type FeedbackPriority = 'low' | 'medium' | 'high' | 'blocker';
+export type FeedbackStatus = 'open' | 'in_progress' | 'resolved' | 'closed';
+
+export interface FeedbackItem {
+  id: string;
+  campaign_id?: string;
+  type: FeedbackType;
+  title: string;
+  category: string;
+  priority: FeedbackPriority;
+  status: FeedbackStatus;
+  description: string;
+  images: string[];
+  context: Record<string, any>;
+  created_at: string;
+  updated_at: string;
+}
+

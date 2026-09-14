@@ -14,6 +14,7 @@ from app.routes import (
     player,
     settings,
     uploads,
+    feedback,
 )
 
 @asynccontextmanager
@@ -46,6 +47,7 @@ app.include_router(player.router)
 app.include_router(agent.router)
 app.include_router(uploads.router)
 app.include_router(settings.router)
+app.include_router(feedback.router)
 
 # Mount uploads static directory
 UPLOAD_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "uploads"

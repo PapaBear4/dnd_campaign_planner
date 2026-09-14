@@ -10,6 +10,7 @@ import {
   PlayerNote,
   DecompositionJob,
   DecomposeAdventureResponse,
+  FeedbackItem,
 } from './types';
 
 const BASE_URL = '';
@@ -537,7 +538,7 @@ export async function agentAdaptSession(data: {
   conversation_history?: { role: string; content: string }[];
 }): Promise<{
   overview: string;
-  status_updates: { node_id: string; title: string; node_type: string; new_status: string; reason: string }[];
+  status_updates: { node_id: string; title: string; node_type: string; new_status: string; reason: string; node_title?: string }[];
   npc_updates: { node_id?: string; name: string; disposition: string; state_changes: string; notes: string }[];
   emergent_nodes: any[];
   emergent_edges: any[];
@@ -561,7 +562,7 @@ export async function agentAdaptSession(data: {
 export async function agentApplySessionAdaptation(data: {
   campaign_id?: string;
   session_node_id?: string;
-  status_updates?: { node_id: string; title: string; node_type: string; new_status: string; reason: string }[];
+  status_updates?: { node_id: string; title: string; node_type: string; new_status: string; reason: string; node_title?: string }[];
   npc_updates?: { node_id?: string; name: string; disposition: string; state_changes: string; notes: string }[];
   emergent_nodes?: any[];
   emergent_edges?: any[];
@@ -722,5 +723,69 @@ export async function generateSessionRunSheet(
   });
   return handleResponse<GenerateRunSheetResponse>(res);
 }
+
+// --- Feedback & Bug Reporting ---
+export async function getFeedbackList(params?: {
+  type?: string;
+  status?: string;
+  campaign_id?: string;
+}): Promise<FeedbackItem[]> {
+  const query = new URLSearchParams();
+  if (params?.type) query.append('type', params.type);
+  if (params?.status) query.append('status', params.status);
+  if (params?.campaign_id) query.append('campaign_id', params.campaign_id);
+  const qs = query.toString() ? `?${query.toString()}` : '';
+  const res = await fetch(`${BASE_URL}/api/feedback${qs}`);
+  return handleResponse<FeedbackItem[]>(res);
+}
+
+export async function createFeedbackItem(data: {
+  campaign_id?: string;
+  type: 'bug' | 'feature';
+  title: string;
+  category?: string;
+  priority?: string;
+  status?: string;
+  description?: string;
+  images?: string[];
+  context?: Record<string, any>;
+}): Promise<FeedbackItem> {
+  const res = await fetch(`${BASE_URL}/api/feedback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return handleResponse<FeedbackItem>(res);
+}
+
+export async function updateFeedbackItem(
+  id: string,
+  data: Partial<FeedbackItem>
+): Promise<{ status: string; id: string }> {
+  const res = await fetch(`${BASE_URL}/api/feedback/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return handleResponse<{ status: string; id: string }>(res);
+}
+
+export async function deleteFeedbackItem(id: string): Promise<{ status: string; id: string }> {
+  const res = await fetch(`${BASE_URL}/api/feedback/${id}`, {
+    method: 'DELETE',
+  });
+  return handleResponse<{ status: string; id: string }>(res);
+}
+
+export async function uploadFeedbackScreenshot(file: File): Promise<{ url: string; filename: string }> {
+  const formData = new FormData();
+  formData.append('file', file);
+  const res = await fetch(`${BASE_URL}/api/feedback/upload-image`, {
+    method: 'POST',
+    body: formData,
+  });
+  return handleResponse<{ url: string; filename: string }>(res);
+}
+
 
 

@@ -78,7 +78,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
   const [activeRibbonRiff, setActiveRibbonRiff] = useState<'woven' | 'constellation' | 'transit'>('woven');
   const [isRibbonCollapsed, setIsRibbonCollapsed] = useState<boolean>(false);
 
-  // Collapsed Quest Rows state (persisted per campaign)
+  // Collapsed Quest Rows state (persisted per campaign; defaults to 'open-world-events' folded)
   const [collapsedQuestIds, setCollapsedQuestIds] = useState<Set<string>>(() => {
     try {
       const saved = localStorage.getItem(`dnd_tapestry_collapsed_${campaignId}`);
@@ -89,7 +89,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
     } catch (e) {
       console.error('Failed to load collapsed quests:', e);
     }
-    return new Set<string>();
+    return new Set<string>(['open-world-events']);
   });
 
   // Scene card density in expanded rows: 'detailed' (default) or 'compact'
@@ -185,8 +185,56 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
   const [dragOverQuestPosition, setDragOverQuestPosition] = useState<'above' | 'below' | null>(null);
   const [localQuestOrder, setLocalQuestOrder] = useState<string[] | null>(null);
 
-  // Horizontal Session Folding State
-  const [collapsedSessionIds, setCollapsedSessionIds] = useState<Set<string>>(new Set());
+  // Horizontal Session Folding State (persisted per campaign; defaults to 'unscheduled-staging' folded)
+  const [collapsedSessionIds, setCollapsedSessionIds] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem(`dnd_tapestry_collapsed_sessions_${campaignId}`);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return new Set(parsed);
+      }
+    } catch (e) {
+      console.error('Failed to load collapsed sessions:', e);
+    }
+    return new Set<string>(['unscheduled-staging']);
+  });
+
+  // Sync collapsed state when active campaign changes
+  useEffect(() => {
+    try {
+      const savedQuests = localStorage.getItem(`dnd_tapestry_collapsed_${campaignId}`);
+      if (savedQuests) {
+        const parsed = JSON.parse(savedQuests);
+        if (Array.isArray(parsed)) {
+          setCollapsedQuestIds(new Set(parsed));
+        } else {
+          setCollapsedQuestIds(new Set(['open-world-events']));
+        }
+      } else {
+        setCollapsedQuestIds(new Set(['open-world-events']));
+      }
+    } catch (e) {
+      console.error('Failed to load collapsed quests:', e);
+      setCollapsedQuestIds(new Set(['open-world-events']));
+    }
+
+    try {
+      const savedSessions = localStorage.getItem(`dnd_tapestry_collapsed_sessions_${campaignId}`);
+      if (savedSessions) {
+        const parsed = JSON.parse(savedSessions);
+        if (Array.isArray(parsed)) {
+          setCollapsedSessionIds(new Set(parsed));
+        } else {
+          setCollapsedSessionIds(new Set(['unscheduled-staging']));
+        }
+      } else {
+        setCollapsedSessionIds(new Set(['unscheduled-staging']));
+      }
+    } catch (e) {
+      console.error('Failed to load collapsed sessions:', e);
+      setCollapsedSessionIds(new Set(['unscheduled-staging']));
+    }
+  }, [campaignId]);
 
   // Milestone authoring state
   const [newMilestoneQuestId, setNewMilestoneQuestId] = useState<string>('');
@@ -207,16 +255,32 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
       } else {
         next.add(sessionId);
       }
+      try {
+        localStorage.setItem(`dnd_tapestry_collapsed_sessions_${campaignId}`, JSON.stringify(Array.from(next)));
+      } catch (e) {
+        console.error(e);
+      }
       return next;
     });
   };
 
   const collapseAllSessions = () => {
-    setCollapsedSessionIds(new Set(displayColumns.map((c) => c.id)));
+    const allIds = displayColumns.map((c) => c.id);
+    setCollapsedSessionIds(new Set(allIds));
+    try {
+      localStorage.setItem(`dnd_tapestry_collapsed_sessions_${campaignId}`, JSON.stringify(allIds));
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   const expandAllSessions = () => {
     setCollapsedSessionIds(new Set());
+    try {
+      localStorage.setItem(`dnd_tapestry_collapsed_sessions_${campaignId}`, JSON.stringify([]));
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   // 1. Filter Nodes by Type
@@ -225,7 +289,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
     graphData.nodes.forEach((n) => map.set(n.id, n));
 
     const naturalNum = (title: string) => {
-      const match = title.match(/(?:session|arc|act|quest|part|chapter)\s*(\d+)/i) || title.match(/\b(\d+)\b/);
+      const match = title.match(/(?:session|arc|act|quest|part|chapter|encounter|beat)?\s*#?\s*(\d+)/i) || title.match(/\b(\d+)\b/);
       return match ? parseInt(match[1], 10) : 999;
     };
 
@@ -243,7 +307,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
 
     const encounterList = graphData.nodes
       .filter((n) => n.type === 'encounter')
-      .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+      .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || naturalNum(a.title) - naturalNum(b.title));
 
     return {
       arcs: arcList,
@@ -803,9 +867,15 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
     };
   }, [arcs, sessions, sessionArcMap, encounters, encounterSessionMap, campaignId]);
 
-  const { milestoneEmitters, milestoneReceivers } = useMemo(() => {
+  const { milestoneEmitters, milestoneReceivers, allMilestoneLinks } = useMemo(() => {
     const emitters = new Map<string, { targetQuestId: string; label: string; summary?: string }[]>();
-    const receivers = new Map<string, { sourceEncounterId: string; sourceEncounterTitle: string; label: string; summary?: string }[]>();
+    const receivers = new Map<string, { id: string; sourceEncounterId: string; sourceEncounterTitle: string; targetQuestId: string; sessionId: string; label: string; summary?: string }[]>();
+    const links: { id: string; sourceEncounterId: string; sourceEncounterTitle: string; targetQuestId: string; sessionId: string; label: string; summary?: string }[] = [];
+
+    const naturalNum = (title: string) => {
+      const match = title.match(/(?:session|arc|act|quest|part|chapter|encounter|beat)?\s*#?\s*(\d+)/i) || title.match(/\b(\d+)\b/);
+      return match ? parseInt(match[1], 10) : 999;
+    };
 
     graphData.edges.forEach((edge) => {
       const isMilestone = edge.relation_type === 'advances_quest' || edge.metadata_json?.is_milestone;
@@ -829,16 +899,36 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
       if (sourceSessionId) {
         const key = `${targetQuest.id}-${sourceSessionId}`;
         if (!receivers.has(key)) receivers.set(key, []);
-        receivers.get(key)!.push({
+        const item = {
+          id: edge.id,
           sourceEncounterId: sourceEnc.id,
           sourceEncounterTitle: sourceEnc.title,
+          targetQuestId: targetQuest.id,
+          sessionId: sourceSessionId,
           label,
           summary
-        });
+        };
+        receivers.get(key)!.push(item);
+        links.push(item);
       }
     });
 
-    return { milestoneEmitters: emitters, milestoneReceivers: receivers };
+    // Sort receivers in each cell in encounter-chronological order
+    receivers.forEach((list) => {
+      list.sort((a, b) => {
+        const encA = nodeMap.get(a.sourceEncounterId);
+        const encB = nodeMap.get(b.sourceEncounterId);
+        const orderA = encA?.sort_order ?? 0;
+        const orderB = encB?.sort_order ?? 0;
+        if (orderA !== orderB) return orderA - orderB;
+        const natA = naturalNum(encA?.title || '');
+        const natB = naturalNum(encB?.title || '');
+        if (natA !== natB) return natA - natB;
+        return (encA?.title || '').localeCompare(encB?.title || '');
+      });
+    });
+
+    return { milestoneEmitters: emitters, milestoneReceivers: receivers, allMilestoneLinks: links };
   }, [graphData.edges, nodeMap, encounterSessionMap]);
 
   // Precedence edges between encounters (Encounter -> precedes -> Encounter)
@@ -863,8 +953,21 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
     tooltipBelow: boolean;
   }
 
+  interface MilestoneLine {
+    id: string;
+    sourceEncounterId: string;
+    targetQuestId: string;
+    d: string;
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+  }
+
   const matrixContainerRef = useRef<HTMLDivElement>(null);
   const [precedenceLines, setPrecedenceLines] = useState<PrecedenceLine[]>([]);
+  const [milestoneLines, setMilestoneLines] = useState<MilestoneLine[]>([]);
+  const [hoveredMilestoneId, setHoveredMilestoneId] = useState<string | null>(null);
 
   const calculatePrecedenceLines = useCallback(() => {
     if (!matrixContainerRef.current) return;
@@ -932,14 +1035,93 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
     setPrecedenceLines(lines);
   }, [encounterPrecedenceEdges]);
 
+  const calculateMilestoneLines = useCallback(() => {
+    if (!matrixContainerRef.current) return;
+    const mRect = matrixContainerRef.current.getBoundingClientRect();
+    const mLines: MilestoneLine[] = [];
+
+    allMilestoneLinks.forEach((ms) => {
+      const fromEl = document.getElementById(`enc-${ms.sourceEncounterId}`);
+      const toEl = document.getElementById(`milestone-card-${ms.id}`);
+      if (!fromEl || !toEl) return;
+
+      const fRect = fromEl.getBoundingClientRect();
+      const tRect = toEl.getBoundingClientRect();
+
+      let x1: number, y1: number, x2: number, y2: number;
+      let d: string;
+
+      // Case 1: Encounter is below Milestone Card
+      if (fRect.top > tRect.bottom - 10) {
+        x1 = fRect.left + Math.min(36, fRect.width / 2) - mRect.left;
+        y1 = fRect.top - mRect.top;
+        x2 = tRect.left + 23 - mRect.left; // aligned with the purple circle badge
+        y2 = tRect.bottom - mRect.top;
+        const dy = Math.max(25, Math.abs(y1 - y2) * 0.45);
+        d = `M ${x1} ${y1} C ${x1} ${y1 - dy}, ${x2} ${y2 + dy}, ${x2} ${y2}`;
+      }
+      // Case 2: Encounter is above Milestone Card
+      else if (fRect.bottom < tRect.top + 10) {
+        x1 = fRect.left + Math.min(36, fRect.width / 2) - mRect.left;
+        y1 = fRect.bottom - mRect.top;
+        x2 = tRect.left + 23 - mRect.left;
+        y2 = tRect.top - mRect.top;
+        const dy = Math.max(25, Math.abs(y2 - y1) * 0.45);
+        d = `M ${x1} ${y1} C ${x1} ${y1 + dy}, ${x2} ${y2 - dy}, ${x2} ${y2}`;
+      }
+      // Case 3: Same horizontal band / row
+      else {
+        if (fRect.right < tRect.left) {
+          x1 = fRect.right - mRect.left;
+          y1 = fRect.top + fRect.height / 2 - mRect.top;
+          x2 = tRect.left - mRect.left;
+          y2 = tRect.top + tRect.height / 2 - mRect.top;
+          const dx = Math.max(25, Math.abs(x2 - x1) * 0.5);
+          d = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
+        } else {
+          x1 = fRect.left - mRect.left;
+          y1 = fRect.top + fRect.height / 2 - mRect.top;
+          x2 = tRect.right - mRect.left;
+          y2 = tRect.top + tRect.height / 2 - mRect.top;
+          const dx = Math.max(25, Math.abs(x1 - x2) * 0.5);
+          d = `M ${x1} ${y1} C ${x1 - dx} ${y1}, ${x2 + dx} ${y2}, ${x2} ${y2}`;
+        }
+      }
+
+      mLines.push({
+        id: ms.id,
+        sourceEncounterId: ms.sourceEncounterId,
+        targetQuestId: ms.targetQuestId,
+        d,
+        x1,
+        y1,
+        x2,
+        y2
+      });
+    });
+
+    setMilestoneLines(mLines);
+  }, [allMilestoneLinks]);
+
   useEffect(() => {
-    const timeout = setTimeout(calculatePrecedenceLines, 60);
-    window.addEventListener('resize', calculatePrecedenceLines);
+    const runCalc = () => {
+      calculatePrecedenceLines();
+      calculateMilestoneLines();
+    };
+    const timeout = setTimeout(runCalc, 60);
+    window.addEventListener('resize', runCalc);
+    const container = matrixContainerRef.current;
+    if (container) {
+      container.addEventListener('scroll', runCalc, { passive: true, capture: true });
+    }
     return () => {
       clearTimeout(timeout);
-      window.removeEventListener('resize', calculatePrecedenceLines);
+      window.removeEventListener('resize', runCalc);
+      if (container) {
+        container.removeEventListener('scroll', runCalc, { capture: true });
+      }
     };
-  }, [calculatePrecedenceLines, collapsedSessionIds, collapsedQuestIds, encounters]);
+  }, [calculatePrecedenceLines, calculateMilestoneLines, collapsedSessionIds, collapsedQuestIds, collapsedSubQuestParents, encounters, allMilestoneLinks]);
 
   const orderedQuests = useMemo(() => {
     if (!localQuestOrder) return quests;
@@ -2145,6 +2327,44 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
               ref={matrixContainerRef}
               style={{ display: 'flex', flexDirection: 'column', gap: '14px', position: 'relative' }}
             >
+              {/* SVG Background Layer for Milestone Sync Lines (Advances Quest) */}
+              {milestoneLines.length > 0 && (
+                <svg className="matrix-milestone-svg-overlay">
+                  <defs>
+                    <marker
+                      id="arrow-purple"
+                      viewBox="0 0 10 10"
+                      refX="7"
+                      refY="5"
+                      markerWidth="6"
+                      markerHeight="6"
+                      orient="auto-start-reverse"
+                    >
+                      <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="var(--color-purple, #a855f7)" />
+                    </marker>
+                  </defs>
+                  {milestoneLines.map((line) => {
+                    const isHighlighted =
+                      hoveredEncounterId === line.sourceEncounterId ||
+                      hoveredMilestoneId === line.id ||
+                      hoveredQuestId === line.targetQuestId;
+                    const isDimmed = Boolean(
+                      (hoveredEncounterId || hoveredMilestoneId || hoveredQuestId) && !isHighlighted
+                    );
+                    return (
+                      <path
+                        key={line.id}
+                        d={line.d}
+                        className={`matrix-milestone-curve ${
+                          isHighlighted ? 'highlighted' : isDimmed ? 'dimmed' : ''
+                        }`}
+                        markerEnd="url(#arrow-purple)"
+                      />
+                    );
+                  })}
+                </svg>
+              )}
+
               {/* SVG Precedence Overlay for Encounter Precedence Lines */}
               {precedenceLines.length > 0 && (
                 <>
@@ -2894,39 +3114,53 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                           }}
                         >
                           {/* Milestone Sync Receiver Card */}
-                          {cellMilestones.map((ms, msIdx) => (
-                            <div
-                              key={msIdx}
-                              className="tapestry-milestone-sync-card"
-                              title={`Milestone from ${ms.sourceEncounterTitle}: ${ms.summary || ms.label}`}
-                            >
+                          {cellMilestones.map((ms, msIdx) => {
+                            const isMsHighlighted =
+                              hoveredMilestoneId === ms.id || hoveredEncounterId === ms.sourceEncounterId;
+                            return (
                               <div
-                                style={{
-                                  width: '22px',
-                                  height: '22px',
-                                  borderRadius: '50%',
-                                  background: 'var(--color-purple)',
-                                  color: '#080b11',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center',
-                                  fontWeight: 900,
-                                  fontSize: '0.7rem',
-                                  flexShrink: 0
+                                key={ms.id || msIdx}
+                                id={`milestone-card-${ms.id}`}
+                                className={`tapestry-milestone-sync-card ${isMsHighlighted ? 'highlighted' : ''}`}
+                                title={`Milestone from ${ms.sourceEncounterTitle}: ${ms.summary || ms.label} (Click to focus emitter encounter)`}
+                                onMouseEnter={() => setHoveredMilestoneId(ms.id)}
+                                onMouseLeave={() => setHoveredMilestoneId(null)}
+                                onClick={() => {
+                                  const encEl = document.getElementById(`enc-${ms.sourceEncounterId}`);
+                                  if (encEl) {
+                                    encEl.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+                                  }
+                                  setHoveredEncounterId(ms.sourceEncounterId);
                                 }}
                               >
-                                ✦
-                              </div>
-                              <div style={{ minWidth: 0 }}>
-                                <div style={{ fontSize: '0.74rem', fontWeight: 700, color: '#d8b4fe', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                  {ms.label}
+                                <div
+                                  style={{
+                                    width: '22px',
+                                    height: '22px',
+                                    borderRadius: '50%',
+                                    background: 'var(--color-purple)',
+                                    color: '#080b11',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    fontWeight: 900,
+                                    fontSize: '0.7rem',
+                                    flexShrink: 0
+                                  }}
+                                >
+                                  ✦
                                 </div>
-                                <div style={{ fontSize: '0.66rem', color: 'var(--text-secondary)', lineHeight: 1.2, marginTop: '2px', lineClamp: 2, display: '-webkit-box', WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-                                  {ms.summary || `Unlocked by ${ms.sourceEncounterTitle}`}
+                                <div style={{ minWidth: 0 }}>
+                                  <div style={{ fontSize: '0.74rem', fontWeight: 700, color: '#d8b4fe', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                    {ms.label}
+                                  </div>
+                                  <div style={{ fontSize: '0.66rem', color: 'var(--text-secondary)', lineHeight: 1.2, marginTop: '2px', lineClamp: 2, display: '-webkit-box', WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                                    {ms.summary || `Unlocked by ${ms.sourceEncounterTitle}`}
+                                  </div>
                                 </div>
                               </div>
-                            </div>
-                          ))}
+                            );
+                          })}
 
                           {/* Encounter Cards rendered horizontally */}
                           {matchingEncounters.length > 0 ? (
@@ -2934,6 +3168,10 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                               const encStatus = enc.data_json?.status || 'planned';
                               const attached = encounterEntitiesMap.get(enc.id) || { locations: [], monsters: [], items: [], npcs: [] };
                               const hasMilestoneEmit = milestoneEmitters.has(enc.id);
+                              const isLinkedToHoveredMilestone = Boolean(
+                                hoveredMilestoneId &&
+                                  milestoneLines.some((l) => l.id === hoveredMilestoneId && l.sourceEncounterId === enc.id)
+                              );
                               const orderNum = enc.sort_order || encIdx + 1;
                               const encType = enc.data_json?.encounter_type || enc.data_json?.type || 'combat';
 
@@ -2963,7 +3201,9 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                                   onMouseLeave={() => setHoveredEncounterId(null)}
                                   className="tapestry-encounter-card"
                                   style={{
-                                    border: hasMilestoneEmit
+                                    border: isLinkedToHoveredMilestone
+                                      ? '2px solid #f3e8ff'
+                                      : hasMilestoneEmit
                                       ? '1.5px solid var(--color-purple)'
                                       : encStatus === 'completed'
                                       ? '1.5px solid #10b981'
@@ -2971,7 +3211,9 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                                       ? '1.5px solid var(--color-gold)'
                                       : '1.5px solid var(--border-medium)',
                                     opacity: draggingEncounterId === enc.id ? 0.35 : 1,
-                                    boxShadow: hasMilestoneEmit
+                                    boxShadow: isLinkedToHoveredMilestone
+                                      ? '0 0 22px rgba(168, 85, 247, 0.85)'
+                                      : hasMilestoneEmit
                                       ? '0 0 14px rgba(168, 85, 247, 0.3)'
                                       : hoveredEncounterId === enc.id
                                       ? `0 0 16px ${questColor}66`

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import {
   BookOpen,
+  Bug,
   Compass,
   Download,
   Edit2,
@@ -42,6 +43,7 @@ interface NavbarProps {
   isPlayerMode: boolean;
   onTogglePlayerMode: () => void;
   onOpenSettings: () => void;
+  onOpenFeedback?: () => void;
   onToggleAgent: () => void;
   isAgentOpen: boolean;
   onSelectNode?: (node: NodeItem) => void;
@@ -57,6 +59,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   isPlayerMode,
   onTogglePlayerMode,
   onOpenSettings,
+  onOpenFeedback,
   onToggleAgent,
   isAgentOpen,
   onSelectNode,
@@ -456,6 +459,19 @@ export const Navbar: React.FC<NavbarProps> = ({
             </div>
           )}
         </div>
+
+        {/* Feedback & Bug Reporting */}
+        {onOpenFeedback && (
+          <button
+            onClick={onOpenFeedback}
+            className="btn btn-ghost"
+            title="Report Bug / Request Feature / Backlog"
+            style={{ padding: '8px', color: '#ef4444' }}
+            aria-label="Feedback & Bug Tracker"
+          >
+            <Bug size={18} />
+          </button>
+        )}
 
         {/* Settings Modal */}
         <button onClick={onOpenSettings} className="btn btn-ghost" title="Settings &amp; Model Selection" style={{ padding: '8px' }}>

@@ -23,6 +23,7 @@ import { NodeBrowser } from './components/NodeBrowser';
 import { NodeDrawer } from './components/NodeDrawer';
 import { PlayerPortal } from './components/PlayerPortal';
 import { SettingsModal } from './components/SettingsModal';
+import { FeedbackModal } from './components/FeedbackModal';
 import { StatBlockLab } from './components/StatBlockLab';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Campaign, GraphData, HierarchyItem, NodeItem } from './types';
@@ -77,6 +78,7 @@ export function App() {
   // Modals & Drawers
   const [isAgentOpen, setIsAgentOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
   const [selectedNode, setSelectedNode] = useState<NodeItem | null>(null);
   const [focusedCoDMNode, setFocusedCoDMNode] = useState<NodeItem | null>(null);
 
@@ -168,6 +170,7 @@ export function App() {
         isPlayerMode={isPlayerMode}
         onTogglePlayerMode={() => setIsPlayerMode(!isPlayerMode)}
         onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenFeedback={() => setIsFeedbackOpen(true)}
         onToggleAgent={() => setIsAgentOpen(!isAgentOpen)}
         isAgentOpen={isAgentOpen}
         onSelectNode={(n) => setSelectedNode(n)}
@@ -388,6 +391,15 @@ export function App() {
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         onSettingsSaved={loadData}
+      />
+
+      {/* Feedback & Bug Reporting Modal */}
+      <FeedbackModal
+        isOpen={isFeedbackOpen}
+        onClose={() => setIsFeedbackOpen(false)}
+        campaignId={activeCampaignId}
+        campaignName={campaigns.find((c) => c.id === activeCampaignId)?.name}
+        activeTab={activeTab}
       />
     </div>
   );

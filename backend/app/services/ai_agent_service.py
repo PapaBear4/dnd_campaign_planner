@@ -4699,28 +4699,114 @@ Respond strictly in JSON matching this schema:
         }
 
 
-def adapt_campaign_from_transcript(
-    transcript_text: str,
-    campaign_id: str,
-    session_node_id: Optional[str] = None,
-    instruction: Optional[str] = "",
-    generate_player_recap: bool = True,
-    current_adaptation: Optional[Dict[str, Any]] = None,
-    conversation_history: Optional[List[Dict[str, str]]] = None
-) -> Dict[str, Any]:
-    """
-    Analyzes an actual play session transcript, compares against planned nodes in the SQLite graph,
-    and returns a structured adaptation proposal (status transitions, NPC updates, emergent nodes,
-    next session prep, and player recap). Supports iterative conversation to steer changes.
-    """
-    model, model_name = _get_configured_gemini_client()
-    db_context = build_campaign_database_context(campaign_id)
+def _normalize_title_for_matching(title: str) -> str:
+    """Normalize entity title by stripping common prefixes, tags, numbering, and punctuation."""
+    import re
+    t = (title or "").lower().strip()
+    prefixes = [
+        "encounter:", "encounter -", "hazard:", "hazard -", "scene:", "scene -",
+        "quest:", "quest -", "session:", "session -", "sub-quest:", "sub-quest -",
+        "investigation:", "investigation -", "tactical confrontation:",
+        "the ", "a ", "an "
+    ]
+    changed = True
+    while changed:
+        changed = False
+        t = t.strip()
+        for p in prefixes:
+            if t.startswith(p):
+                t = t[len(p):].strip()
+                changed = True
+    t = re.sub(r"^\d+[\.\:\-]\s*", "", t)
+    t = re.sub(r"[^\w\s]", " ", t)
+    return re.sub(r"\s+", " ", t).strip()
 
-    target_session_info = "Auto-detect from transcript"
-    if session_node_id:
-        target_node = graph_service.get_node(session_node_id)
-        if target_node:
-            target_session_info = f"Target Session: '{target_node.title}' (ID: {target_node.id})\nSummary: {target_node.summary}\nPrep Notes: {target_node.content_markdown}"
+
+def _resolve_node_by_title_or_id(
+    query: str,
+    nodes: List[Any],
+    preferred_type: Optional[str] = None,
+    candidate_node_ids: Optional[List[str]] = None
+) -> Optional[Any]:
+    """
+    Finds the best matching node from a list of nodes using exact ID, exact title,
+    normalized prefix-stripped comparison, substring containment, keyword overlap,
+    and sequence matching. Prioritizes candidate_node_ids (e.g. from the target session).
+    """
+    if not query:
+        return None
+    import re
+    q_raw = query.strip()
+    q_lower = q_raw.lower()
+    q_norm = _normalize_title_for_matching(q_raw)
+
+    # 1. Direct ID match
+    for n in nodes:
+        if n.id == q_raw:
+            return n
+
+    # 2. Exact title match (case-insensitive)
+    for n in nodes:
+        if n.title.lower().strip() == q_lower:
+            return n
+
+    # Separate candidates (session encounters) from general nodes
+    cand_nodes = [n for n in nodes if candidate_node_ids and n.id in candidate_node_ids]
+    other_nodes = [n for n in nodes if not candidate_node_ids or n.id not in candidate_node_ids]
+    ordered_search = cand_nodes + other_nodes
+
+    # 3. Normalized exact match (ignoring prefixes like "Encounter: ", "The ", etc.)
+    for n in ordered_search:
+        if _normalize_title_for_matching(n.title) == q_norm:
+            return n
+
+    # 4. Substring containment
+    if len(q_norm) >= 4:
+        for n in ordered_search:
+            n_norm = _normalize_title_for_matching(n.title)
+            if len(n_norm) >= 4:
+                if q_norm in n_norm or n_norm in q_norm:
+                    if not preferred_type or n.type == preferred_type:
+                        return n
+
+    # 5. Keyword overlap (especially valuable for session candidate encounters)
+    stopwords = {"and", "or", "the", "a", "an", "in", "at", "to", "from", "of", "with", "meeting", "accepting", "quest", "part", "session", "encounter", "scene", "fight", "brawl", "combat", "s"}
+    def get_meaningful_words(t_str):
+        cleaned = re.sub(r"[^\w\s]", " ", t_str.lower())
+        return {w for w in cleaned.split() if len(w) > 2 and w not in stopwords}
+
+    q_words = get_meaningful_words(q_raw)
+    if q_words:
+        best_cand_match = None
+        best_cand_overlap = 0
+        for n in cand_nodes:
+            c_words = get_meaningful_words(n.title)
+            overlap = len(q_words & c_words)
+            if overlap > best_cand_overlap:
+                best_cand_overlap = overlap
+                best_cand_match = n
+        if best_cand_overlap >= 1:
+            return best_cand_match
+
+    # 6. Difflib fuzzy sequence matching
+    best_node = None
+    best_score = 0.0
+    for n in ordered_search:
+        n_norm = _normalize_title_for_matching(n.title)
+        ratio = difflib.SequenceMatcher(None, q_norm, n_norm).ratio()
+        if candidate_node_ids and n.id in candidate_node_ids:
+            ratio += 0.12
+        if preferred_type and n.type == preferred_type:
+            ratio += 0.05
+        if ratio > best_score:
+            best_score = ratio
+            best_node = n
+
+    if best_score >= 0.55 and best_node:
+        return best_node
+
+    return None
+
 
 def _generate_offline_session_adaptation(
     transcript_text: str,
@@ -4895,11 +4981,50 @@ def adapt_campaign_from_transcript(
     model, model_name = _get_configured_gemini_client()
     db_context = build_campaign_database_context(campaign_id)
 
+    all_campaign_nodes = graph_service.list_nodes(campaign_id)
+    all_campaign_edges = graph_service.list_edges(campaign_id)
+    session_nodes = [n for n in all_campaign_nodes if n.type == "session"]
+    nodes_map = {n.id: n for n in all_campaign_nodes}
+
+    if not session_node_id and session_nodes:
+        lower_trans = transcript_text.lower()
+        for s in session_nodes:
+            s_norm = _normalize_title_for_matching(s.title)
+            if s_norm and (s_norm in lower_trans or s.title.lower() in lower_trans):
+                session_node_id = s.id
+                break
+        if not session_node_id:
+            import re
+            m = re.search(r"session\s*0?(\d+)", lower_trans)
+            if m:
+                s_num = m.group(1)
+                for s in session_nodes:
+                    if f"session {s_num}" in s.title.lower() or f"session 0{s_num}" in s.title.lower():
+                        session_node_id = s.id
+                        break
+
+    candidate_encounter_ids = []
     target_session_info = "Auto-detect from transcript"
     if session_node_id:
-        target_node = graph_service.get_node(session_node_id)
+        target_node = nodes_map.get(session_node_id) or graph_service.get_node(session_node_id)
         if target_node:
-            target_session_info = f"Target Session: '{target_node.title}' (ID: {target_node.id})\nSummary: {target_node.summary}\nPrep Notes: {target_node.content_markdown}"
+            enc_ids = [e.target_id for e in all_campaign_edges if e.source_id == target_node.id and e.relation_type == "contains"]
+            candidate_encounters = [nodes_map[eid] for eid in enc_ids if eid in nodes_map and nodes_map[eid].type in ("encounter", "hazard", "scene", "quest")]
+            candidate_encounter_ids = [n.id for n in candidate_encounters]
+
+            enc_lines = []
+            for enc in candidate_encounters:
+                enc_status = (enc.data_json or {}).get("status", "planned")
+                enc_lines.append(f"  - [Encounter] \"{enc.title}\" (ID: {enc.id}) [Current Status: {enc_status}]")
+
+            enc_text = "\n".join(enc_lines) if enc_lines else "  - (No encounters explicitly linked to this session yet)"
+            target_session_info = (
+                f"Target Session: '{target_node.title}' (ID: {target_node.id})\n"
+                f"Current Session Status: {(target_node.data_json or {}).get('status', 'planned')}\n"
+                f"Summary: {target_node.summary}\n"
+                f"Prep Notes: {target_node.content_markdown}\n"
+                f"PLANNED ENCOUNTERS IN THIS SESSION (PRIORITIZE RESOLVING THESE IF ENGAGED):\n{enc_text}"
+            )
 
     if not model:
         return _generate_offline_session_adaptation(
@@ -4926,8 +5051,11 @@ Whether given full dialogue or a high-level summary, identify resolved encounter
 CURRENT CAMPAIGN GRAPH & TIMELINE CONTEXT:
 {db_context}
 
-TARGET SESSION (IF SPECIFIED):
+TARGET SESSION (IF SPECIFIED OR DETECTED):
 {target_session_info}
+
+CRITICAL DIRECTIVE FOR ENCOUNTER STATUS UPDATES:
+Review the PLANNED ENCOUNTERS IN THIS SESSION listed above. If the transcript indicates that any of these planned encounters took place, was resolved, fought, negotiated, or bypassed, YOU MUST include them in "status_updates" referencing their EXACT Title and "new_status": "completed".
 
 DM STEERING INSTRUCTION / FOCUS:
 \"{instruction if instruction else 'Analyze session fallout, mark completed encounters, update NPC states, generate emergent loot/clues, and propose next session prep.'}\"
@@ -5003,21 +5131,34 @@ ANALYZE THE TRANSCRIPT AND RETURN STRICT JSON WITH THESE SECTIONS:
         player_note = data.get("player_portal_note") or {}
 
         # Enrich status_updates with node_id if matched
-        nodes = graph_service.list_nodes(campaign_id)
-        title_to_node = {n.title.lower().strip(): n for n in nodes}
         for su in status_updates:
-            t = (su.get("node_title") or su.get("title") or "").lower().strip()
-            matched = title_to_node.get(t)
+            t = (su.get("node_title") or su.get("title") or "").strip()
+            matched = _resolve_node_by_title_or_id(
+                t,
+                all_campaign_nodes,
+                preferred_type=su.get("node_type"),
+                candidate_node_ids=candidate_encounter_ids
+            )
             if matched:
                 su["node_id"] = matched.id
+                su["node_title"] = matched.title
                 su["title"] = matched.title
                 su["node_type"] = matched.type
 
         npc_updates = []
         for nu in node_updates:
+            t = (nu.get("node_title") or nu.get("name") or "").strip()
+            matched = _resolve_node_by_title_or_id(
+                t,
+                all_campaign_nodes,
+                preferred_type="npc"
+            )
+            matched_id = matched.id if matched else None
+            matched_title = matched.title if matched else (nu.get("node_title") or nu.get("name") or "NPC")
             npc_updates.append({
-                "name": nu.get("node_title", "NPC"),
-                "node_title": nu.get("node_title", "NPC"),
+                "node_id": matched_id,
+                "name": matched_title,
+                "node_title": matched_title,
                 "disposition": nu.get("new_disposition", "Allied"),
                 "state_changes": nu.get("append_notes", ""),
                 "notes": nu.get("reason", "")
@@ -5075,23 +5216,37 @@ def apply_session_adaptation(
     Supports both backend model conventions and frontend client aliases.
     """
     nodes = graph_service.list_nodes(campaign_id)
-    title_to_node = {n.title.lower().strip(): n for n in nodes}
     id_to_node = {n.id: n for n in nodes}
+    title_to_node = {n.title.lower().strip(): n for n in nodes}
 
     effective_status_updates = status_updates or []
     effective_node_updates = node_updates or npc_updates or []
     effective_new_nodes = new_nodes or emergent_nodes or []
     effective_new_edges = new_edges or emergent_edges or []
     effective_next_session = next_session_node or next_session_prep
-    
+
+    # Determine candidate encounter ids from session if available
+    sess_id = session_node_id
+    if not sess_id and effective_next_session:
+        sess_id = effective_next_session.get("target_session_id")
+    candidate_encounter_ids = []
+    if sess_id:
+        edges = graph_service.list_edges(campaign_id)
+        candidate_encounter_ids = [e.target_id for e in edges if e.source_id == sess_id and e.relation_type == "contains"]
+
     applied_status_count = 0
     # 1. Apply Status Updates
     for su in effective_status_updates:
         node_id = su.get("node_id")
         matched = id_to_node.get(node_id) if node_id else None
         if not matched:
-            t = (su.get("node_title") or su.get("title") or "").lower().strip()
-            matched = title_to_node.get(t)
+            t = (su.get("node_title") or su.get("title") or "").strip()
+            matched = _resolve_node_by_title_or_id(
+                t,
+                nodes,
+                preferred_type=su.get("node_type"),
+                candidate_node_ids=candidate_encounter_ids
+            )
 
         if matched:
             data_json = dict(matched.data_json or {})
@@ -5105,8 +5260,8 @@ def apply_session_adaptation(
         node_id = nu.get("node_id")
         matched = id_to_node.get(node_id) if node_id else None
         if not matched:
-            t = (nu.get("node_title") or nu.get("name") or "").lower().strip()
-            matched = title_to_node.get(t)
+            t = (nu.get("node_title") or nu.get("name") or "").strip()
+            matched = _resolve_node_by_title_or_id(t, nodes, preferred_type="npc")
 
         if matched:
             append_notes = nu.get("append_notes") or nu.get("state_changes") or ""
