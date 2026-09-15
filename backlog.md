@@ -51,9 +51,13 @@ Completed:
   - Auto-captures environment context (active campaign, active tab, screen resolution, theme, timestamp).
   - Built-in Backlog viewer with category, priority (`low`, `medium`, `high`, `blocker`), status tags (`open`, `in_progress`, `resolved`, `closed`), and screenshot lightbox.
   - Backend endpoints (`/api/feedback` CRUD & `/api/feedback/upload-image`) persisted in SQLite with static screenshot storage.
+- [x] Completed Quests & Sessions Default to Folded:
+  - Any session with status `completed` defaults to folded (slim 48px vertical column spine with green emerald status indicator).
+  - Any quest with status `completed` defaults to folded (single-line 38px horizontal lane).
+  - Collapsed quest headers display `✓ Done` status pill alongside scene counts.
+  - Automatically loads and synchronizes when switching active campaigns while preserving user unroll/fold toggles in localStorage.
 
 
-Next:
 
 - [ ] Color corrections in parchment chat
 - [ ] Create a specialized prompt for ingesting PC sheets that don't chunk.

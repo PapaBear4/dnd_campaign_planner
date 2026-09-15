@@ -50,6 +50,12 @@ import { GraphData, NodeItem, NodeType } from '../types';
 import { MarkdownView } from './MarkdownView';
 import { QuestFlowchart } from './QuestFlowchart';
 import { RunSheetModal } from './RunSheetModal';
+import { TapestryEncounterModal } from './tapestry/modals/TapestryEncounterModal';
+import { TapestryQuestModal } from './tapestry/modals/TapestryQuestModal';
+import { TapestrySessionModal } from './tapestry/modals/TapestrySessionModal';
+import { TapestryArcModal } from './tapestry/modals/TapestryArcModal';
+import { TapestryEntityModal } from './tapestry/modals/TapestryEntityModal';
+import { TapestryCreateNodeModal } from './tapestry/modals/TapestryCreateNodeModal';
 
 interface CampaignTapestryProps {
   campaignId: string;
@@ -78,7 +84,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
   const [activeRibbonRiff, setActiveRibbonRiff] = useState<'woven' | 'constellation' | 'transit'>('woven');
   const [isRibbonCollapsed, setIsRibbonCollapsed] = useState<boolean>(false);
 
-  // Collapsed Quest Rows state (persisted per campaign; defaults to 'open-world-events' folded)
+  // Collapsed Quest Rows state (persisted per campaign; defaults to 'open-world-events' and completed quests folded)
   const [collapsedQuestIds, setCollapsedQuestIds] = useState<Set<string>>(() => {
     try {
       const saved = localStorage.getItem(`dnd_tapestry_collapsed_${campaignId}`);
@@ -89,7 +95,11 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
     } catch (e) {
       console.error('Failed to load collapsed quests:', e);
     }
-    return new Set<string>(['open-world-events']);
+    const defaultCollapsed = new Set<string>(['open-world-events']);
+    graphData.nodes
+      .filter((n) => n.type === 'quest' && n.data_json?.status === 'completed')
+      .forEach((q) => defaultCollapsed.add(q.id));
+    return defaultCollapsed;
   });
 
   // Scene card density in expanded rows: 'detailed' (default) or 'compact'
@@ -185,7 +195,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
   const [dragOverQuestPosition, setDragOverQuestPosition] = useState<'above' | 'below' | null>(null);
   const [localQuestOrder, setLocalQuestOrder] = useState<string[] | null>(null);
 
-  // Horizontal Session Folding State (persisted per campaign; defaults to 'unscheduled-staging' folded)
+  // Horizontal Session Folding State (persisted per campaign; defaults to 'unscheduled-staging' and completed sessions folded)
   const [collapsedSessionIds, setCollapsedSessionIds] = useState<Set<string>>(() => {
     try {
       const saved = localStorage.getItem(`dnd_tapestry_collapsed_sessions_${campaignId}`);
@@ -196,7 +206,11 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
     } catch (e) {
       console.error('Failed to load collapsed sessions:', e);
     }
-    return new Set<string>(['unscheduled-staging']);
+    const defaultCollapsed = new Set<string>(['unscheduled-staging']);
+    graphData.nodes
+      .filter((n) => n.type === 'session' && n.data_json?.status === 'completed')
+      .forEach((s) => defaultCollapsed.add(s.id));
+    return defaultCollapsed;
   });
 
   // Sync collapsed state when active campaign changes
@@ -208,14 +222,26 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
         if (Array.isArray(parsed)) {
           setCollapsedQuestIds(new Set(parsed));
         } else {
-          setCollapsedQuestIds(new Set(['open-world-events']));
+          const defaultQ = new Set<string>(['open-world-events']);
+          graphData.nodes
+            .filter((n) => n.type === 'quest' && n.data_json?.status === 'completed')
+            .forEach((q) => defaultQ.add(q.id));
+          setCollapsedQuestIds(defaultQ);
         }
       } else {
-        setCollapsedQuestIds(new Set(['open-world-events']));
+        const defaultQ = new Set<string>(['open-world-events']);
+        graphData.nodes
+          .filter((n) => n.type === 'quest' && n.data_json?.status === 'completed')
+          .forEach((q) => defaultQ.add(q.id));
+        setCollapsedQuestIds(defaultQ);
       }
     } catch (e) {
       console.error('Failed to load collapsed quests:', e);
-      setCollapsedQuestIds(new Set(['open-world-events']));
+      const defaultQ = new Set<string>(['open-world-events']);
+      graphData.nodes
+        .filter((n) => n.type === 'quest' && n.data_json?.status === 'completed')
+        .forEach((q) => defaultQ.add(q.id));
+      setCollapsedQuestIds(defaultQ);
     }
 
     try {
@@ -225,16 +251,28 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
         if (Array.isArray(parsed)) {
           setCollapsedSessionIds(new Set(parsed));
         } else {
-          setCollapsedSessionIds(new Set(['unscheduled-staging']));
+          const defaultS = new Set<string>(['unscheduled-staging']);
+          graphData.nodes
+            .filter((n) => n.type === 'session' && n.data_json?.status === 'completed')
+            .forEach((s) => defaultS.add(s.id));
+          setCollapsedSessionIds(defaultS);
         }
       } else {
-        setCollapsedSessionIds(new Set(['unscheduled-staging']));
+        const defaultS = new Set<string>(['unscheduled-staging']);
+        graphData.nodes
+          .filter((n) => n.type === 'session' && n.data_json?.status === 'completed')
+          .forEach((s) => defaultS.add(s.id));
+        setCollapsedSessionIds(defaultS);
       }
     } catch (e) {
       console.error('Failed to load collapsed sessions:', e);
-      setCollapsedSessionIds(new Set(['unscheduled-staging']));
+      const defaultS = new Set<string>(['unscheduled-staging']);
+      graphData.nodes
+        .filter((n) => n.type === 'session' && n.data_json?.status === 'completed')
+        .forEach((s) => defaultS.add(s.id));
+      setCollapsedSessionIds(defaultS);
     }
-  }, [campaignId]);
+  }, [campaignId, graphData.nodes]);
 
   // Milestone authoring state
   const [newMilestoneQuestId, setNewMilestoneQuestId] = useState<string>('');
@@ -2620,17 +2658,28 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                             </button>
                           )}
                           <span
-                            className="status-pill"
+                            className={`status-pill status-${quest.data_json?.status === 'completed' ? 'completed' : quest.data_json?.status === 'in_progress' ? 'inprogress' : 'planned'}`}
                             style={{
-                              fontSize: '0.62rem',
+                              fontSize: '0.6rem',
                               padding: '1px 5px',
-                              background: `${questColor}1a`,
-                              borderColor: `${questColor}44`,
-                              color: questColor
                             }}
                           >
-                            {rowEncountersCount} {rowEncountersCount === 1 ? 'scene' : 'scenes'}
+                            {isOpenRow ? `${rowEncountersCount} scenes` : quest.data_json?.status === 'completed' ? '✓ Done' : quest.data_json?.status === 'in_progress' ? '● Active' : 'Planned'}
                           </span>
+                          {!isOpenRow && (
+                            <span
+                              className="status-pill"
+                              style={{
+                                fontSize: '0.6rem',
+                                padding: '1px 5px',
+                                background: `${questColor}1a`,
+                                borderColor: `${questColor}44`,
+                                color: questColor
+                              }}
+                            >
+                              {rowEncountersCount} {rowEncountersCount === 1 ? 'scene' : 'scenes'}
+                            </span>
+                          )}
                           {!isOpenRow && (
                             <button
                               type="button"
@@ -2763,8 +2812,8 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                                 {quest.data_json?.category || (isOpenRow ? 'World Events' : isSubQuest ? 'Sub-Quest' : 'Storyline')}
                               </span>
                             </div>
-                            <span className={`status-pill status-${quest.data_json?.status === 'in_progress' ? 'inprogress' : 'planned'}`}>
-                              {isOpenRow ? `${unassignedQuestEncounters.length} Scenes` : (quest.data_json?.status || 'Active')}
+                            <span className={`status-pill status-${quest.data_json?.status === 'completed' ? 'completed' : quest.data_json?.status === 'in_progress' ? 'inprogress' : 'planned'}`}>
+                              {isOpenRow ? `${unassignedQuestEncounters.length} Scenes` : quest.data_json?.status === 'completed' ? '✓ Done' : (quest.data_json?.status === 'in_progress' ? '● Active' : 'Planned')}
                             </span>
                           </div>
                           <h4 style={{ margin: '4px 0 2px', fontSize: '0.88rem', fontWeight: 700, lineHeight: 1.3 }}>
@@ -3398,858 +3447,64 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
 
       {/* A. ENCOUNTER MODAL */}
       {activeEncounterNode && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(4, 7, 13, 0.85)',
-            backdropFilter: 'blur(10px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1100,
-            padding: '24px',
-            animation: 'fadeIn 0.15s ease-out'
-          }}
-          onClick={() => setActiveEncounterNode(null)}
-        >
-          <div
-            className="glass-panel animate-scale-up"
-            style={{
-              width: '92vw',
-              maxWidth: '1240px',
-              height: '88vh',
-              maxHeight: '920px',
-              borderRadius: '16px',
-              background: 'var(--bg-surface)',
-              border: '1px solid var(--border-medium)',
-              boxShadow: '0 25px 60px rgba(0,0,0,0.75)',
-              display: 'flex',
-              flexDirection: 'column',
-              overflow: 'hidden'
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
-            <div
-              style={{
-                padding: '16px 24px',
-                borderBottom: '1px solid var(--border-subtle)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                background: 'rgba(255, 255, 255, 0.02)'
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                <span className="badge badge-encounter" style={{ fontSize: '0.8rem', padding: '4px 10px', fontWeight: 800 }}>
-                  ENCOUNTER SCENE
-                </span>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <button
-                    onClick={(e) => handleToggleReveal(e, activeEncounterNode)}
-                    className="btn btn-ghost"
-                    style={{ padding: '4px', color: activeEncounterNode.revealed_to_players ? 'var(--color-emerald)' : 'var(--text-muted)' }}
-                    title={activeEncounterNode.revealed_to_players ? 'Revealed to Players' : 'Hidden Secret'}
-                  >
-                    {activeEncounterNode.revealed_to_players ? <Eye size={16} /> : <EyeOff size={16} />}
-                  </button>
-                  <button
-                    onClick={(e) => handleToggleCanon(e, activeEncounterNode)}
-                    className="btn btn-ghost"
-                    style={{ padding: '4px', color: (activeEncounterNode.is_canon ?? true) ? 'var(--color-gold)' : 'var(--text-muted)' }}
-                    title="Canon protection"
-                  >
-                    {(activeEncounterNode.is_canon ?? true) ? <ShieldCheck size={16} /> : <Feather size={16} />}
-                  </button>
-                  <h2 style={{ fontSize: '1.25rem', fontWeight: 800, margin: 0, color: 'var(--text-primary)' }}>
-                    {activeEncounterNode.title}
-                  </h2>
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <button
-                  onClick={() => {
-                    onSelectNode(activeEncounterNode);
-                    setActiveEncounterNode(null);
-                  }}
-                  className="btn btn-secondary"
-                  style={{ fontSize: '0.78rem', padding: '6px 12px', gap: '5px' }}
-                  title="Open full entity editor"
-                >
-                  <Maximize2 size={14} /> Full Edit
-                </button>
-                <button
-                  onClick={() => {
-                    onFocusCoDM(activeEncounterNode);
-                    setActiveEncounterNode(null);
-                  }}
-                  className="btn btn-secondary"
-                  style={{ fontSize: '0.78rem', padding: '6px 12px', gap: '5px', color: 'var(--color-gold)', borderColor: 'rgba(245, 158, 11, 0.3)' }}
-                  title="Brainstorm scene in Co-DM Studio"
-                >
-                  <Sparkles size={14} /> Brainstorm
-                </button>
-                <button
-                  onClick={() => handleStatusChange(activeEncounterNode, activeEncounterNode.data_json?.status === 'completed' ? 'in_progress' : 'completed')}
-                  className={`btn ${activeEncounterNode.data_json?.status === 'completed' ? 'btn-secondary' : 'btn-primary'}`}
-                  style={{ fontSize: '0.78rem', padding: '6px 14px' }}
-                >
-                  {activeEncounterNode.data_json?.status === 'completed' ? 'Mark In Progress' : '✓ Resolve Scene'}
-                </button>
-                <button
-                  onClick={(e) => handleDeleteNode(e, activeEncounterNode.id)}
-                  className="btn btn-ghost"
-                  style={{ padding: '6px', color: 'var(--color-crimson)' }}
-                  title="Delete encounter"
-                >
-                  <Trash2 size={16} />
-                </button>
-                <button onClick={() => setActiveEncounterNode(null)} className="btn btn-ghost" style={{ padding: '6px' }}>
-                  <X size={18} />
-                </button>
-              </div>
-            </div>
-
-            {/* Modal Body / Two Columns */}
-            <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-              {/* Left Column: Synopsis, Tapestry Alignment, Attached Entities */}
-              <div
-                style={{
-                  width: '420px',
-                  minWidth: '360px',
-                  maxWidth: '460px',
-                  borderRight: '1px solid var(--border-subtle)',
-                  padding: '20px',
-                  overflowY: 'auto',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '16px',
-                  background: 'rgba(0, 0, 0, 0.1)'
-                }}
-              >
-                {/* Synopsis */}
-                {activeEncounterNode.summary && (
-                  <div style={{ background: 'var(--bg-card)', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-subtle)' }}>
-                    <span style={{ fontSize: '0.72rem', fontWeight: 800, textTransform: 'uppercase', color: 'var(--color-gold)', letterSpacing: '0.5px', display: 'block', marginBottom: '6px' }}>
-                      Scene Synopsis
-                    </span>
-                    <p style={{ fontSize: '0.86rem', color: 'var(--text-primary)', lineHeight: 1.5, margin: 0 }}>
-                      {activeEncounterNode.summary}
-                    </p>
-                  </div>
-                )}
-
-                {/* Narrative Weave Alignment */}
-                <div
-                  style={{
-                    background: 'rgba(245, 158, 11, 0.05)',
-                    border: '1px solid rgba(245, 158, 11, 0.25)',
-                    borderRadius: '12px',
-                    padding: '14px',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '10px'
-                  }}
-                >
-                  <span style={{ fontSize: '0.78rem', fontWeight: 800, textTransform: 'uppercase', color: 'var(--color-gold)', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <GitBranch size={14} /> Narrative Tapestry Alignment
-                  </span>
-
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                    <div>
-                      <label style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px', fontWeight: 600 }}>
-                        Assigned Story Quest:
-                      </label>
-                      <select
-                        value={encounterQuestMap.get(activeEncounterNode.id) || ''}
-                        onChange={(e) => handleAssignEncounterToQuest(activeEncounterNode.id, e.target.value || null)}
-                        style={{
-                          width: '100%',
-                          padding: '6px 8px',
-                          fontSize: '0.8rem',
-                          borderRadius: '6px',
-                          background: 'var(--bg-surface)',
-                          border: '1px solid var(--border-medium)',
-                          color: 'var(--text-primary)'
-                        }}
-                      >
-                        <option value="">None (Open / World Event)</option>
-                        {quests.map((q) => (
-                          <option key={q.id} value={q.id}>{q.title}</option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div>
-                      <label style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px', fontWeight: 600 }}>
-                        Assigned Game Session:
-                      </label>
-                      <select
-                        value={encounterSessionMap.get(activeEncounterNode.id) || ''}
-                        onChange={(e) => handleAssignEncounterToSession(activeEncounterNode.id, e.target.value || null)}
-                        style={{
-                          width: '100%',
-                          padding: '6px 8px',
-                          fontSize: '0.8rem',
-                          borderRadius: '6px',
-                          background: 'var(--bg-surface)',
-                          border: '1px solid var(--border-medium)',
-                          color: 'var(--text-primary)'
-                        }}
-                      >
-                        <option value="">Unscheduled (Prep Staging)</option>
-                        {sessions.map((s, idx) => (
-                          <option key={s.id} value={s.id}>Session {idx + 1}: {s.title}</option>
-                        ))}
-                        {sessions.length === 0 && (
-                          <option value="virtual-session-1">Session 1 (Prep & Kickoff)</option>
-                        )}
-                      </select>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Milestone Consequences & Cross-Quest Impacts */}
-                {(() => {
-                  const outgoingMilestones = graphData.edges.filter(
-                    (e) =>
-                      e.source_id === activeEncounterNode.id &&
-                      (e.relation_type === 'advances_quest' || e.metadata_json?.is_milestone)
-                  );
-
-                  return (
-                    <div
-                      style={{
-                        background: 'rgba(168, 85, 247, 0.06)',
-                        border: '1px solid rgba(168, 85, 247, 0.3)',
-                        borderRadius: '12px',
-                        padding: '14px',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: '12px'
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <span style={{ fontSize: '0.78rem', fontWeight: 800, textTransform: 'uppercase', color: '#c084fc', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          ✦ Milestone Consequences
-                        </span>
-                        <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
-                          Advances Other Quests
-                        </span>
-                      </div>
-
-                      {outgoingMilestones.length > 0 && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                          {outgoingMilestones.map((edge) => {
-                            const targetQ = nodeMap.get(edge.target_id);
-                            return (
-                              <div
-                                key={edge.id}
-                                style={{
-                                  background: 'rgba(168, 85, 247, 0.12)',
-                                  border: '1px solid rgba(168, 85, 247, 0.35)',
-                                  borderRadius: '8px',
-                                  padding: '8px 10px',
-                                  display: 'flex',
-                                  alignItems: 'flex-start',
-                                  justifyContent: 'space-between',
-                                  gap: '8px'
-                                }}
-                              >
-                                <div>
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                    <span style={{ fontSize: '0.66rem', fontWeight: 800, textTransform: 'uppercase', color: '#e9d5ff', background: 'rgba(168, 85, 247, 0.3)', padding: '1px 5px', borderRadius: '4px' }}>
-                                      Impacts
-                                    </span>
-                                    <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-                                      {targetQ ? targetQ.title : 'Target Quest'}
-                                    </span>
-                                  </div>
-                                  {edge.metadata_json?.summary && (
-                                    <div style={{ fontSize: '0.72rem', color: '#d8b4fe', marginTop: '4px', lineHeight: 1.3 }}>
-                                      {edge.metadata_json.summary}
-                                    </div>
-                                  )}
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeleteMilestoneImpact(edge.id)}
-                                  className="btn btn-ghost"
-                                  style={{ padding: '3px', color: 'var(--color-crimson)', flexShrink: 0 }}
-                                  title="Remove milestone impact"
-                                >
-                                  <Trash2 size={13} />
-                                </button>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-
-                      {/* Add new milestone impact */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', paddingTop: outgoingMilestones.length > 0 ? '8px' : '0', borderTop: outgoingMilestones.length > 0 ? '1px dashed rgba(168, 85, 247, 0.25)' : 'none' }}>
-                        <span style={{ fontSize: '0.72rem', color: '#e9d5ff', fontWeight: 600 }}>
-                          Link to Storyline or Sub-Quest:
-                        </span>
-                        <select
-                          value={newMilestoneQuestId}
-                          onChange={(e) => setNewMilestoneQuestId(e.target.value)}
-                          style={{
-                            width: '100%',
-                            padding: '5px 8px',
-                            fontSize: '0.78rem',
-                            borderRadius: '6px',
-                            background: 'var(--bg-surface)',
-                            border: '1px solid rgba(168, 85, 247, 0.3)',
-                            color: 'var(--text-primary)'
-                          }}
-                        >
-                          <option value="">Select Impacted Quest...</option>
-                          {quests.map((q) => (
-                            <option key={q.id} value={q.id}>{q.title}</option>
-                          ))}
-                        </select>
-                        <input
-                          type="text"
-                          placeholder="Consequence / milestone note (e.g. Unlocks Chapter 2)"
-                          value={newMilestoneSummary}
-                          onChange={(e) => setNewMilestoneSummary(e.target.value)}
-                          style={{
-                            width: '100%',
-                            padding: '5px 8px',
-                            fontSize: '0.78rem',
-                            borderRadius: '6px',
-                            background: 'var(--bg-surface)',
-                            border: '1px solid rgba(168, 85, 247, 0.3)',
-                            color: 'var(--text-primary)'
-                          }}
-                        />
-                        <button
-                          type="button"
-                          onClick={() => handleAddMilestoneImpact(activeEncounterNode.id)}
-                          disabled={!newMilestoneQuestId || isSavingMilestone}
-                          className="btn btn-secondary"
-                          style={{
-                            fontSize: '0.74rem',
-                            padding: '4px 10px',
-                            color: '#c084fc',
-                            borderColor: 'rgba(168, 85, 247, 0.4)',
-                            background: 'rgba(168, 85, 247, 0.1)',
-                            opacity: (!newMilestoneQuestId || isSavingMilestone) ? 0.5 : 1,
-                            cursor: (!newMilestoneQuestId || isSavingMilestone) ? 'not-allowed' : 'pointer'
-                          }}
-                        >
-                          ✦ Link Milestone Consequence
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })()}
-
-                {/* Scene Precedence & Branching Flows */}
-                {(() => {
-                  const incomingEdges = graphData.edges.filter(
-                    (e) => e.target_id === activeEncounterNode.id && e.relation_type === 'precedes'
-                  );
-                  const outgoingEdges = graphData.edges.filter(
-                    (e) => e.source_id === activeEncounterNode.id && e.relation_type === 'precedes'
-                  );
-
-                  return (
-                    <div
-                      style={{
-                        background: 'rgba(245, 158, 11, 0.06)',
-                        border: '1px solid rgba(245, 158, 11, 0.3)',
-                        borderRadius: '12px',
-                        padding: '14px',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: '12px'
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <span style={{ fontSize: '0.78rem', fontWeight: 800, textTransform: 'uppercase', color: 'var(--color-gold)', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          ⚡ Scene Flow &amp; Precedence
-                        </span>
-                        <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
-                          Golden Connecting Lines
-                        </span>
-                      </div>
-
-                      {/* Existing Precursor Scenes */}
-                      {incomingEdges.length > 0 && (
-                        <div>
-                          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', display: 'block', marginBottom: '4px' }}>
-                            Preceded By:
-                          </span>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                            {incomingEdges.map((edge) => {
-                              const srcNode = nodeMap.get(edge.source_id);
-                              return (
-                                <div
-                                  key={edge.id}
-                                  style={{
-                                    background: 'rgba(245, 158, 11, 0.12)',
-                                    border: '1px solid rgba(245, 158, 11, 0.3)',
-                                    borderRadius: '6px',
-                                    padding: '5px 8px',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'space-between',
-                                    gap: '6px'
-                                  }}
-                                >
-                                  <span style={{ fontSize: '0.76rem', color: 'var(--text-primary)', fontWeight: 600 }}>
-                                    ← {srcNode?.title || 'Unknown Encounter'} {edge.label ? `(${edge.label})` : ''}
-                                  </span>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleDeletePrecedenceEdge(edge.id)}
-                                    className="btn btn-ghost"
-                                    style={{ padding: '2px', color: 'var(--color-crimson)' }}
-                                    title="Remove link"
-                                  >
-                                    <Trash2 size={12} />
-                                  </button>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Existing Downstream Branches */}
-                      {outgoingEdges.length > 0 && (
-                        <div>
-                          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', display: 'block', marginBottom: '4px' }}>
-                            Leads To (Branches):
-                          </span>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                            {outgoingEdges.map((edge) => {
-                              const tgtNode = nodeMap.get(edge.target_id);
-                              return (
-                                <div
-                                  key={edge.id}
-                                  style={{
-                                    background: 'rgba(245, 158, 11, 0.12)',
-                                    border: '1px solid rgba(245, 158, 11, 0.3)',
-                                    borderRadius: '6px',
-                                    padding: '5px 8px',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'space-between',
-                                    gap: '6px'
-                                  }}
-                                >
-                                  <span style={{ fontSize: '0.76rem', color: 'var(--text-primary)', fontWeight: 600 }}>
-                                    → {tgtNode?.title || 'Unknown Encounter'} {edge.label ? `[${edge.label}]` : ''}
-                                  </span>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleDeletePrecedenceEdge(edge.id)}
-                                    className="btn btn-ghost"
-                                    style={{ padding: '2px', color: 'var(--color-crimson)' }}
-                                    title="Remove link"
-                                  >
-                                    <Trash2 size={12} />
-                                  </button>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Add Branch Link Controls */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', paddingTop: '6px', borderTop: '1px dashed rgba(245, 158, 11, 0.25)' }}>
-                        <span style={{ fontSize: '0.72rem', color: 'var(--color-gold)', fontWeight: 600 }}>
-                          Link to Next Scene / Branch:
-                        </span>
-                        <select
-                          value={newBranchTargetEncounterId}
-                          onChange={(e) => setNewBranchTargetEncounterId(e.target.value)}
-                          style={{
-                            width: '100%',
-                            padding: '5px 8px',
-                            fontSize: '0.78rem',
-                            borderRadius: '6px',
-                            background: 'var(--bg-surface)',
-                            border: '1px solid var(--border-medium)',
-                            color: 'var(--text-primary)'
-                          }}
-                        >
-                          <option value="">Select Next Scene...</option>
-                          {encounters
-                            .filter((e) => e.id !== activeEncounterNode.id)
-                            .map((e) => (
-                              <option key={e.id} value={e.id}>
-                                {e.title}
-                              </option>
-                            ))}
-                        </select>
-                        <input
-                          type="text"
-                          placeholder="Condition / branch label (e.g. Stealth, Combat, Success)"
-                          value={newBranchLabel}
-                          onChange={(e) => setNewBranchLabel(e.target.value)}
-                          style={{
-                            width: '100%',
-                            padding: '5px 8px',
-                            fontSize: '0.78rem',
-                            borderRadius: '6px',
-                            background: 'var(--bg-surface)',
-                            border: '1px solid var(--border-medium)',
-                            color: 'var(--text-primary)'
-                          }}
-                        />
-                        <button
-                          type="button"
-                          onClick={() => handleAddBranchEncounter(activeEncounterNode.id)}
-                          disabled={!newBranchTargetEncounterId || isSavingPrecedence}
-                          className="btn btn-secondary"
-                          style={{
-                            fontSize: '0.74rem',
-                            padding: '4px 10px',
-                            color: 'var(--color-gold)',
-                            borderColor: 'rgba(245, 158, 11, 0.4)',
-                            background: 'rgba(245, 158, 11, 0.1)',
-                            opacity: (!newBranchTargetEncounterId || isSavingPrecedence) ? 0.5 : 1,
-                            cursor: (!newBranchTargetEncounterId || isSavingPrecedence) ? 'not-allowed' : 'pointer'
-                          }}
-                        >
-                          ⚡ Connect Precedence Line
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })()}
-
-                {/* Attached Entities (Monsters, Locations, Items, NPCs) */}
-                {(() => {
-                  const attached = encounterEntitiesMap.get(activeEncounterNode.id) || { locations: [], monsters: [], items: [], npcs: [] };
-                  const hasAny = attached.locations.length > 0 || attached.monsters.length > 0 || attached.items.length > 0 || attached.npcs.length > 0;
-
-                  return (
-                    <div style={{ background: 'var(--bg-card)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border-subtle)', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <span style={{ fontSize: '0.8rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-secondary)' }}>
-                          Attached World Entities
-                        </span>
-                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                          Click to inspect
-                        </span>
-                      </div>
-
-                      {!hasAny ? (
-                        <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: 0, fontStyle: 'italic' }}>
-                          No monsters, items, or locations attached yet.
-                        </p>
-                      ) : (
-                        <>
-                          {attached.locations.length > 0 && (
-                            <div>
-                              <span style={{ fontSize: '0.74rem', color: '#34d399', fontWeight: 700, display: 'block', marginBottom: '6px' }}>
-                                📍 Locations:
-                              </span>
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                                {attached.locations.map((loc) => (
-                                  <div
-                                    key={loc.id}
-                                    onClick={() => {
-                                      onSelectNode(loc);
-                                    }}
-                                    style={{ background: 'rgba(16, 185, 129, 0.08)', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: '6px', padding: '6px 10px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
-                                  >
-                                    <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>{loc.title}</span>
-                                    <ChevronRight size={13} style={{ color: '#34d399' }} />
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-
-                          {attached.monsters.length > 0 && (
-                            <div>
-                              <span style={{ fontSize: '0.74rem', color: '#f87171', fontWeight: 700, display: 'block', marginBottom: '6px' }}>
-                                👹 Monsters & NPCs ({attached.monsters.length}):
-                              </span>
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                                {attached.monsters.map((m) => (
-                                  <div
-                                    key={m.id}
-                                    onClick={() => {
-                                      onSelectNode(m);
-                                    }}
-                                    style={{ background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: '6px', padding: '6px 10px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
-                                  >
-                                    <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>{m.title}</span>
-                                    <ChevronRight size={13} style={{ color: '#f87171' }} />
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-
-                          {attached.items.length > 0 && (
-                            <div>
-                              <span style={{ fontSize: '0.74rem', color: '#c084fc', fontWeight: 700, display: 'block', marginBottom: '6px' }}>
-                                🎁 Loot & Rewards ({attached.items.length}):
-                              </span>
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                                {attached.items.map((it) => (
-                                  <div
-                                    key={it.id}
-                                    onClick={() => {
-                                      onSelectNode(it);
-                                    }}
-                                    style={{ background: 'rgba(168, 85, 247, 0.08)', border: '1px solid rgba(168, 85, 247, 0.3)', borderRadius: '6px', padding: '6px 10px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
-                                  >
-                                    <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>{it.title}</span>
-                                    <Package size={13} style={{ color: '#c084fc' }} />
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        </>
-                      )}
-                    </div>
-                  );
-                })()}
-              </div>
-
-              {/* Right Column: Full Read-Aloud & DM Notes Canvas */}
-              <div
-                style={{
-                  flex: 1,
-                  padding: '20px 26px',
-                  overflowY: 'auto',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '16px'
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '10px' }}>
-                  <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-gold)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <BookOpen size={16} /> Read-Aloud Boxed Text &amp; DM Tactical Secrets
-                  </span>
-                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                    Markdown Rendered
-                  </span>
-                </div>
-
-                {activeEncounterNode.content_markdown ? (
-                  <div style={{ background: 'rgba(0, 0, 0, 0.2)', borderRadius: '10px', padding: '20px', border: '1px solid var(--border-subtle)' }}>
-                    <MarkdownView content={activeEncounterNode.content_markdown} />
-                  </div>
-                ) : (
-                  <div
-                    style={{
-                      background: 'rgba(0, 0, 0, 0.1)',
-                      borderRadius: '10px',
-                      padding: '32px',
-                      border: '1px dashed var(--border-medium)',
-                      textAlign: 'center',
-                      color: 'var(--text-muted)',
-                      fontSize: '0.85rem'
-                    }}
-                  >
-                    <p style={{ margin: '0 0 12px' }}>No detailed read-aloud boxed text or DM tactical secrets added yet.</p>
-                    <button
-                      onClick={() => {
-                        onSelectNode(activeEncounterNode);
-                        setActiveEncounterNode(null);
-                      }}
-                      className="btn btn-primary"
-                      style={{ fontSize: '0.8rem' }}
-                    >
-                      Add Boxed Text in Full Editor
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
+        <TapestryEncounterModal
+          encounter={activeEncounterNode}
+          onClose={() => setActiveEncounterNode(null)}
+          onSelectNode={onSelectNode}
+          onFocusCoDM={onFocusCoDM}
+          onStatusChange={handleStatusChange}
+          onToggleCanon={handleToggleCanon}
+          onToggleReveal={handleToggleReveal}
+          onDeleteNode={handleDeleteNode}
+          graphData={graphData}
+          quests={quests}
+          sessions={sessions}
+          encounters={encounters}
+          nodeMap={nodeMap}
+          encounterQuestMap={encounterQuestMap}
+          encounterSessionMap={encounterSessionMap}
+          encounterEntitiesMap={encounterEntitiesMap}
+          onAssignEncounterToQuest={handleAssignEncounterToQuest}
+          onAssignEncounterToSession={handleAssignEncounterToSession}
+          newMilestoneQuestId={newMilestoneQuestId}
+          newMilestoneSummary={newMilestoneSummary}
+          isSavingMilestone={isSavingMilestone}
+          onChangeMilestoneQuestId={setNewMilestoneQuestId}
+          onChangeMilestoneSummary={setNewMilestoneSummary}
+          onAddMilestoneImpact={handleAddMilestoneImpact}
+          onDeleteMilestoneImpact={handleDeleteMilestoneImpact}
+          newBranchTargetEncounterId={newBranchTargetEncounterId}
+          newBranchLabel={newBranchLabel}
+          isSavingPrecedence={isSavingPrecedence}
+          onChangeBranchTargetEncounterId={setNewBranchTargetEncounterId}
+          onChangeBranchLabel={setNewBranchLabel}
+          onAddBranchEncounter={handleAddBranchEncounter}
+          onDeletePrecedenceEdge={handleDeletePrecedenceEdge}
+        />
       )}
 
       {/* B. QUEST MODAL */}
       {activeQuestNode && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(4, 7, 13, 0.82)',
-            backdropFilter: 'blur(8px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1100,
-            padding: '24px'
-          }}
-          onClick={() => setActiveQuestNode(null)}
-        >
-          <div
-            className="glass-panel animate-fade-in"
-            style={{
-              width: '100%',
-              maxWidth: '580px',
-              borderRadius: '16px',
-              padding: '26px',
-              background: 'var(--bg-surface)',
-              border: '1px solid var(--color-gold)'
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px' }}>
-              <div>
-                <span style={{ fontSize: '0.74rem', fontWeight: 800, color: 'var(--color-gold)', textTransform: 'uppercase' }}>
-                  Quest Line Dossier
-                </span>
-                <h2 style={{ fontSize: '1.25rem', fontWeight: 800, margin: '4px 0' }}>{activeQuestNode.title}</h2>
-              </div>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button
-                  onClick={(e) => handleDeleteNode(e, activeQuestNode.id)}
-                  className="btn btn-ghost"
-                  style={{ padding: '6px', color: 'var(--color-crimson)' }}
-                  title="Delete quest"
-                >
-                  <Trash2 size={16} />
-                </button>
-                <button onClick={() => setActiveQuestNode(null)} className="btn btn-ghost" style={{ padding: '6px' }}>
-                  <X size={18} />
-                </button>
-              </div>
-            </div>
-
-            {activeQuestNode.summary && (
-              <p style={{ margin: '0 0 16px', fontSize: '0.85rem', lineHeight: 1.5, color: 'var(--text-secondary)' }}>
-                {activeQuestNode.summary}
-              </p>
-            )}
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
-              <button
-                onClick={() => {
-                  onSelectNode(activeQuestNode);
-                  setActiveQuestNode(null);
-                }}
-                className="btn btn-secondary"
-                style={{ fontSize: '0.8rem' }}
-              >
-                Open Full Codex Drawer
-              </button>
-              <button
-                onClick={() => {
-                  onFocusCoDM(activeQuestNode);
-                  setActiveQuestNode(null);
-                }}
-                className="btn btn-primary"
-                style={{ fontSize: '0.8rem' }}
-              >
-                <Sparkles size={14} /> Brainstorm in Co-DM
-              </button>
-            </div>
-          </div>
-        </div>
+        <TapestryQuestModal
+          quest={activeQuestNode}
+          onClose={() => setActiveQuestNode(null)}
+          onDelete={handleDeleteNode}
+          onSelectNode={onSelectNode}
+          onFocusCoDM={onFocusCoDM}
+        />
       )}
 
       {/* C. SESSION MODAL */}
       {activeSessionNode && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(4, 7, 13, 0.82)',
-            backdropFilter: 'blur(8px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1100,
-            padding: '24px'
-          }}
-          onClick={() => setActiveSessionNode(null)}
-        >
-          <div
-            className="glass-panel animate-fade-in"
-            style={{
-              width: '100%',
-              maxWidth: '540px',
-              borderRadius: '16px',
-              padding: '26px',
-              background: 'var(--bg-surface)',
-              border: '1px solid var(--border-medium)'
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px' }}>
-              <div>
-                <span style={{ fontSize: '0.74rem', fontWeight: 800, color: 'var(--color-gold)', textTransform: 'uppercase' }}>
-                  Game Session Dossier
-                </span>
-                <h2 style={{ fontSize: '1.25rem', fontWeight: 800, margin: '4px 0' }}>{activeSessionNode.title}</h2>
-              </div>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button
-                  onClick={(e) => handleDeleteNode(e, activeSessionNode.id)}
-                  className="btn btn-ghost"
-                  style={{ padding: '6px', color: 'var(--color-crimson)' }}
-                  title="Delete session"
-                >
-                  <Trash2 size={16} />
-                </button>
-                <button onClick={() => setActiveSessionNode(null)} className="btn btn-ghost" style={{ padding: '6px' }}>
-                  <X size={18} />
-                </button>
-              </div>
-            </div>
-
-            {activeSessionNode.summary && (
-              <div style={{ background: 'var(--bg-card)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-subtle)', marginBottom: '16px' }}>
-                <p style={{ margin: 0, fontSize: '0.85rem', lineHeight: 1.5 }}>{activeSessionNode.summary}</p>
-              </div>
-            )}
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
-              {onNavigateToTranscript && (
-                <button
-                  onClick={() => {
-                    onNavigateToTranscript(activeSessionNode.id);
-                    setActiveSessionNode(null);
-                  }}
-                  className="btn btn-secondary"
-                  style={{ fontSize: '0.8rem', color: 'var(--color-arcane-blue-text)', borderColor: 'var(--color-arcane-blue-border)' }}
-                >
-                  <Mic size={14} /> Ingest Audio Transcript
-                </button>
-              )}
-                <button
-                  onClick={() => {
-                    setRunSheetSessionNode(activeSessionNode);
-                    setActiveSessionNode(null);
-                  }}
-                  className="btn btn-secondary"
-                  style={{ fontSize: '0.8rem', color: 'var(--color-gold)', borderColor: 'rgba(245, 158, 11, 0.4)' }}
-                >
-                  <BookOpen size={14} /> Open Run-Sheet
-                </button>
-                <button
-                  onClick={() => {
-                    onSelectNode(activeSessionNode);
-                    setActiveSessionNode(null);
-                  }}
-                  className="btn btn-primary"
-                  style={{ fontSize: '0.8rem' }}
-                >
-                  Inspect Session
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+        <TapestrySessionModal
+          session={activeSessionNode}
+          onClose={() => setActiveSessionNode(null)}
+          onDelete={handleDeleteNode}
+          onSelectNode={onSelectNode}
+          onOpenRunSheet={(sess) => setRunSheetSessionNode(sess)}
+          onNavigateToTranscript={onNavigateToTranscript}
+        />
+      )}
 
       {/* C2. RUN-SHEET STUDIO MODAL */}
       {runSheetSessionNode && (
@@ -4266,221 +3521,33 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
 
       {/* D. ARC MODAL */}
       {activeArcNode && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(4, 7, 13, 0.82)',
-            backdropFilter: 'blur(8px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1100,
-            padding: '24px'
-          }}
-          onClick={() => setActiveArcNode(null)}
-        >
-          <div
-            className="glass-panel animate-fade-in"
-            style={{
-              width: '100%',
-              maxWidth: '540px',
-              borderRadius: '16px',
-              padding: '26px',
-              background: 'var(--bg-surface)',
-              border: '1px solid var(--border-medium)'
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px' }}>
-              <div>
-                <span style={{ fontSize: '0.74rem', fontWeight: 800, color: 'var(--color-gold)', textTransform: 'uppercase' }}>
-                  Campaign Arc Milestone
-                </span>
-                <h2 style={{ fontSize: '1.25rem', fontWeight: 800, margin: '4px 0' }}>{activeArcNode.title}</h2>
-              </div>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button
-                  onClick={(e) => handleDeleteNode(e, activeArcNode.id)}
-                  className="btn btn-ghost"
-                  style={{ padding: '6px', color: 'var(--color-crimson)' }}
-                  title="Delete arc"
-                >
-                  <Trash2 size={16} />
-                </button>
-                <button onClick={() => setActiveArcNode(null)} className="btn btn-ghost" style={{ padding: '6px' }}>
-                  <X size={18} />
-                </button>
-              </div>
-            </div>
-
-            {activeArcNode.summary && (
-              <p style={{ margin: 0, fontSize: '0.85rem', lineHeight: 1.5, color: 'var(--text-primary)' }}>
-                {activeArcNode.summary}
-              </p>
-            )}
-          </div>
-        </div>
+        <TapestryArcModal
+          arc={activeArcNode}
+          onClose={() => setActiveArcNode(null)}
+          onDelete={handleDeleteNode}
+        />
       )}
 
       {/* E. ENTITY MODAL (Inspection of attached Monster, Location, Item) */}
       {activeEntityNode && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(4, 7, 13, 0.85)',
-            backdropFilter: 'blur(8px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1200,
-            padding: '24px'
-          }}
-          onClick={() => setActiveEntityNode(null)}
-        >
-          <div
-            className="glass-panel animate-fade-in"
-            style={{
-              width: '100%',
-              maxWidth: '440px',
-              borderRadius: '14px',
-              padding: '24px',
-              background: 'var(--bg-surface)',
-              border: '1px solid var(--border-medium)'
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-              <span className={`badge badge-${activeEntityNode.type}`}>{activeEntityNode.type.toUpperCase()}</span>
-              <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>Graph Edge Connection</span>
-            </div>
-
-            <h3 style={{ fontSize: '1.2rem', fontWeight: 800, margin: '0 0 4px' }}>{activeEntityNode.title}</h3>
-            {activeEntityNode.subtitle && (
-              <p style={{ fontSize: '0.8rem', color: 'var(--color-gold)', margin: '0 0 14px' }}>
-                {activeEntityNode.subtitle}
-              </p>
-            )}
-
-            {activeEntityNode.summary && (
-              <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: '16px' }}>
-                {activeEntityNode.summary}
-              </p>
-            )}
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
-              <button
-                onClick={() => {
-                  onSelectNode(activeEntityNode);
-                  setActiveEntityNode(null);
-                }}
-                className="btn btn-secondary"
-                style={{ fontSize: '0.8rem' }}
-              >
-                Inspect in Codex
-              </button>
-              <button onClick={() => setActiveEntityNode(null)} className="btn btn-primary" style={{ fontSize: '0.8rem' }}>
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
+        <TapestryEntityModal
+          entity={activeEntityNode}
+          onClose={() => setActiveEntityNode(null)}
+          onSelectNode={onSelectNode}
+        />
       )}
 
       {/* F. CREATE NODE MODAL */}
       {showAddModal && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(5, 8, 14, 0.8)',
-            backdropFilter: 'blur(8px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            padding: '20px'
-          }}
-          onClick={() => setShowAddModal(null)}
-        >
-          <div
-            className="glass-panel animate-fade-in"
-            style={{
-              width: '100%',
-              maxWidth: '480px',
-              borderRadius: '14px',
-              padding: '24px',
-              border: '1px solid var(--border-medium)',
-              background: 'var(--bg-surface)'
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 style={{ fontSize: '1.2rem', marginBottom: '4px', textTransform: 'capitalize' }}>
-              Add New {showAddModal}
-            </h3>
-            <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '16px' }}>
-              {showAddModal === 'arc' && 'An overarching milestone act framing several sessions.'}
-              {showAddModal === 'quest' && 'A player narrative objective that runs across sessions.'}
-              {showAddModal === 'session' && 'A real-world game night with prep notes.'}
-              {showAddModal === 'encounter' && 'A specific dramatic beat or combat scene connecting a quest to a session.'}
-            </p>
-
-            <form onSubmit={handleCreateNewNode}>
-              <div style={{ marginBottom: '14px' }}>
-                <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: '4px' }}>
-                  Title
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder={`Enter ${showAddModal} title...`}
-                  value={newTitle}
-                  onChange={(e) => setNewTitle(e.target.value)}
-                  style={{
-                    width: '100%',
-                    padding: '10px',
-                    background: 'var(--bg-card)',
-                    border: '1px solid var(--border-subtle)',
-                    borderRadius: '8px',
-                    color: 'var(--text-primary)',
-                    outline: 'none',
-                  }}
-                />
-              </div>
-
-              <div style={{ marginBottom: '20px' }}>
-                <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: '4px' }}>
-                  Summary / Synopsis
-                </label>
-                <textarea
-                  rows={3}
-                  placeholder="Key objectives, DM hooks, or scene description..."
-                  value={newSummary}
-                  onChange={(e) => setNewSummary(e.target.value)}
-                  style={{
-                    width: '100%',
-                    padding: '10px',
-                    background: 'var(--bg-card)',
-                    border: '1px solid var(--border-subtle)',
-                    borderRadius: '8px',
-                    color: 'var(--text-primary)',
-                    outline: 'none',
-                  }}
-                />
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-                <button type="button" onClick={() => setShowAddModal(null)} className="btn btn-secondary">
-                  Cancel
-                </button>
-                <button type="submit" className="btn btn-primary">
-                  Create {showAddModal}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+        <TapestryCreateNodeModal
+          type={showAddModal}
+          title={newTitle}
+          summary={newSummary}
+          onChangeTitle={setNewTitle}
+          onChangeSummary={setNewSummary}
+          onSubmit={handleCreateNewNode}
+          onClose={() => setShowAddModal(null)}
+        />
       )}
     </div>
   );
