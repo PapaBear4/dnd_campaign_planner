@@ -56,6 +56,13 @@ import { TapestrySessionModal } from './tapestry/modals/TapestrySessionModal';
 import { TapestryArcModal } from './tapestry/modals/TapestryArcModal';
 import { TapestryEntityModal } from './tapestry/modals/TapestryEntityModal';
 import { TapestryCreateNodeModal } from './tapestry/modals/TapestryCreateNodeModal';
+import { useTapestryGraph } from './tapestry/hooks/useTapestryGraph';
+import { useTapestryDimensions, LEFT_COL_WIDTH, COL_GAP } from './tapestry/hooks/useTapestryDimensions';
+import { useTapestryOverlays } from './tapestry/hooks/useTapestryOverlays';
+import { TapestryRibbon } from './tapestry/TapestryRibbon';
+import { TapestryArcBanners } from './tapestry/TapestryArcBanners';
+import { TapestrySessionHeaders } from './tapestry/TapestrySessionHeaders';
+import { TapestrySvgOverlays } from './tapestry/TapestrySvgOverlays';
 
 interface CampaignTapestryProps {
   campaignId: string;
@@ -321,154 +328,25 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
     }
   };
 
-  // 1. Filter Nodes by Type
-  const { arcs, sessions, quests, encounters, nodeMap } = useMemo(() => {
-    const map = new Map<string, NodeItem>();
-    graphData.nodes.forEach((n) => map.set(n.id, n));
-
-    const naturalNum = (title: string) => {
-      const match = title.match(/(?:session|arc|act|quest|part|chapter|encounter|beat)?\s*#?\s*(\d+)/i) || title.match(/\b(\d+)\b/);
-      return match ? parseInt(match[1], 10) : 999;
-    };
-
-    const arcList = graphData.nodes
-      .filter((n) => n.type === 'arc')
-      .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || naturalNum(a.title) - naturalNum(b.title));
-
-    const sessionList = graphData.nodes
-      .filter((n) => n.type === 'session')
-      .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || naturalNum(a.title) - naturalNum(b.title));
-
-    const questList = graphData.nodes
-      .filter((n) => n.type === 'quest')
-      .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
-
-    const encounterList = graphData.nodes
-      .filter((n) => n.type === 'encounter')
-      .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || naturalNum(a.title) - naturalNum(b.title));
-
-    return {
-      arcs: arcList,
-      sessions: sessionList,
-      quests: questList,
-      encounters: encounterList,
-      nodeMap: map
-    };
-  }, [graphData.nodes]);
-
-  // 2. Build Edge Connections: Encounter -> Session, Encounter -> Quest, Encounter -> Entities
-  const { encounterSessionMap, encounterQuestMap, encounterEntitiesMap } = useMemo(() => {
-    const encToSession = new Map<string, string>();
-    const encToQuest = new Map<string, string>();
-    const encToEntities = new Map<string, { locations: NodeItem[]; monsters: NodeItem[]; items: NodeItem[]; npcs: NodeItem[] }>();
-
-    // Seed empty entity lists
-    encounters.forEach((e) => {
-      encToEntities.set(e.id, { locations: [], monsters: [], items: [], npcs: [] });
-      if (e.data_json?.session_id) encToSession.set(e.id, e.data_json.session_id);
-      if (e.data_json?.quest_id) encToQuest.set(e.id, e.data_json.quest_id);
-    });
-
-    graphData.edges.forEach((edge) => {
-      const source = nodeMap.get(edge.source_id);
-      const target = nodeMap.get(edge.target_id);
-      if (!source || !target) return;
-
-      // Encounter <-> Session connection
-      if (source.type === 'encounter' && target.type === 'session') {
-        encToSession.set(source.id, target.id);
-      } else if (source.type === 'session' && target.type === 'encounter') {
-        encToSession.set(target.id, source.id);
-      }
-
-      // Encounter <-> Quest connection
-      if (source.type === 'encounter' && target.type === 'quest') {
-        encToQuest.set(source.id, target.id);
-      } else if (source.type === 'quest' && target.type === 'encounter') {
-        encToQuest.set(target.id, source.id);
-      }
-
-      // Encounter <-> Entity connections (Location, Monster, Item, NPC)
-      const connectEntity = (encId: string, entity: NodeItem) => {
-        const entObj = encToEntities.get(encId);
-        if (!entObj) return;
-        if (entity.type === 'location' && !entObj.locations.some((l) => l.id === entity.id)) entObj.locations.push(entity);
-        else if (entity.type === 'monster' && !entObj.monsters.some((m) => m.id === entity.id)) entObj.monsters.push(entity);
-        else if (entity.type === 'item' && !entObj.items.some((i) => i.id === entity.id)) entObj.items.push(entity);
-        else if (entity.type === 'npc' && !entObj.npcs.some((n) => n.id === entity.id)) entObj.npcs.push(entity);
-      };
-
-      if (source.type === 'encounter' && ['location', 'monster', 'item', 'npc'].includes(target.type)) {
-        connectEntity(source.id, target);
-      } else if (target.type === 'encounter' && ['location', 'monster', 'item', 'npc'].includes(source.type)) {
-        connectEntity(target.id, source);
-      }
-    });
-
-    return {
-      encounterSessionMap: encToSession,
-      encounterQuestMap: encToQuest,
-      encounterEntitiesMap: encToEntities
-    };
-  }, [graphData.edges, encounters, nodeMap]);
-
-  // Session <-> Arc association
-  const sessionArcMap = useMemo(() => {
-    const sToA = new Map<string, string>();
-    graphData.edges.forEach((edge) => {
-      const source = nodeMap.get(edge.source_id);
-      const target = nodeMap.get(edge.target_id);
-      if (!source || !target) return;
-      if (source.type === 'arc' && target.type === 'session') sToA.set(target.id, source.id);
-      else if (source.type === 'session' && target.type === 'arc') sToA.set(source.id, target.id);
-    });
-    return sToA;
-  }, [graphData.edges, nodeMap]);
-
-  // 2b. Build Quest Hierarchy (Sub-Quests) & Branches (Prerequisites & Outgoing Forks)
+  // 1. Graph Data, Filtered Nodes, and Relations from custom hook
   const {
+    arcs,
+    sessions,
+    quests,
+    encounters,
+    nodeMap,
+    encounterSessionMap,
+    encounterQuestMap,
+    encounterEntitiesMap,
+    sessionArcMap,
     parentQuestMap,
     childQuestsMap,
     questPrereqsMap,
     questBranchesMap,
-  } = useMemo(() => {
-    const parentMap = new Map<string, string>();
-    const childMap = new Map<string, string[]>();
-    const prereqs = new Map<string, Array<{ quest: NodeItem; label?: string }>>();
-    const branches = new Map<string, Array<{ quest: NodeItem; label?: string }>>();
-
-    graphData.edges.forEach((edge) => {
-      const source = nodeMap.get(edge.source_id);
-      const target = nodeMap.get(edge.target_id);
-      if (!source || !target) return;
-
-      if (source.type === 'quest' && target.type === 'quest') {
-        if (edge.relation_type === 'contains' || edge.relation_type === 'parent_of') {
-          parentMap.set(target.id, source.id);
-          const c = childMap.get(source.id) || [];
-          if (!c.includes(target.id)) {
-            c.push(target.id);
-            childMap.set(source.id, c);
-          }
-        } else if (edge.relation_type === 'precedes') {
-          const inList = prereqs.get(target.id) || [];
-          inList.push({ quest: source, label: edge.label });
-          prereqs.set(target.id, inList);
-
-          const outList = branches.get(source.id) || [];
-          outList.push({ quest: target, label: edge.label });
-          branches.set(source.id, outList);
-        }
-      }
-    });
-
-    return {
-      parentQuestMap: parentMap,
-      childQuestsMap: childMap,
-      questPrereqsMap: prereqs,
-      questBranchesMap: branches,
-    };
-  }, [graphData.edges, nodeMap]);
+    unassignedSessionEncounters,
+    unassignedQuestEncounters,
+    encounterPrecedenceEdges,
+  } = useTapestryGraph(graphData);
 
   // Toggle collapsing sub-quests under a parent quest
   const toggleSubQuestsCollapse = (parentQuestId: string, e: React.MouseEvent) => {
@@ -795,382 +673,36 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
     }
   };
 
-  // 3. Fallback / Dynamic Columns & Rows Setup
-  const unassignedSessionEncounters = useMemo(() => {
-    return encounters.filter((e) => !encounterSessionMap.get(e.id));
-  }, [encounters, encounterSessionMap]);
-
-  const unassignedQuestEncounters = useMemo(() => {
-    return encounters.filter((e) => !encounterQuestMap.get(e.id));
-  }, [encounters, encounterQuestMap]);
-
-  // Dimensions for pixel-perfect horizontal timeline
-  const LEFT_COL_WIDTH = 280;
-  const SESSION_COL_EXPANDED_WIDTH = 680;
-  const SESSION_COL_COLLAPSED_WIDTH = 48;
-  const COL_GAP = 12;
-
-  const { displayColumns, arcLayouts } = useMemo(() => {
-    const unassignedSessions = encounters.filter((e) => !encounterSessionMap.get(e.id));
-    const cols: NodeItem[] = [];
-    const layouts: { arc: NodeItem; colSpan: number; sessionIds: string[] }[] = [];
-
-    // Always include Intake / Prep Staging column if there are unassigned encounters OR 0 sessions
-    const needsStaging = unassignedSessions.length > 0 || sessions.length === 0;
-    if (needsStaging) {
-      cols.push({
-        id: 'unscheduled-staging',
-        campaign_id: campaignId,
-        type: 'session',
-        title: '📥 Prep Staging',
-        subtitle: `${unassignedSessions.length} unassigned`,
-        summary: 'Scenes waiting to be scheduled into a game session',
-        data_json: { is_staging: true },
-        sort_order: 0,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-        is_canon: true,
-        revealed_to_players: false,
-      });
-    }
-
-    if (arcs.length > 0) {
-      arcs.forEach((arc, aIdx) => {
-        // Find actual sessions linked to this arc
-        const linkedSessions = sessions.filter((s) => sessionArcMap.get(s.id) === arc.id);
-
-        if (linkedSessions.length > 0) {
-          linkedSessions.forEach((s) => cols.push(s));
-          layouts.push({ arc, colSpan: linkedSessions.length, sessionIds: linkedSessions.map((s) => s.id) });
-        } else {
-          // Provide at least 1 staging session pillar for this Arc so each Arc has its own horizontal space!
-          const sessNum = aIdx + 1;
-          const cleanArcTitle = arc.title.replace(/^(?:arc|act)\s*\d+:\s*/i, '');
-          const virtualId = `virtual-session-${sessNum}`;
-          cols.push({
-            id: virtualId,
-            campaign_id: campaignId,
-            type: 'session',
-            title: `Session ${sessNum}: ${cleanArcTitle}`,
-            subtitle: aIdx === 0 ? 'Upcoming Game Night' : `Act ${aIdx + 1} Staging`,
-            summary: `Session staging for ${arc.title}`,
-            data_json: { status: aIdx === 0 ? 'in_progress' : 'planned', session_number: sessNum, is_virtual: true, arc_id: arc.id },
-            sort_order: sessNum,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-            is_canon: true,
-            revealed_to_players: aIdx === 0,
-          });
-          layouts.push({ arc, colSpan: 1, sessionIds: [virtualId] });
-        }
-      });
-    } else if (sessions.length > 0) {
-      sessions.forEach((s) => cols.push(s));
-    } else {
-      cols.push(
-        {
-          id: 'virtual-session-1',
-          campaign_id: campaignId,
-          type: 'session',
-          title: 'Session 1: Prep & Kickoff',
-          subtitle: 'Upcoming Game Night',
-          summary: 'Current upcoming session prep',
-          data_json: { status: 'in_progress', session_number: 1, is_virtual: true },
-          sort_order: 1,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          is_canon: true,
-          revealed_to_players: true,
-        },
-        {
-          id: 'virtual-session-2',
-          campaign_id: campaignId,
-          type: 'session',
-          title: 'Session 2 (Planned)',
-          subtitle: 'Future Session',
-          summary: 'Next chapter in the storyline',
-          data_json: { status: 'planned', session_number: 2, is_virtual: true },
-          sort_order: 2,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          is_canon: true,
-          revealed_to_players: false,
-        }
-      );
-    }
-
-    return {
-      displayColumns: cols,
-      arcLayouts: layouts,
-    };
-  }, [arcs, sessions, sessionArcMap, encounters, encounterSessionMap, campaignId]);
-
-  const { milestoneEmitters, milestoneReceivers, allMilestoneLinks } = useMemo(() => {
-    const emitters = new Map<string, { targetQuestId: string; label: string; summary?: string }[]>();
-    const receivers = new Map<string, { id: string; sourceEncounterId: string; sourceEncounterTitle: string; targetQuestId: string; sessionId: string; label: string; summary?: string }[]>();
-    const links: { id: string; sourceEncounterId: string; sourceEncounterTitle: string; targetQuestId: string; sessionId: string; label: string; summary?: string }[] = [];
-
-    const naturalNum = (title: string) => {
-      const match = title.match(/(?:session|arc|act|quest|part|chapter|encounter|beat)?\s*#?\s*(\d+)/i) || title.match(/\b(\d+)\b/);
-      return match ? parseInt(match[1], 10) : 999;
-    };
-
-    graphData.edges.forEach((edge) => {
-      const isMilestone = edge.relation_type === 'advances_quest' || edge.metadata_json?.is_milestone;
-      if (!isMilestone) return;
-
-      const sourceNode = nodeMap.get(edge.source_id);
-      const targetNode = nodeMap.get(edge.target_id);
-      if (!sourceNode || !targetNode) return;
-
-      const sourceEnc = sourceNode.type === 'encounter' ? sourceNode : null;
-      const targetQuest = targetNode.type === 'quest' ? targetNode : null;
-      if (!sourceEnc || !targetQuest) return;
-
-      const sourceSessionId = encounterSessionMap.get(sourceEnc.id) || edge.metadata_json?.session_id;
-      const label = edge.label || edge.metadata_json?.milestone_title || 'Milestone Breakthrough';
-      const summary = edge.metadata_json?.summary || '';
-
-      if (!emitters.has(sourceEnc.id)) emitters.set(sourceEnc.id, []);
-      emitters.get(sourceEnc.id)!.push({ targetQuestId: targetQuest.id, label, summary });
-
-      if (sourceSessionId) {
-        const key = `${targetQuest.id}-${sourceSessionId}`;
-        if (!receivers.has(key)) receivers.set(key, []);
-        const item = {
-          id: edge.id,
-          sourceEncounterId: sourceEnc.id,
-          sourceEncounterTitle: sourceEnc.title,
-          targetQuestId: targetQuest.id,
-          sessionId: sourceSessionId,
-          label,
-          summary
-        };
-        receivers.get(key)!.push(item);
-        links.push(item);
-      }
-    });
-
-    // Sort receivers in each cell in encounter-chronological order
-    receivers.forEach((list) => {
-      list.sort((a, b) => {
-        const encA = nodeMap.get(a.sourceEncounterId);
-        const encB = nodeMap.get(b.sourceEncounterId);
-        const orderA = encA?.sort_order ?? 0;
-        const orderB = encB?.sort_order ?? 0;
-        if (orderA !== orderB) return orderA - orderB;
-        const natA = naturalNum(encA?.title || '');
-        const natB = naturalNum(encB?.title || '');
-        if (natA !== natB) return natA - natB;
-        return (encA?.title || '').localeCompare(encB?.title || '');
-      });
-    });
-
-    return { milestoneEmitters: emitters, milestoneReceivers: receivers, allMilestoneLinks: links };
-  }, [graphData.edges, nodeMap, encounterSessionMap]);
-
-  // Precedence edges between encounters (Encounter -> precedes -> Encounter)
-  const encounterPrecedenceEdges = useMemo(() => {
-    return graphData.edges.filter(
-      (e) =>
-        e.relation_type === 'precedes' &&
-        nodeMap.get(e.source_id)?.type === 'encounter' &&
-        nodeMap.get(e.target_id)?.type === 'encounter'
-    );
-  }, [graphData.edges, nodeMap]);
-
-  interface PrecedenceLine {
-    edgeId: string;
-    d: string;
-    label?: string;
-    midX: number;
-    midY: number;
-    sourceId: string;
-    targetId: string;
-    isTight: boolean;
-    tooltipBelow: boolean;
-  }
-
-  interface MilestoneLine {
-    id: string;
-    sourceEncounterId: string;
-    targetQuestId: string;
-    d: string;
-    x1: number;
-    y1: number;
-    x2: number;
-    y2: number;
-  }
-
-  const matrixContainerRef = useRef<HTMLDivElement>(null);
-  const [precedenceLines, setPrecedenceLines] = useState<PrecedenceLine[]>([]);
-  const [milestoneLines, setMilestoneLines] = useState<MilestoneLine[]>([]);
-  const [hoveredMilestoneId, setHoveredMilestoneId] = useState<string | null>(null);
-
-  const calculatePrecedenceLines = useCallback(() => {
-    if (!matrixContainerRef.current) return;
-    const mRect = matrixContainerRef.current.getBoundingClientRect();
-    const lines: PrecedenceLine[] = [];
-
-    encounterPrecedenceEdges.forEach((edge) => {
-      const fromEl = document.getElementById(`enc-${edge.source_id}`);
-      const toEl = document.getElementById(`enc-${edge.target_id}`);
-      if (!fromEl || !toEl) return;
-
-      const fRect = fromEl.getBoundingClientRect();
-      const tRect = toEl.getBoundingClientRect();
-
-      const x1 = fRect.right - mRect.left;
-      const y1 = fRect.top + fRect.height / 2 - mRect.top;
-      const x2 = tRect.left - mRect.left;
-      const y2 = tRect.top + tRect.height / 2 - mRect.top;
-
-      const dx = Math.max(30, Math.abs(x2 - x1) * 0.5);
-      const d = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
-
-      const midX = (x1 + x2) / 2;
-      const midY = (y1 + y2) / 2;
-
-      let isTight = false;
-      if (edge.label) {
-        // Estimate rendered width of the full condition pill
-        const estWidth = (edge.label.length * 7.2) + 28;
-        const pillLeft = midX - estWidth / 2 - 4;
-        const pillRight = midX + estWidth / 2 + 4;
-        const pillTop = midY - 14;
-        const pillBottom = midY + 14;
-
-        const srcLeft = fRect.left - mRect.left;
-        const srcRight = fRect.right - mRect.left;
-        const srcTop = fRect.top - mRect.top;
-        const srcBottom = fRect.bottom - mRect.top;
-
-        const tgtLeft = tRect.left - mRect.left;
-        const tgtRight = tRect.right - mRect.left;
-        const tgtTop = tRect.top - mRect.top;
-        const tgtBottom = tRect.bottom - mRect.top;
-
-        // Detect collision with source or target cards
-        const overlapsSource = (pillRight > srcLeft && pillLeft < srcRight && pillBottom > srcTop && pillTop < srcBottom);
-        const overlapsTarget = (pillRight > tgtLeft && pillLeft < tgtRight && pillBottom > tgtTop && pillTop < tgtBottom);
-
-        isTight = overlapsSource || overlapsTarget || (Math.abs(y1 - y2) < 40 && (x2 - x1) < estWidth + 16);
-      }
-
-      lines.push({
-        edgeId: edge.id,
-        d,
-        label: edge.label,
-        midX,
-        midY,
-        sourceId: edge.source_id,
-        targetId: edge.target_id,
-        isTight,
-        tooltipBelow: midY < 50,
-      });
-    });
-
-    setPrecedenceLines(lines);
-  }, [encounterPrecedenceEdges]);
-
-  const calculateMilestoneLines = useCallback(() => {
-    if (!matrixContainerRef.current) return;
-    const mRect = matrixContainerRef.current.getBoundingClientRect();
-    const mLines: MilestoneLine[] = [];
-
-    allMilestoneLinks.forEach((ms) => {
-      const fromEl = document.getElementById(`enc-${ms.sourceEncounterId}`);
-      const toEl = document.getElementById(`milestone-card-${ms.id}`);
-      if (!fromEl || !toEl) return;
-
-      const fRect = fromEl.getBoundingClientRect();
-      const tRect = toEl.getBoundingClientRect();
-
-      let x1: number, y1: number, x2: number, y2: number;
-      let d: string;
-
-      // Case 1: Encounter is below Milestone Card
-      if (fRect.top > tRect.bottom - 10) {
-        x1 = fRect.left + Math.min(36, fRect.width / 2) - mRect.left;
-        y1 = fRect.top - mRect.top;
-        x2 = tRect.left + 23 - mRect.left; // aligned with the purple circle badge
-        y2 = tRect.bottom - mRect.top;
-        const dy = Math.max(25, Math.abs(y1 - y2) * 0.45);
-        d = `M ${x1} ${y1} C ${x1} ${y1 - dy}, ${x2} ${y2 + dy}, ${x2} ${y2}`;
-      }
-      // Case 2: Encounter is above Milestone Card
-      else if (fRect.bottom < tRect.top + 10) {
-        x1 = fRect.left + Math.min(36, fRect.width / 2) - mRect.left;
-        y1 = fRect.bottom - mRect.top;
-        x2 = tRect.left + 23 - mRect.left;
-        y2 = tRect.top - mRect.top;
-        const dy = Math.max(25, Math.abs(y2 - y1) * 0.45);
-        d = `M ${x1} ${y1} C ${x1} ${y1 + dy}, ${x2} ${y2 - dy}, ${x2} ${y2}`;
-      }
-      // Case 3: Same horizontal band / row
-      else {
-        if (fRect.right < tRect.left) {
-          x1 = fRect.right - mRect.left;
-          y1 = fRect.top + fRect.height / 2 - mRect.top;
-          x2 = tRect.left - mRect.left;
-          y2 = tRect.top + tRect.height / 2 - mRect.top;
-          const dx = Math.max(25, Math.abs(x2 - x1) * 0.5);
-          d = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
-        } else {
-          x1 = fRect.left - mRect.left;
-          y1 = fRect.top + fRect.height / 2 - mRect.top;
-          x2 = tRect.right - mRect.left;
-          y2 = tRect.top + tRect.height / 2 - mRect.top;
-          const dx = Math.max(25, Math.abs(x1 - x2) * 0.5);
-          d = `M ${x1} ${y1} C ${x1 - dx} ${y1}, ${x2 + dx} ${y2}, ${x2} ${y2}`;
-        }
-      }
-
-      mLines.push({
-        id: ms.id,
-        sourceEncounterId: ms.sourceEncounterId,
-        targetQuestId: ms.targetQuestId,
-        d,
-        x1,
-        y1,
-        x2,
-        y2
-      });
-    });
-
-    setMilestoneLines(mLines);
-  }, [allMilestoneLinks]);
-
-  useEffect(() => {
-    const runCalc = () => {
-      calculatePrecedenceLines();
-      calculateMilestoneLines();
-    };
-    const timeout = setTimeout(runCalc, 60);
-    window.addEventListener('resize', runCalc);
-    const container = matrixContainerRef.current;
-    if (container) {
-      container.addEventListener('scroll', runCalc, { passive: true, capture: true });
-    }
-    return () => {
-      clearTimeout(timeout);
-      window.removeEventListener('resize', runCalc);
-      if (container) {
-        container.removeEventListener('scroll', runCalc, { capture: true });
-      }
-    };
-  }, [calculatePrecedenceLines, calculateMilestoneLines, collapsedSessionIds, collapsedQuestIds, collapsedSubQuestParents, encounters, allMilestoneLinks]);
+  // 3. SVG Overlay Geometry & Precedence/Milestone Links from custom hook
+  const {
+    matrixContainerRef,
+    precedenceLines,
+    milestoneLines,
+    hoveredMilestoneId,
+    setHoveredMilestoneId,
+    milestoneEmitters,
+    milestoneReceivers,
+  } = useTapestryOverlays({
+    graphData,
+    nodeMap,
+    encounterSessionMap,
+    encounterPrecedenceEdges,
+    collapsedSessionIds,
+    collapsedQuestIds,
+    collapsedSubQuestParents,
+    encounters,
+  });
 
   const orderedQuests = useMemo(() => {
     if (!localQuestOrder) return quests;
-    const map = new Map(quests.map((q) => [q.id, q]));
+    const map = new Map<string, NodeItem>(quests.map((q: NodeItem) => [q.id, q]));
     const result: NodeItem[] = [];
-    localQuestOrder.forEach((id) => {
+    localQuestOrder.forEach((id: string) => {
       const q = map.get(id);
       if (q) result.push(q);
     });
-    quests.forEach((q) => {
-      if (!result.some((r) => r.id === q.id)) result.push(q);
+    quests.forEach((q: NodeItem) => {
+      if (!result.some((r: NodeItem) => r.id === q.id)) result.push(q);
     });
     return result;
   }, [quests, localQuestOrder]);
@@ -1180,7 +712,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
     const subQuestIds = new Set(parentQuestMap.keys());
     const rootQuests: NodeItem[] = [];
 
-    orderedQuests.forEach((q) => {
+    orderedQuests.forEach((q: NodeItem) => {
       if (!subQuestIds.has(q.id)) {
         rootQuests.push(q);
       }
@@ -1194,7 +726,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
     }> = [];
 
     // For each root quest, add it, and if it has sub-quests, insert them right beneath
-    rootQuests.forEach((rootQ) => {
+    rootQuests.forEach((rootQ: NodeItem) => {
       const childIds = childQuestsMap.get(rootQ.id) || [];
       const childNodes = childIds
         .map((cid) => nodeMap.get(cid))
@@ -1225,7 +757,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
     });
 
     // Also include any orphan sub-quests whose parent was deleted or not in list
-    orderedQuests.forEach((q) => {
+    orderedQuests.forEach((q: NodeItem) => {
       if (subQuestIds.has(q.id)) {
         const pId = parentQuestMap.get(q.id);
         if (pId && !nodeMap.has(pId)) {
@@ -1290,7 +822,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
   ) => {
     if (draggedQuestId === targetQuestId) return;
 
-    const currentOrder = orderedQuests.map((q) => q.id);
+    const currentOrder = orderedQuests.map((q: NodeItem) => q.id);
     const fromIndex = currentOrder.indexOf(draggedQuestId);
     if (fromIndex === -1) return;
 
@@ -1321,85 +853,26 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
     }
   };
 
-  // Dynamic Session Column Widths:
-  // Automatically scales each session column to comfortably fit its encounters without dead whitespace or internal horizontal scrolling!
-  const sessionColWidths = useMemo(() => {
-    const map = new Map<string, number>();
-
-    displayColumns.forEach((col) => {
-      if (collapsedSessionIds.has(col.id)) {
-        map.set(col.id, SESSION_COL_COLLAPSED_WIDTH);
-        return;
-      }
-
-      const isStaging = col.id === 'unscheduled-staging';
-      let maxCardsInCol = 0;
-
-      // Scan all quest rows to find the quest with the most horizontal cards in this session
-      displayQuests.forEach((quest) => {
-        const isOpenRow = quest.id === 'open-world-events';
-        const matchingEncounters = encounters.filter((e) => {
-          const eQuestId = encounterQuestMap.get(e.id);
-          const isQuestMatch = isOpenRow ? !eQuestId : eQuestId === quest.id;
-          const isSessionMatch = isStaging ? !encounterSessionMap.get(e.id) : encounterSessionMap.get(e.id) === col.id;
-          return isQuestMatch && isSessionMatch;
-        });
-
-        const cellMilestones = (milestoneReceivers.get(quest.id) || []).filter((ms) => {
-          const sourceSessId = encounterSessionMap.get(ms.sourceEncounterId);
-          return isStaging ? !sourceSessId : sourceSessId === col.id;
-        });
-
-        const totalInCell = matchingEncounters.length + cellMilestones.length;
-        if (totalInCell > maxCardsInCol) {
-          maxCardsInCol = totalInCell;
-        }
-      });
-
-      // Also check unassigned encounters in open row for staging column
-      if (isStaging) {
-        const unassignedCount = encounters.filter((e) => !encounterSessionMap.get(e.id)).length;
-        maxCardsInCol = Math.max(maxCardsInCol, Math.min(3, unassignedCount));
-      }
-
-      // Base minimum width for a session column (allows header title + 'Plan' badge + '◀ Fold' to fit cleanly)
-      const MIN_SESSION_WIDTH = 260;
-
-      if (maxCardsInCol <= 0) {
-        map.set(col.id, MIN_SESSION_WIDTH);
-      } else {
-        // 24px cell padding (12px * 2) + 16px buffer + (N * 185px card) + ((N - 1) * 14px gap)
-        const computed = 40 + (maxCardsInCol * 185) + ((maxCardsInCol - 1) * 14);
-        map.set(col.id, Math.max(MIN_SESSION_WIDTH, computed));
-      }
-    });
-
-    return map;
-  }, [displayColumns, collapsedSessionIds, displayQuests, encounters, encounterQuestMap, encounterSessionMap, milestoneReceivers]);
-
-  const matrixGridCols = useMemo(() => {
-    const cols = displayColumns.map((col) => `${sessionColWidths.get(col.id) || 260}px`);
-    return `${LEFT_COL_WIDTH}px ${cols.join(' ')}`;
-  }, [displayColumns, sessionColWidths]);
-
-  // Pixel-perfect canvas dimensions for horizontal scrolling
-  const canvasWidth = useMemo(() => {
-    const sessionColsWidth = displayColumns.reduce((sum, col) => {
-      const w = sessionColWidths.get(col.id) || 260;
-      return sum + w + COL_GAP;
-    }, 0);
-    return LEFT_COL_WIDTH + sessionColsWidth + 40;
-  }, [displayColumns, sessionColWidths]);
-
-  const getColX = (index: number) => {
-    let x = LEFT_COL_WIDTH;
-    for (let i = 0; i < index; i++) {
-      const w = sessionColWidths.get(displayColumns[i]?.id) || 260;
-      x += w + COL_GAP;
-    }
-    const currentWidth = sessionColWidths.get(displayColumns[index]?.id) || 260;
-    return x + currentWidth / 2;
-  };
+  // 4. Tapestry Dimensions, Columns, Matrix Grid, Canvas Width & Column Positions from custom hook
+  const {
+    displayColumns,
+    arcLayouts,
+    sessionColWidths,
+    matrixGridCols,
+    canvasWidth,
+    getColX,
+  } = useTapestryDimensions({
+    campaignId,
+    arcs,
+    sessions,
+    encounters,
+    sessionArcMap,
+    encounterSessionMap,
+    encounterQuestMap,
+    collapsedSessionIds,
+    displayQuests,
+    milestoneReceivers,
+  });
 
   // Quest Color Palette
   const questColors = ['#f59e0b', '#ef4444', '#06b6d4', '#a855f7', '#10b981', '#ec4899', '#3b82f6'];
@@ -1688,675 +1161,52 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
             {/* 1. TOP MINIMALIST THREAD RIBBON (ACROSS THE SESSIONS)                    */}
             {/* ========================================================================= */}
             {!isRibbonCollapsed && displayColumns.length > 0 && (
-              <div
-                className="glass-panel animate-fade-in"
-                style={{
-                  background: 'radial-gradient(ellipse at 50% 50%, rgba(15, 20, 32, 0.95) 0%, rgba(8, 11, 17, 0.98) 100%)',
-                  border: '1px solid var(--border-medium)',
-                  borderRadius: '14px',
-                  padding: '10px 16px',
-                  position: 'relative'
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
-                  <span style={{ fontSize: '0.72rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.8px', color: 'var(--text-muted)' }}>
-                    Narrative Flow Ribbon • Saga Threads &amp; Encounters:
-                  </span>
-                  <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                    Golden Cord = Main Storyline • Branches = Side Quests &amp; Factions • Click any knot to inspect
-                  </span>
-                </div>
-
-                <svg width={canvasWidth - 32} height="120" style={{ overflow: 'visible', display: 'block' }}>
-                  <defs>
-                    <filter id="gold-glow-large" x="-30%" y="-30%" width="160%" height="160%">
-                      <feGaussianBlur stdDeviation="4" result="blur" />
-                      <feComposite in="SourceGraphic" in2="blur" operator="over" />
-                    </filter>
-                    <filter id="blue-glow" x="-30%" y="-30%" width="160%" height="160%">
-                      <feGaussianBlur stdDeviation="3" result="blur" />
-                      <feComposite in="SourceGraphic" in2="blur" operator="over" />
-                    </filter>
-                    <filter id="purple-glow" x="-30%" y="-30%" width="160%" height="160%">
-                      <feGaussianBlur stdDeviation="3" result="blur" />
-                      <feComposite in="SourceGraphic" in2="blur" operator="over" />
-                    </filter>
-                    <linearGradient id="gold-rope-grad" x1="0%" y1="0%" x2="100%" y2="0%">
-                      <stop offset="0%" stopColor="#f59e0b" />
-                      <stop offset="50%" stopColor="#fbbf24" />
-                      <stop offset="100%" stopColor="#f59e0b" />
-                    </linearGradient>
-                  </defs>
-
-                  {/* Vertical Session Alignment Guides connecting all the way down */}
-                  {displayColumns.map((sess, idx) => {
-                    const x = getColX(idx);
-                    const isHovered = hoveredSessionId === sess.id;
-                    const isCurrent = sess.data_json?.status === 'in_progress';
-                    const isStaging = sess.id === 'unscheduled-staging';
-
-                    return (
-                      <g key={sess.id}>
-                        <line
-                          x1={x}
-                          y1="4"
-                          x2={x}
-                          y2="116"
-                          stroke={isStaging ? 'rgba(59, 130, 246, 0.3)' : isCurrent ? 'var(--color-gold)' : isHovered ? 'var(--border-medium)' : 'rgba(255, 255, 255, 0.08)'}
-                          strokeWidth={isCurrent ? 1.5 : 1}
-                          strokeDasharray="3 4"
-                        />
-                        <circle cx={x} cy={114} r={2.5} fill={isCurrent ? 'var(--color-gold)' : 'rgba(255, 255, 255, 0.2)'} />
-                      </g>
-                    );
-                  })}
-
-                  {/* 1. Branching Side Ribbons (Inspired by the Saga Anatomy reference) */}
-                  {displayColumns.length >= 3 && (
-                    <>
-                      {/* Upper Side Quest Ribbon (Cyan/Arcane) */}
-                      <path
-                        d={`M ${getColX(0)},60 C ${getColX(0) + 70},22 ${getColX(1) - 70},22 ${getColX(1)},22 C ${getColX(1) + 70},22 ${getColX(Math.min(3, displayColumns.length - 1)) - 70},60 ${getColX(Math.min(3, displayColumns.length - 1))},60`}
-                        fill="none"
-                        stroke="#06b6d4"
-                        strokeWidth="3.5"
-                        strokeLinecap="round"
-                        filter="url(#blue-glow)"
-                        opacity="0.8"
-                      />
-                      <path
-                        d={`M ${getColX(0)},60 C ${getColX(0) + 70},22 ${getColX(1) - 70},22 ${getColX(1)},22 C ${getColX(1) + 70},22 ${getColX(Math.min(3, displayColumns.length - 1)) - 70},60 ${getColX(Math.min(3, displayColumns.length - 1))},60`}
-                        fill="none"
-                        stroke="#67e8f9"
-                        strokeWidth="1.2"
-                        strokeDasharray="4 4"
-                      />
-                      <text
-                        x={getColX(1)}
-                        y={14}
-                        fill="#67e8f9"
-                        fontSize="9"
-                        fontWeight="800"
-                        textAnchor="middle"
-                        letterSpacing="0.8px"
-                      >
-                        ✦ SIDE QUEST BRANCHES
-                      </text>
-
-                      {/* Lower Faction Threads Ribbon (Royal Purple) */}
-                      {displayColumns.length >= 4 && (
-                        <>
-                          <path
-                            d={`M ${getColX(1)},60 C ${getColX(1) + 70},98 ${getColX(2) - 70},98 ${getColX(2)},98 C ${getColX(2) + 70},98 ${getColX(Math.min(5, displayColumns.length - 1)) - 70},60 ${getColX(Math.min(5, displayColumns.length - 1))},60`}
-                            fill="none"
-                            stroke="#a855f7"
-                            strokeWidth="3.5"
-                            strokeLinecap="round"
-                            filter="url(#purple-glow)"
-                            opacity="0.8"
-                          />
-                          <path
-                            d={`M ${getColX(1)},60 C ${getColX(1) + 70},98 ${getColX(2) - 70},98 ${getColX(2)},98 C ${getColX(2) + 70},98 ${getColX(Math.min(5, displayColumns.length - 1)) - 70},60 ${getColX(Math.min(5, displayColumns.length - 1))},60`}
-                            fill="none"
-                            stroke="#e9d5ff"
-                            strokeWidth="1.2"
-                            strokeDasharray="4 4"
-                          />
-                          <text
-                            x={getColX(2)}
-                            y={114}
-                            fill="#c084fc"
-                            fontSize="9"
-                            fontWeight="800"
-                            textAnchor="middle"
-                            letterSpacing="0.8px"
-                          >
-                            ✦ FACTION THREADS
-                          </text>
-                        </>
-                      )}
-                    </>
-                  )}
-
-                  {/* 2. Main Golden Cord Spine (weaving across all columns) */}
-                  {activeRibbonRiff === 'woven' && (
-                    <>
-                      {/* Outer Golden Aura Glow */}
-                      <path
-                        d={displayColumns.map((_, i) => {
-                          const x = getColX(i);
-                          const y = 60 + (i % 2 === 0 ? -10 : 10);
-                          if (i === 0) return `M ${LEFT_COL_WIDTH - 20},60 C ${x - 50},${y} ${x - 20},${y} ${x},${y}`;
-                          const prevX = getColX(i - 1);
-                          const prevY = 60 + ((i - 1) % 2 === 0 ? -10 : 10);
-                          return `C ${prevX + 50},${prevY} ${x - 50},${y} ${x},${y}`;
-                        }).join(' ')}
-                        fill="none"
-                        stroke="#f59e0b"
-                        strokeWidth="9"
-                        strokeLinecap="round"
-                        filter="url(#gold-glow-large)"
-                        opacity="0.35"
-                      />
-                      {/* Braided Golden Spine */}
-                      <path
-                        d={displayColumns.map((_, i) => {
-                          const x = getColX(i);
-                          const y = 60 + (i % 2 === 0 ? -10 : 10);
-                          if (i === 0) return `M ${LEFT_COL_WIDTH - 20},60 C ${x - 50},${y} ${x - 20},${y} ${x},${y}`;
-                          const prevX = getColX(i - 1);
-                          const prevY = 60 + ((i - 1) % 2 === 0 ? -10 : 10);
-                          return `C ${prevX + 50},${prevY} ${x - 50},${y} ${x},${y}`;
-                        }).join(' ')}
-                        fill="none"
-                        stroke="url(#gold-rope-grad)"
-                        strokeWidth="5"
-                        strokeLinecap="round"
-                      />
-                      {/* Braided highlight dash */}
-                      <path
-                        d={displayColumns.map((_, i) => {
-                          const x = getColX(i);
-                          const y = 60 + (i % 2 === 0 ? -10 : 10);
-                          if (i === 0) return `M ${LEFT_COL_WIDTH - 20},60 C ${x - 50},${y} ${x - 20},${y} ${x},${y}`;
-                          const prevX = getColX(i - 1);
-                          const prevY = 60 + ((i - 1) % 2 === 0 ? -10 : 10);
-                          return `C ${prevX + 50},${prevY} ${x - 50},${y} ${x},${y}`;
-                        }).join(' ')}
-                        fill="none"
-                        stroke="#fef08a"
-                        strokeWidth="2"
-                        strokeDasharray="5 5"
-                      />
-                      <text
-                        x={LEFT_COL_WIDTH + 10}
-                        y={82}
-                        fill="var(--color-gold)"
-                        fontSize="9"
-                        fontWeight="800"
-                        letterSpacing="0.8px"
-                      >
-                        ✦ MAIN SAGA CORD
-                      </text>
-                    </>
-                  )}
-
-                  {/* Constellation Loom Riff */}
-                  {activeRibbonRiff === 'constellation' && (
-                    displayColumns.map((_, i) => {
-                      if (i === displayColumns.length - 1) return null;
-                      return (
-                        <line
-                          key={i}
-                          x1={getColX(i)}
-                          y1={i % 2 === 0 ? 46 : 74}
-                          x2={getColX(i + 1)}
-                          y2={(i + 1) % 2 === 0 ? 46 : 74}
-                          stroke="#f59e0b"
-                          strokeWidth="2.5"
-                          opacity="0.85"
-                        />
-                      );
-                    })
-                  )}
-
-                  {/* Fate Transit Riff */}
-                  {activeRibbonRiff === 'transit' && (
-                    <path
-                      d={`M ${LEFT_COL_WIDTH - 20},60 L ${getColX(displayColumns.length - 1) + 40},60`}
-                      fill="none"
-                      stroke="#f59e0b"
-                      strokeWidth="5"
-                      strokeLinecap="round"
-                    />
-                  )}
-
-                  {/* 3. Clickable Encounter Knots along the Ribbon */}
-                  {displayColumns.map((sess, sIdx) => {
-                    const sessEncounters = encounters.filter((e) => {
-                      if (sess.id === 'unscheduled-staging') {
-                        return !encounterSessionMap.get(e.id);
-                      }
-                      return encounterSessionMap.get(e.id) === sess.id;
-                    });
-
-                    const isStaging = sess.id === 'unscheduled-staging';
-                    const baseX = getColX(sIdx);
-                    const baseY = 60 + (sIdx % 2 === 0 ? -10 : 10);
-
-                    return sessEncounters.map((enc, eIdx) => {
-                      const xOffset = eIdx > 0 ? (eIdx % 2 === 1 ? 16 : -16) : 0;
-                      const yOffset = eIdx > 0 ? (eIdx % 2 === 1 ? -22 : 22) : 0;
-                      const x = baseX + xOffset;
-                      const y = Math.max(18, Math.min(102, baseY + yOffset));
-
-                      const isComplete = enc.data_json?.status === 'completed';
-                      const isInProgress = enc.data_json?.status === 'in_progress';
-                      const isCombat = /brawl|troll|ambush|skirmish|gazer|fight|combat/i.test(enc.title);
-                      const isSocial = /parley|audience|contest|gratitude|friend|talk/i.test(enc.title);
-
-                      return (
-                        <g
-                          key={enc.id}
-                          onClick={() => setActiveEncounterModal(enc)}
-                          style={{ cursor: 'pointer' }}
-                        >
-                          <title>{enc.title} ({enc.data_json?.status || 'planned'})</title>
-
-                          {/* Knot Halo */}
-                          <circle
-                            cx={x}
-                            cy={y}
-                            r={isInProgress ? 12 : 9}
-                            fill={isStaging ? 'rgba(56, 189, 248, 0.2)' : isInProgress ? 'rgba(245, 158, 11, 0.3)' : 'rgba(255, 255, 255, 0.08)'}
-                          />
-                          {/* Knot Core */}
-                          <circle
-                            cx={x}
-                            cy={y}
-                            r={isInProgress ? 8 : 6.5}
-                            fill={isComplete ? '#10b981' : isInProgress ? '#f59e0b' : isStaging ? '#38bdf8' : 'var(--bg-surface)'}
-                            stroke={isStaging ? '#38bdf8' : '#fff'}
-                            strokeWidth="1.8"
-                          />
-                          {/* Micro Icon Badge */}
-                          <text
-                            x={x}
-                            y={y + 3}
-                            fontSize="7"
-                            textAnchor="middle"
-                            fill="#fff"
-                            fontWeight="bold"
-                            pointerEvents="none"
-                          >
-                            {isCombat ? '⚔' : isSocial ? '💬' : '✦'}
-                          </text>
-                        </g>
-                      );
-                    });
-                  })}
-                </svg>
-              </div>
+              <TapestryRibbon
+                canvasWidth={canvasWidth}
+                displayColumns={displayColumns}
+                encounters={encounters}
+                encounterSessionMap={encounterSessionMap}
+                hoveredSessionId={hoveredSessionId}
+                activeRibbonRiff={activeRibbonRiff}
+                getColX={getColX}
+                onSelectEncounter={setActiveEncounterModal}
+              />
             )}
 
             {/* ========================================================================= */}
             {/* 2. CAMPAIGN STORY ARCS ROW (ACT BANNERS SPANNING SESSIONS)               */}
             {/* ========================================================================= */}
-            {arcLayouts.length > 0 && (
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: matrixGridCols,
-                  gap: `${COL_GAP}px`,
-                  alignItems: 'stretch',
-                  whiteSpace: 'nowrap'
-                }}
-              >
-                <div style={{ padding: '4px 10px', display: 'flex', alignItems: 'flex-end' }}>
-                  <span style={{ fontSize: '0.74rem', fontWeight: 800, textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: '0.8px' }}>
-                    Storyline Threads ↓
-                  </span>
-                </div>
-
-                {/* If intake staging column is present, render staging banner above it */}
-                {displayColumns[0]?.id === 'unscheduled-staging' && (() => {
-                  const isStagingFolded = collapsedSessionIds.has('unscheduled-staging');
-                  return (
-                    <div
-                      style={{
-                        gridColumn: 'span 1',
-                        minWidth: 0,
-                        overflow: 'hidden',
-                        background: 'rgba(59, 130, 246, 0.08)',
-                        border: '1px dashed rgba(59, 130, 246, 0.35)',
-                        borderRadius: '8px',
-                        padding: isStagingFolded ? '6px 2px' : '8px 12px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: isStagingFolded ? 'center' : 'space-between',
-                        boxSizing: 'border-box'
-                      }}
-                      title="📥 Intake Pool (Unscheduled Scenes)"
-                    >
-                      {isStagingFolded ? (
-                        <span style={{ fontSize: '0.85rem' }} title="Intake Pool (Unscheduled Scenes)">
-                          📥
-                        </span>
-                      ) : (
-                        <>
-                          <span style={{ fontSize: '0.72rem', fontWeight: 800, color: '#60a5fa', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>
-                            📥 Intake Pool
-                          </span>
-                          <span style={{ fontSize: '0.68rem', color: '#93c5fd', whiteSpace: 'nowrap' }}>
-                            Unscheduled
-                          </span>
-                        </>
-                      )}
-                    </div>
-                  );
-                })()}
-
-                {/* Render Arc Banners in a SINGLE horizontal non-wrapping row */}
-                {arcLayouts.map((item, aIdx) => {
-                  const isAllFolded = Boolean(item.sessionIds && item.sessionIds.length > 0 && item.sessionIds.every((id) => collapsedSessionIds.has(id)));
-
-                  if (isAllFolded) {
-                    return (
-                      <div
-                        key={item.arc.id}
-                        onClick={() => setActiveArcModal(item.arc)}
-                        style={{
-                          gridColumn: `span ${item.colSpan}`,
-                          minWidth: 0,
-                          overflow: 'hidden',
-                          background: 'linear-gradient(180deg, rgba(245, 158, 11, 0.16) 0%, rgba(245, 158, 11, 0.05) 100%)',
-                          border: '1px solid rgba(245, 158, 11, 0.4)',
-                          borderRadius: '8px',
-                          padding: '4px 2px',
-                          cursor: 'pointer',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          justifyContent: 'center',
-                          alignItems: 'center',
-                          boxSizing: 'border-box',
-                          transition: 'all 0.15s ease'
-                        }}
-                        onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--color-gold)')}
-                        onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'rgba(245, 158, 11, 0.4)')}
-                        title={`${item.arc.title} (${item.colSpan} session${item.colSpan > 1 ? 's' : ''} folded — Click to inspect arc)`}
-                      >
-                        <span style={{ fontSize: '0.66rem', fontWeight: 900, color: 'var(--color-gold)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                          ACT {aIdx + 1}
-                        </span>
-                      </div>
-                    );
-                  }
-
-                  return (
-                    <div
-                      key={item.arc.id}
-                      onClick={() => setActiveArcModal(item.arc)}
-                      style={{
-                        gridColumn: `span ${item.colSpan}`,
-                        minWidth: 0,
-                        overflow: 'hidden',
-                        background: 'linear-gradient(90deg, rgba(245, 158, 11, 0.12) 0%, rgba(245, 158, 11, 0.04) 100%)',
-                        border: '1px solid rgba(245, 158, 11, 0.35)',
-                        borderRadius: '8px',
-                        padding: '8px 14px',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        gap: '12px',
-                        boxSizing: 'border-box',
-                        transition: 'all 0.15s ease'
-                      }}
-                      onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--color-gold)')}
-                      onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'rgba(245, 158, 11, 0.35)')}
-                      title={item.arc.title}
-                    >
-                      <div style={{ minWidth: 0, overflow: 'hidden' }}>
-                        <span style={{ fontSize: '0.68rem', fontWeight: 800, color: 'var(--color-gold)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                          Act {aIdx + 1}
-                        </span>
-                        <div style={{ fontSize: '0.85rem', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: 'var(--text-primary)' }}>
-                          {item.arc.title}
-                        </div>
-                      </div>
-                      <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', flexShrink: 0, whiteSpace: 'nowrap' }}>
-                        {item.colSpan} {item.colSpan === 1 ? 'Session' : 'Sessions'}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+            <TapestryArcBanners
+              matrixGridCols={matrixGridCols}
+              displayColumns={displayColumns}
+              arcLayouts={arcLayouts}
+              collapsedSessionIds={collapsedSessionIds}
+              onSelectArc={setActiveArcModal}
+            />
 
             {/* ========================================================================= */}
             {/* 3. SESSIONS HEADER ROW (VERTICAL TIMELINE ANCHORS)                       */}
             {/* ========================================================================= */}
-            {displayColumns.length > 0 && (
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: matrixGridCols,
-                  gap: `${COL_GAP}px`,
-                  alignItems: 'stretch'
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 10px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', fontWeight: 600 }}>
-                      {displayQuests.length} Story Lines
-                    </span>
-                    {displayQuests.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={collapsedQuestIds.size >= displayQuests.length ? handleExpandAll : handleCollapseAll}
-                        className="btn btn-ghost"
-                        style={{ fontSize: '0.68rem', padding: '2px 6px', gap: '4px', height: '22px', color: 'var(--text-muted)' }}
-                        title={collapsedQuestIds.size >= displayQuests.length ? 'Expand All Story Lines' : 'Collapse All Story Lines'}
-                      >
-                        {collapsedQuestIds.size >= displayQuests.length ? (
-                          <>
-                            <ChevronsUpDown size={12} /> Expand All
-                          </>
-                        ) : (
-                          <>
-                            <ChevronsDownUp size={12} /> Collapse All
-                          </>
-                        )}
-                      </button>
-                    )}
-                  </div>
-                  {sessions.length === 0 && (
-                    <span style={{ fontSize: '0.68rem', color: 'var(--color-gold)', background: 'rgba(245, 158, 11, 0.12)', padding: '2px 6px', borderRadius: '4px' }}>
-                      Staging Mode
-                    </span>
-                  )}
-                </div>
-
-                {displayColumns.map((sess, idx) => {
-                  const isHovered = hoveredSessionId === sess.id;
-                  const isCurrent = sess.data_json?.status === 'in_progress';
-                  const isStaging = sess.id === 'unscheduled-staging';
-                  const isVirtual = sess.data_json?.is_virtual;
-                  const isColCollapsed = collapsedSessionIds.has(sess.id);
-                  const sessEncounters = encounters.filter((e) =>
-                    isStaging ? !encounterSessionMap.get(e.id) : encounterSessionMap.get(e.id) === sess.id
-                  );
-                  const sessNum = sess.data_json?.session_number || idx + (displayColumns[0]?.id === 'unscheduled-staging' ? 0 : 1);
-
-                  if (isColCollapsed) {
-                    const cleanTitle = sess.title.replace(/^Session\s*\d+\s*:\s*/i, '');
-                    return (
-                      <div
-                        key={sess.id}
-                        onClick={() => toggleSessionCollapse(sess.id)}
-                        className="tapestry-col-spine"
-                        title={`${sess.title} (Click to unroll column)`}
-                      >
-                        <span style={{ fontSize: '0.65rem', fontWeight: 800, color: 'var(--color-gold)', fontFamily: 'var(--font-mono)' }}>
-                          {isStaging ? 'INT' : `S0${sessNum}`}
-                        </span>
-                        <div
-                          style={{
-                            width: '8px',
-                            height: '8px',
-                            borderRadius: '50%',
-                            background: isCurrent ? 'var(--color-gold)' : sess.data_json?.status === 'completed' ? 'var(--color-emerald)' : 'var(--text-muted)'
-                          }}
-                        />
-                        <div className="tapestry-spine-vtitle">{cleanTitle}</div>
-                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
-                          <span style={{ fontSize: '0.62rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
-                            {sessEncounters.length}
-                          </span>
-                          <span style={{ fontSize: '0.68rem', color: 'var(--color-gold)', fontWeight: 800 }}>+</span>
-                        </div>
-                      </div>
-                    );
-                  }
-
-                  return (
-                    <div
-                      key={sess.id}
-                      onClick={() => {
-                        if (!isStaging && !isVirtual) setActiveSessionModal(sess);
-                      }}
-                      onMouseEnter={() => setHoveredSessionId(sess.id)}
-                      onMouseLeave={() => setHoveredSessionId(null)}
-                      onDragOver={(e) => {
-                        e.preventDefault();
-                        e.dataTransfer.dropEffect = 'move';
-                      }}
-                      onDrop={async (e) => {
-                        e.preventDefault();
-                        const raw = e.dataTransfer.getData('text/plain');
-                        if (!raw) return;
-                        try {
-                          const data = JSON.parse(raw);
-                          if (data.type === 'encounter') {
-                            const targetSessionId = isStaging ? null : sess.id;
-                            const currentQuestId = encounterQuestMap.get(data.encounterId) || null;
-                            await handleMoveEncounter(data.encounterId, targetSessionId, currentQuestId);
-                          }
-                        } catch (err) {
-                          console.error(err);
-                        } finally {
-                          setDraggingEncounterId(null);
-                          setDragOverCell(null);
-                        }
-                      }}
-                      style={{
-                        background: isStaging
-                          ? 'rgba(59, 130, 246, 0.08)'
-                          : isCurrent
-                          ? 'rgba(245, 158, 11, 0.12)'
-                          : isHovered
-                          ? 'var(--bg-card-hover)'
-                          : 'var(--bg-surface)',
-                        border: `1.5px solid ${
-                          isStaging
-                            ? 'rgba(59, 130, 246, 0.4)'
-                            : isCurrent
-                            ? 'var(--color-gold)'
-                            : isHovered
-                            ? 'var(--border-medium)'
-                            : 'var(--border-subtle)'
-                        }`,
-                        borderRadius: '8px',
-                        padding: '8px 12px',
-                        cursor: isStaging ? 'default' : 'pointer',
-                        boxShadow: isCurrent ? '0 0 14px rgba(245, 158, 11, 0.25)' : 'none',
-                        position: 'relative',
-                        transition: 'all 0.15s ease',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        justifyContent: 'space-between'
-                      }}
-                    >
-                      {isStaging && (
-                        <div
-                          style={{
-                            position: 'absolute',
-                            top: '-7px',
-                            right: '8px',
-                            background: '#3b82f6',
-                            color: '#fff',
-                            fontSize: '0.62rem',
-                            fontWeight: 800,
-                            padding: '1px 5px',
-                            borderRadius: '4px',
-                            textTransform: 'uppercase'
-                          }}
-                        >
-                          Intake
-                        </div>
-                      )}
-
-                      {isCurrent && !isStaging && (
-                        <div
-                          style={{
-                            position: 'absolute',
-                            top: '-7px',
-                            right: '8px',
-                            background: 'var(--color-gold)',
-                            color: '#000',
-                            fontSize: '0.62rem',
-                            fontWeight: 800,
-                            padding: '1px 5px',
-                            borderRadius: '4px',
-                            textTransform: 'uppercase'
-                          }}
-                        >
-                          Next Session
-                        </div>
-                      )}
-
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          <span style={{ fontSize: '0.78rem', fontWeight: 800, color: isStaging ? '#60a5fa' : isCurrent ? 'var(--color-gold)' : 'var(--text-primary)' }}>
-                            {isStaging ? '📥 Prep Staging' : isVirtual ? `Virtual Session ${sess.data_json?.session_number || idx}` : `Session ${sessNum}`}
-                          </span>
-                          <span className={`status-pill status-${sess.data_json?.status === 'completed' ? 'completed' : isCurrent ? 'inprogress' : 'planned'}`} style={{ fontSize: '0.6rem', padding: '1px 5px' }}>
-                            {sess.data_json?.status === 'completed' ? '✓ Done' : isCurrent ? '● Active' : 'Plan'}
-                          </span>
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setRunSheetSessionNode(sess);
-                            }}
-                            className="btn btn-ghost"
-                            style={{ fontSize: '0.62rem', padding: '1px 5px', height: '20px', gap: '3px', color: 'var(--color-gold)' }}
-                            title="Open Session Run-Sheet"
-                          >
-                            <BookOpen size={10} /> Run-Sheet
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggleSessionCollapse(sess.id);
-                            }}
-                            className="btn btn-ghost"
-                            style={{ fontSize: '0.65rem', padding: '1px 6px', height: '20px', gap: '3px', color: 'var(--text-muted)' }}
-                            title="Fold session column"
-                          >
-                            ◀ Fold
-                          </button>
-                        </div>
-                      </div>
-                      <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-primary)', marginTop: '4px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {sess.title}
-                      </div>
-                      {sess.subtitle && (
-                        <div style={{ fontSize: '0.68rem', color: isStaging ? '#93c5fd' : 'var(--text-muted)' }}>{sess.subtitle}</div>
-                      )}
-
-                      {/* Quick Commit button for virtual sessions */}
-                      {isVirtual && (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleQuickCreateSession(sess.data_json?.session_number, sess.title);
-                          }}
-                          className="btn btn-primary"
-                          style={{ fontSize: '0.66rem', padding: '2px 6px', marginTop: '6px', width: '100%', gap: '4px' }}
-                        >
-                          <Plus size={11} /> Commit to Campaign
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+            <TapestrySessionHeaders
+              matrixGridCols={matrixGridCols}
+              displayColumns={displayColumns}
+              displayQuests={displayQuests}
+              collapsedQuestIds={collapsedQuestIds}
+              collapsedSessionIds={collapsedSessionIds}
+              hoveredSessionId={hoveredSessionId}
+              encounters={encounters}
+              encounterSessionMap={encounterSessionMap}
+              encounterQuestMap={encounterQuestMap}
+              sessions={sessions}
+              onExpandAllQuests={handleExpandAll}
+              onCollapseAllQuests={handleCollapseAll}
+              onToggleSessionCollapse={toggleSessionCollapse}
+              onSelectSession={setActiveSessionModal}
+              onSetHoveredSessionId={setHoveredSessionId}
+              onMoveEncounter={handleMoveEncounter}
+              onOpenRunSheet={(sess) => setRunSheetSessionNode(sess)}
+              onQuickCreateSession={handleQuickCreateSession}
+            />
 
             {/* ========================================================================= */}
             {/* 4. THE TAPESTRY MATRIX (QUEST ROWS × SESSION COLUMNS)                    */}
@@ -2365,99 +1215,14 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
               ref={matrixContainerRef}
               style={{ display: 'flex', flexDirection: 'column', gap: '14px', position: 'relative' }}
             >
-              {/* SVG Background Layer for Milestone Sync Lines (Advances Quest) */}
-              {milestoneLines.length > 0 && (
-                <svg className="matrix-milestone-svg-overlay">
-                  <defs>
-                    <marker
-                      id="arrow-purple"
-                      viewBox="0 0 10 10"
-                      refX="7"
-                      refY="5"
-                      markerWidth="6"
-                      markerHeight="6"
-                      orient="auto-start-reverse"
-                    >
-                      <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="var(--color-purple, #a855f7)" />
-                    </marker>
-                  </defs>
-                  {milestoneLines.map((line) => {
-                    const isHighlighted =
-                      hoveredEncounterId === line.sourceEncounterId ||
-                      hoveredMilestoneId === line.id ||
-                      hoveredQuestId === line.targetQuestId;
-                    const isDimmed = Boolean(
-                      (hoveredEncounterId || hoveredMilestoneId || hoveredQuestId) && !isHighlighted
-                    );
-                    return (
-                      <path
-                        key={line.id}
-                        d={line.d}
-                        className={`matrix-milestone-curve ${
-                          isHighlighted ? 'highlighted' : isDimmed ? 'dimmed' : ''
-                        }`}
-                        markerEnd="url(#arrow-purple)"
-                      />
-                    );
-                  })}
-                </svg>
-              )}
-
-              {/* SVG Precedence Overlay for Encounter Precedence Lines */}
-              {precedenceLines.length > 0 && (
-                <>
-                  <svg className="matrix-svg-overlay">
-                    <defs>
-                      <marker id="arrow-gold" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                        <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#f59e0b"/>
-                      </marker>
-                    </defs>
-                    {precedenceLines.map((line) => {
-                      const isHighlighted = hoveredEncounterId === line.sourceId || hoveredEncounterId === line.targetId;
-                      const isDimmed = Boolean(hoveredEncounterId && !isHighlighted);
-                      return (
-                        <path
-                          key={line.edgeId}
-                          d={line.d}
-                          className={`matrix-curve ${isHighlighted ? 'highlighted' : isDimmed ? 'dimmed' : ''}`}
-                          markerEnd="url(#arrow-gold)"
-                        />
-                      );
-                    })}
-                  </svg>
-
-                  {/* Floating Condition Badges along the lines */}
-                  {precedenceLines.map((line) => {
-                    if (!line.label) return null;
-                    if (line.isTight) {
-                      return (
-                        <div
-                          key={`dot-${line.edgeId}`}
-                          className="matrix-condition-dot"
-                          style={{ left: `${line.midX}px`, top: `${line.midY}px` }}
-                          title={line.label}
-                        >
-                          <span className="dot-icon">➔</span>
-                          <div className={`matrix-condition-tooltip ${line.tooltipBelow ? 'tooltip-below' : ''}`}>
-                            <span style={{ color: 'var(--color-gold)', fontSize: '0.75rem' }}>➔</span>
-                            <span>{line.label}</span>
-                          </div>
-                        </div>
-                      );
-                    }
-                    return (
-                      <div
-                        key={`pill-${line.edgeId}`}
-                        className="matrix-condition-pill"
-                        style={{ left: `${line.midX}px`, top: `${line.midY}px` }}
-                        title={line.label}
-                      >
-                        ➔ {line.label}
-                      </div>
-                    );
-                  })}
-                </>
-              )}
+              {/* SVG Overlays for Milestone Sync Lines and Encounter Precedence Lines */}
+              <TapestrySvgOverlays
+                milestoneLines={milestoneLines}
+                precedenceLines={precedenceLines}
+                hoveredEncounterId={hoveredEncounterId}
+                hoveredMilestoneId={hoveredMilestoneId}
+                hoveredQuestId={hoveredQuestId}
+              />
               {displayQuests.map((quest, qIdx) => {
                 const isQuestHovered = hoveredQuestId === quest.id;
                 const isOpenRow = quest.id === 'open-world-events';
@@ -2472,7 +1237,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                 const isCollapsed = collapsedQuestIds.has(quest.id);
                 const rowEncountersCount = isOpenRow
                   ? unassignedQuestEncounters.length
-                  : encounters.filter((e) => encounterQuestMap.get(e.id) === quest.id).length;
+                  : encounters.filter((e: NodeItem) => encounterQuestMap.get(e.id) === quest.id).length;
 
                 return (
                   <div
@@ -2917,7 +1682,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                         dragOverCell?.questId === targetQuestId && dragOverCell?.sessionId === targetSessionId;
 
                       // Match encounters that belong to this quest AND this session
-                      const matchingEncounters = encounters.filter((e) => {
+                      const matchingEncounters = encounters.filter((e: NodeItem) => {
                         const encQuestId = encounterQuestMap.get(e.id);
                         const encSessionId = encounterSessionMap.get(e.id);
 
@@ -2943,7 +1708,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                             {matchingEncounters.length > 0 ? (
                               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '3px' }}>
                                 <div style={{ display: 'flex', gap: '2px', flexWrap: 'wrap', justifyContent: 'center', maxWidth: '32px' }}>
-                                  {matchingEncounters.map((e) => (
+                                  {matchingEncounters.map((e: NodeItem) => (
                                     <div
                                       key={e.id}
                                       style={{
@@ -3037,7 +1802,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                           >
                             {matchingEncounters.length > 0 ? (
                               <>
-                                {matchingEncounters.slice(0, 3).map((enc) => {
+                                {matchingEncounters.slice(0, 3).map((enc: NodeItem) => {
                                   const encStatus = enc.data_json?.status || 'planned';
                                   return (
                                     <div
@@ -3213,7 +1978,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
 
                           {/* Encounter Cards rendered horizontally */}
                           {matchingEncounters.length > 0 ? (
-                            matchingEncounters.map((enc, encIdx) => {
+                            matchingEncounters.map((enc: NodeItem, encIdx: number) => {
                               const encStatus = enc.data_json?.status || 'planned';
                               const attached = encounterEntitiesMap.get(enc.id) || { locations: [], monsters: [], items: [], npcs: [] };
                               const hasMilestoneEmit = milestoneEmitters.has(enc.id);
@@ -3248,108 +2013,348 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                                   onClick={() => setActiveEncounterModal(enc)}
                                   onMouseEnter={() => setHoveredEncounterId(enc.id)}
                                   onMouseLeave={() => setHoveredEncounterId(null)}
-                                  className="tapestry-encounter-card"
+                                  className={`tapestry-encounter-card ${
+                                    encStatus === 'completed'
+                                      ? 'completed'
+                                      : encStatus === 'in_progress'
+                                      ? 'in-progress'
+                                      : ''
+                                  } ${hoveredEncounterId === enc.id ? 'highlighted' : ''} ${
+                                    isLinkedToHoveredMilestone ? 'milestone-highlighted' : ''
+                                  }`}
                                   style={{
-                                    border: isLinkedToHoveredMilestone
-                                      ? '2px solid #f3e8ff'
-                                      : hasMilestoneEmit
-                                      ? '1.5px solid var(--color-purple)'
-                                      : encStatus === 'completed'
-                                      ? '1.5px solid #10b981'
-                                      : encStatus === 'in_progress'
-                                      ? '1.5px solid var(--color-gold)'
-                                      : '1.5px solid var(--border-medium)',
-                                    opacity: draggingEncounterId === enc.id ? 0.35 : 1,
-                                    boxShadow: isLinkedToHoveredMilestone
-                                      ? '0 0 22px rgba(168, 85, 247, 0.85)'
-                                      : hasMilestoneEmit
-                                      ? '0 0 14px rgba(168, 85, 247, 0.3)'
-                                      : hoveredEncounterId === enc.id
-                                      ? `0 0 16px ${questColor}66`
-                                      : encStatus === 'in_progress'
-                                      ? '0 0 10px rgba(245, 158, 11, 0.25)'
-                                      : 'var(--shadow-sm)'
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: '8px',
+                                    padding: '10px 12px',
+                                    background:
+                                      encStatus === 'completed'
+                                        ? 'rgba(16, 185, 129, 0.08)'
+                                        : encStatus === 'in_progress'
+                                        ? 'rgba(245, 158, 11, 0.08)'
+                                        : 'rgba(30, 41, 59, 0.7)',
+                                    borderRadius: '8px',
+                                    border:
+                                      hoveredEncounterId === enc.id
+                                        ? '1px solid var(--accent-primary)'
+                                        : isLinkedToHoveredMilestone
+                                        ? '1.5px solid #a855f7'
+                                        : encStatus === 'completed'
+                                        ? '1px solid rgba(16, 185, 129, 0.3)'
+                                        : encStatus === 'in_progress'
+                                        ? '1px solid rgba(245, 158, 11, 0.4)'
+                                        : '1px solid rgba(255, 255, 255, 0.06)',
+                                    cursor: 'grab',
+                                    transition: 'all 0.15s cubic-bezier(0.4, 0, 0.2, 1)',
+                                    minWidth: encounterDensity === 'compact' ? '180px' : '230px',
+                                    maxWidth: encounterDensity === 'compact' ? '200px' : '260px',
+                                    boxShadow:
+                                      hoveredEncounterId === enc.id
+                                        ? '0 6px 20px rgba(0, 0, 0, 0.4)'
+                                        : '0 2px 8px rgba(0, 0, 0, 0.2)'
                                   }}
                                 >
-                                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65rem', fontWeight: 800, background: 'rgba(245, 158, 11, 0.15)', color: 'var(--color-gold)', padding: '1px 5px', borderRadius: '4px' }}>
-                                      #{orderNum}
-                                    </span>
-                                    <span style={{ fontSize: '0.58rem', padding: '1px 4px', borderRadius: '4px', textTransform: 'uppercase', fontWeight: 700, background: encType === 'combat' ? 'rgba(239, 68, 68, 0.15)' : encType === 'social' ? 'rgba(59, 130, 246, 0.15)' : 'rgba(16, 185, 129, 0.15)', color: encType === 'combat' ? '#f87171' : encType === 'social' ? '#60a5fa' : '#34d399' }}>
-                                      {encType}
-                                    </span>
+                                  {/* Card Header */}
+                                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
+                                      <GripVertical size={12} style={{ color: 'var(--text-muted)', flexShrink: 0, opacity: 0.6 }} />
+                                      <span
+                                        style={{
+                                          fontSize: '0.68rem',
+                                          fontWeight: 700,
+                                          color: 'var(--text-muted)',
+                                          letterSpacing: '0.5px'
+                                        }}
+                                      >
+                                        #{orderNum}
+                                      </span>
+                                      <span
+                                        className="badge"
+                                        style={{
+                                          fontSize: '0.62rem',
+                                          padding: '1px 5px',
+                                          background:
+                                            encType === 'combat'
+                                              ? 'rgba(239, 68, 68, 0.15)'
+                                              : encType === 'roleplay'
+                                              ? 'rgba(59, 130, 246, 0.15)'
+                                              : encType === 'puzzle'
+                                              ? 'rgba(168, 85, 247, 0.15)'
+                                              : 'rgba(245, 158, 11, 0.15)',
+                                          color:
+                                            encType === 'combat'
+                                              ? '#ef4444'
+                                              : encType === 'roleplay'
+                                              ? '#60a5fa'
+                                              : encType === 'puzzle'
+                                              ? '#c084fc'
+                                              : 'var(--color-gold)',
+                                          border: 'none',
+                                          textTransform: 'uppercase',
+                                          letterSpacing: '0.4px'
+                                        }}
+                                      >
+                                        {encType}
+                                      </span>
+                                    </div>
+
+                                    {/* Action icons */}
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleToggleCanon(e, enc);
+                                        }}
+                                        title={enc.is_canon ? 'Canon Lore (Click to switch to non-canon)' : 'Draft/Alternate (Click to mark Canon)'}
+                                        style={{
+                                          background: 'none',
+                                          border: 'none',
+                                          cursor: 'pointer',
+                                          padding: '2px',
+                                          color: enc.is_canon ? 'var(--color-gold)' : 'var(--text-muted)',
+                                          opacity: enc.is_canon ? 1 : 0.4
+                                        }}
+                                      >
+                                        <Sparkles size={11} />
+                                      </button>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleToggleReveal(e, enc);
+                                        }}
+                                        title={enc.revealed_to_players ? 'Revealed to Players' : 'Hidden / DM Eyes Only'}
+                                        style={{
+                                          background: 'none',
+                                          border: 'none',
+                                          cursor: 'pointer',
+                                          padding: '2px',
+                                          color: enc.revealed_to_players ? 'var(--color-emerald)' : 'var(--text-muted)',
+                                          opacity: enc.revealed_to_players ? 1 : 0.4
+                                        }}
+                                      >
+                                        {enc.revealed_to_players ? <Eye size={11} /> : <EyeOff size={11} />}
+                                      </button>
+                                      {hasMilestoneEmit && (
+                                        <span title="Advances Quest (Emits milestone connection)" style={{ color: '#a855f7', display: 'flex' }}>
+                                          <Star size={12} fill="#a855f7" />
+                                        </span>
+                                      )}
+                                    </div>
                                   </div>
 
-                                  <div style={{ fontWeight: 700, fontSize: '0.78rem', marginTop: '2px', lineHeight: 1.2, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={enc.title}>
-                                    {enc.title}
-                                  </div>
-
-                                  {hasMilestoneEmit && (
-                                    <div style={{ fontSize: '0.62rem', fontWeight: 700, color: '#c084fc', display: 'flex', alignItems: 'center', gap: '3px' }}>
-                                      <span>✦ Milestone Emitter</span>
-                                    </div>
-                                  )}
-
-                                  {/* Attached Entity Chips (Locations, Monsters, Loot, NPCs) */}
-                                  {(attached.locations.length > 0 || attached.monsters.length > 0 || attached.items.length > 0 || attached.npcs.length > 0) && (
-                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '3px', marginTop: '4px' }}>
-                                      {attached.locations.slice(0, 2).map((loc) => (
-                                        <span key={loc.id} style={{ fontSize: '0.6rem', padding: '1px 4px', borderRadius: '3px', background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa', display: 'flex', alignItems: 'center', gap: '2px' }}>
-                                          <MapPin size={9} /> {loc.title}
-                                        </span>
-                                      ))}
-                                      {attached.monsters.slice(0, 2).map((m) => (
-                                        <span key={m.id} style={{ fontSize: '0.6rem', padding: '1px 4px', borderRadius: '3px', background: 'rgba(239, 68, 68, 0.15)', color: '#f87171', display: 'flex', alignItems: 'center', gap: '2px' }}>
-                                          <Skull size={9} /> {m.title}
-                                        </span>
-                                      ))}
-                                      {attached.items.slice(0, 2).map((it) => (
-                                        <span key={it.id} style={{ fontSize: '0.6rem', padding: '1px 4px', borderRadius: '3px', background: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24', display: 'flex', alignItems: 'center', gap: '2px' }}>
-                                          <Package size={9} /> {it.title}
-                                        </span>
-                                      ))}
-                                      {attached.npcs.slice(0, 2).map((n) => (
-                                        <span key={n.id} style={{ fontSize: '0.6rem', padding: '1px 4px', borderRadius: '3px', background: 'rgba(168, 85, 247, 0.15)', color: '#c084fc', display: 'flex', alignItems: 'center', gap: '2px' }}>
-                                          <Users size={9} /> {n.title}
-                                        </span>
-                                      ))}
-                                    </div>
-                                  )}
-
-                                  {(isStagingCol || isOpenRow) && (
+                                  {/* Title & Summary */}
+                                  <div style={{ minWidth: 0 }}>
                                     <div
                                       style={{
-                                        display: 'flex',
-                                        gap: '4px',
-                                        marginTop: '6px',
-                                        paddingTop: '6px',
-                                        borderTop: '1px dashed var(--border-subtle)'
+                                        fontSize: '0.82rem',
+                                        fontWeight: 600,
+                                        color: encStatus === 'completed' ? 'var(--text-secondary)' : 'var(--text-primary)',
+                                        textDecoration: encStatus === 'completed' ? 'line-through' : 'none',
+                                        lineHeight: 1.3,
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis',
+                                        display: '-webkit-box',
+                                        WebkitLineClamp: 2,
+                                        WebkitBoxOrient: 'vertical'
                                       }}
-                                      onClick={(e) => e.stopPropagation()}
                                     >
-                                      {isStagingCol && (
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            const targetSess = sessions[0] || displayColumns.find((c) => c.id !== 'unscheduled-staging');
-                                            if (targetSess) handleAssignEncounterToSession(enc.id, targetSess.id);
-                                          }}
-                                          className="btn btn-secondary"
-                                          style={{ fontSize: '0.64rem', padding: '2px 6px', gap: '3px', flex: 1 }}
-                                          title="Stage to next session"
-                                        >
-                                          <ArrowRight size={10} /> To Session 1
-                                        </button>
-                                      )}
+                                      {enc.title}
+                                    </div>
+                                    {encounterDensity === 'detailed' && enc.summary && (
+                                      <p
+                                        style={{
+                                          fontSize: '0.72rem',
+                                          color: 'var(--text-muted)',
+                                          margin: '3px 0 0 0',
+                                          lineHeight: 1.3,
+                                          overflow: 'hidden',
+                                          textOverflow: 'ellipsis',
+                                          display: '-webkit-box',
+                                          WebkitLineClamp: 2,
+                                          WebkitBoxOrient: 'vertical'
+                                        }}
+                                      >
+                                        {enc.summary}
+                                      </p>
+                                    )}
+                                  </div>
 
+                                  {/* Attached Entities (Pills) */}
+                                  {encounterDensity === 'detailed' && (
+                                    (attached.locations.length > 0 ||
+                                      attached.monsters.length > 0 ||
+                                      attached.npcs.length > 0 ||
+                                      attached.items.length > 0) && (
+                                      <div
+                                        style={{
+                                          display: 'flex',
+                                          flexWrap: 'wrap',
+                                          gap: '4px',
+                                          marginTop: '2px'
+                                        }}
+                                      >
+                                        {attached.locations.slice(0, 2).map((loc) => (
+                                          <span
+                                            key={loc.id}
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setActiveEntityModal(loc);
+                                            }}
+                                            className="badge"
+                                            style={{
+                                              fontSize: '0.62rem',
+                                              padding: '1px 5px',
+                                              background: 'rgba(6, 182, 212, 0.12)',
+                                              color: '#22d3ee',
+                                              border: '1px solid rgba(6, 182, 212, 0.25)',
+                                              cursor: 'pointer',
+                                              display: 'inline-flex',
+                                              alignItems: 'center',
+                                              gap: '3px',
+                                              maxWidth: '100px',
+                                              overflow: 'hidden',
+                                              textOverflow: 'ellipsis',
+                                              whiteSpace: 'nowrap'
+                                            }}
+                                          >
+                                            <MapPin size={9} />
+                                            {loc.title}
+                                          </span>
+                                        ))}
+                                        {attached.monsters.slice(0, 2).map((mon) => (
+                                          <span
+                                            key={mon.id}
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setActiveEntityModal(mon);
+                                            }}
+                                            className="badge"
+                                            style={{
+                                              fontSize: '0.62rem',
+                                              padding: '1px 5px',
+                                              background: 'rgba(239, 68, 68, 0.12)',
+                                              color: '#f87171',
+                                              border: '1px solid rgba(239, 68, 68, 0.25)',
+                                              cursor: 'pointer',
+                                              display: 'inline-flex',
+                                              alignItems: 'center',
+                                              gap: '3px',
+                                              maxWidth: '100px',
+                                              overflow: 'hidden',
+                                              textOverflow: 'ellipsis',
+                                              whiteSpace: 'nowrap'
+                                            }}
+                                          >
+                                            <Skull size={9} />
+                                            {mon.title}
+                                          </span>
+                                        ))}
+                                        {attached.npcs.slice(0, 2).map((npc) => (
+                                          <span
+                                            key={npc.id}
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setActiveEntityModal(npc);
+                                            }}
+                                            className="badge"
+                                            style={{
+                                              fontSize: '0.62rem',
+                                              padding: '1px 5px',
+                                              background: 'rgba(59, 130, 246, 0.12)',
+                                              color: '#60a5fa',
+                                              border: '1px solid rgba(59, 130, 246, 0.25)',
+                                              cursor: 'pointer',
+                                              display: 'inline-flex',
+                                              alignItems: 'center',
+                                              gap: '3px',
+                                              maxWidth: '100px',
+                                              overflow: 'hidden',
+                                              textOverflow: 'ellipsis',
+                                              whiteSpace: 'nowrap'
+                                            }}
+                                          >
+                                            <Users size={9} />
+                                            {npc.title}
+                                          </span>
+                                        ))}
+                                        {attached.items.slice(0, 2).map((itm) => (
+                                          <span
+                                            key={itm.id}
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setActiveEntityModal(itm);
+                                            }}
+                                            className="badge"
+                                            style={{
+                                              fontSize: '0.62rem',
+                                              padding: '1px 5px',
+                                              background: 'rgba(245, 158, 11, 0.12)',
+                                              color: 'var(--color-gold)',
+                                              border: '1px solid rgba(245, 158, 11, 0.25)',
+                                              cursor: 'pointer',
+                                              display: 'inline-flex',
+                                              alignItems: 'center',
+                                              gap: '3px',
+                                              maxWidth: '100px',
+                                              overflow: 'hidden',
+                                              textOverflow: 'ellipsis',
+                                              whiteSpace: 'nowrap'
+                                            }}
+                                          >
+                                            <Package size={9} />
+                                            {itm.title}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    )
+                                  )}
+
+                                  {/* Quick Assignment Pickers if Unassigned */}
+                                  {(isStagingCol || isOpenRow) && (
+                                    <div
+                                      onClick={(e) => e.stopPropagation()}
+                                      style={{
+                                        display: 'flex',
+                                        gap: '6px',
+                                        paddingTop: '6px',
+                                        borderTop: '1px solid rgba(255, 255, 255, 0.06)',
+                                        marginTop: 'auto'
+                                      }}
+                                    >
+                                      {isStagingCol && sessions.length > 0 && (
+                                        <select
+                                          defaultValue=""
+                                          onChange={(e) => {
+                                            if (e.target.value) {
+                                              handleAssignEncounterToSession(enc.id, e.target.value);
+                                            }
+                                          }}
+                                          style={{
+                                            fontSize: '0.68rem',
+                                            padding: '2px 4px',
+                                            background: 'var(--bg-surface)',
+                                            color: 'var(--text-secondary)',
+                                            border: '1px solid var(--border-subtle)',
+                                            borderRadius: '4px',
+                                            maxWidth: '110px'
+                                          }}
+                                        >
+                                          <option value="" disabled>Assign Session...</option>
+                                          {sessions.map((s) => (
+                                            <option key={s.id} value={s.id}>{s.title}</option>
+                                          ))}
+                                        </select>
+                                      )}
                                       {isOpenRow && quests.length > 0 && (
                                         <select
-                                          onChange={(e) => {
-                                            if (e.target.value) handleAssignEncounterToQuest(enc.id, e.target.value);
-                                          }}
                                           defaultValue=""
+                                          onChange={(e) => {
+                                            if (e.target.value) {
+                                              handleAssignEncounterToQuest(enc.id, e.target.value);
+                                            }
+                                          }}
                                           style={{
-                                            fontSize: '0.64rem',
+                                            fontSize: '0.68rem',
                                             padding: '2px 4px',
                                             background: 'var(--bg-surface)',
                                             color: 'var(--text-secondary)',
@@ -3359,7 +2364,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                                           }}
                                         >
                                           <option value="" disabled>Link Quest...</option>
-                                          {quests.map((q) => (
+                                          {quests.map((q: NodeItem) => (
                                             <option key={q.id} value={q.id}>{q.title}</option>
                                           ))}
                                         </select>
