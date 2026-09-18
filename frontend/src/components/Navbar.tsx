@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
 import {
+  Archive,
   BookOpen,
   Bug,
   Compass,
   Download,
   Edit2,
   Eye,
+  FolderArchive,
   FolderOpen,
   Moon,
   Palette,
@@ -47,6 +49,10 @@ interface NavbarProps {
   onToggleAgent: () => void;
   isAgentOpen: boolean;
   onSelectNode?: (node: NodeItem) => void;
+  showArchived?: boolean;
+  onToggleShowArchived?: () => void;
+  archivedCount?: number;
+  onOpenBulkArchive?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -63,6 +69,10 @@ export const Navbar: React.FC<NavbarProps> = ({
   onToggleAgent,
   isAgentOpen,
   onSelectNode,
+  showArchived = false,
+  onToggleShowArchived,
+  archivedCount = 0,
+  onOpenBulkArchive,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<NodeItem[]>([]);
@@ -376,6 +386,41 @@ export const Navbar: React.FC<NavbarProps> = ({
             <button onClick={handleImport} className="btn btn-ghost" title="Import Campaign JSON" style={{ padding: '8px' }}>
               <Upload size={18} />
             </button>
+            {onToggleShowArchived && (
+              <button
+                onClick={onToggleShowArchived}
+                className="btn btn-ghost"
+                style={{
+                  padding: '5px 10px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  fontSize: '0.78rem',
+                  fontWeight: 600,
+                  background: showArchived ? 'rgba(139, 92, 246, 0.2)' : 'rgba(255, 255, 255, 0.04)',
+                  border: showArchived ? '1px solid rgba(139, 92, 246, 0.5)' : '1px solid var(--border-subtle)',
+                  color: showArchived ? '#c4b5fd' : 'var(--text-secondary)',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease',
+                }}
+                title={showArchived ? 'Archived nodes are currently visible. Click to hide.' : 'Show archived compendium nodes (vault)'}
+              >
+                <Archive size={14} style={{ color: showArchived ? '#a78bfa' : 'inherit' }} />
+                <span>{showArchived ? `Archived (${archivedCount})` : `Show Archived (${archivedCount})`}</span>
+              </button>
+            )}
+            {onOpenBulkArchive && (
+              <button
+                onClick={onOpenBulkArchive}
+                className="btn btn-ghost"
+                style={{ padding: '8px', color: '#a78bfa' }}
+                title="Bulk Archive Factions & Unused Quests"
+                aria-label="Bulk Archive Factions"
+              >
+                <FolderArchive size={18} />
+              </button>
+            )}
           </>
         )}
 

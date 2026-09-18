@@ -5,6 +5,7 @@ import {
   Eye,
   EyeOff,
   Star,
+  Check,
   MapPin,
   Skull,
   Users,
@@ -35,6 +36,7 @@ export interface TapestryEncounterCardProps {
   onDragEnd: () => void;
   onMouseEnter: (encId: string) => void;
   onMouseLeave: () => void;
+  onNodeContextMenu?: (node: NodeItem, e: React.MouseEvent) => void;
 }
 
 export const TapestryEncounterCard: React.FC<TapestryEncounterCardProps> = ({
@@ -60,8 +62,10 @@ export const TapestryEncounterCard: React.FC<TapestryEncounterCardProps> = ({
   onDragEnd,
   onMouseEnter,
   onMouseLeave,
+  onNodeContextMenu,
 }) => {
   const encStatus = enc.data_json?.status || 'planned';
+  const isArchived = encStatus === 'archived';
   const attached = encounterEntitiesMap.get(enc.id) || { locations: [], monsters: [], items: [], npcs: [] };
   const hasMilestoneEmit = milestoneEmitters.has(enc.id);
   const isLinkedToHoveredMilestone = Boolean(
@@ -69,7 +73,18 @@ export const TapestryEncounterCard: React.FC<TapestryEncounterCardProps> = ({
       milestoneLines.some((l) => l.id === hoveredMilestoneId && l.sourceEncounterId === enc.id)
   );
   const orderNum = enc.sort_order || encIdx + 1;
-  const encType = enc.data_json?.encounter_type || enc.data_json?.type || 'combat';
+  const rawEncType = enc.data_json?.encounter_type || enc.data_json?.type || 'combat';
+  const formatEncType = (typeStr: string) => {
+    const clean = typeStr.trim().toLowerCase();
+    if (clean.includes('exploration') && clean.includes('hazard')) return 'EXPLORE/HAZARD';
+    if (clean.includes('exploration')) return 'EXPLORE';
+    if (clean.includes('hazard')) return 'HAZARD';
+    if (clean.includes('roleplay') || clean.includes('social')) return 'ROLEPLAY';
+    if (clean.includes('puzzle') || clean.includes('mystery')) return 'PUZZLE';
+    if (clean.includes('combat')) return 'COMBAT';
+    return typeStr.replace(/\s+/g, '/').toUpperCase();
+  };
+  const encTypeDisplay = formatEncType(rawEncType);
 
   return (
     <div
@@ -78,13 +93,21 @@ export const TapestryEncounterCard: React.FC<TapestryEncounterCardProps> = ({
       onDragStart={(e) => onDragStart(enc.id, e)}
       onDragEnd={onDragEnd}
       onClick={() => onSelectEncounter(enc)}
+      onContextMenu={(e) => {
+        if (onNodeContextMenu) {
+          e.preventDefault();
+          onNodeContextMenu(enc, e);
+        }
+      }}
       onMouseEnter={() => onMouseEnter(enc.id)}
       onMouseLeave={onMouseLeave}
       className={`tapestry-encounter-card ${
         encStatus === 'completed'
           ? 'completed'
-          : encStatus === 'in_progress'
+          : (encStatus === 'in_progress' || encStatus === 'active')
           ? 'in-progress'
+          : isArchived
+          ? 'archived'
           : ''
       } ${hoveredEncounterId === enc.id ? 'highlighted' : ''} ${
         isLinkedToHoveredMilestone ? 'milestone-highlighted' : ''
@@ -95,9 +118,11 @@ export const TapestryEncounterCard: React.FC<TapestryEncounterCardProps> = ({
         gap: '8px',
         padding: '10px 12px',
         background:
-          encStatus === 'completed'
+          isArchived
+            ? 'rgba(30, 41, 59, 0.45)'
+            : encStatus === 'completed'
             ? 'rgba(16, 185, 129, 0.08)'
-            : encStatus === 'in_progress'
+            : (encStatus === 'in_progress' || encStatus === 'active')
             ? 'rgba(245, 158, 11, 0.08)'
             : 'rgba(30, 41, 59, 0.7)',
         borderRadius: '8px',
@@ -106,15 +131,18 @@ export const TapestryEncounterCard: React.FC<TapestryEncounterCardProps> = ({
             ? '1px solid var(--accent-primary)'
             : isLinkedToHoveredMilestone
             ? '1.5px solid #a855f7'
+            : isArchived
+            ? '1px dashed rgba(148, 163, 184, 0.4)'
             : encStatus === 'completed'
             ? '1px solid rgba(16, 185, 129, 0.3)'
-            : encStatus === 'in_progress'
+            : (encStatus === 'in_progress' || encStatus === 'active')
             ? '1px solid rgba(245, 158, 11, 0.4)'
             : '1px solid rgba(255, 255, 255, 0.06)',
         cursor: 'grab',
         transition: 'all 0.15s cubic-bezier(0.4, 0, 0.2, 1)',
         minWidth: encounterDensity === 'compact' ? '180px' : '230px',
         maxWidth: encounterDensity === 'compact' ? '200px' : '260px',
+        opacity: isArchived ? 0.65 : 1,
         boxShadow:
           hoveredEncounterId === enc.id
             ? '0 6px 20px rgba(0, 0, 0, 0.4)'
@@ -123,7 +151,7 @@ export const TapestryEncounterCard: React.FC<TapestryEncounterCardProps> = ({
     >
       {/* Card Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '5px', minWidth: 0, flex: 1, overflow: 'hidden' }}>
           <GripVertical size={12} style={{ color: 'var(--text-muted)', flexShrink: 0, opacity: 0.6 }} />
           <span
             style={{
@@ -131,6 +159,7 @@ export const TapestryEncounterCard: React.FC<TapestryEncounterCardProps> = ({
               fontWeight: 700,
               color: 'var(--text-muted)',
               letterSpacing: '0.5px',
+              flexShrink: 0,
             }}
           >
             #{orderNum}
@@ -138,30 +167,39 @@ export const TapestryEncounterCard: React.FC<TapestryEncounterCardProps> = ({
           <span
             className="badge"
             style={{
-              fontSize: '0.62rem',
+              fontSize: '0.6rem',
               padding: '1px 5px',
               background:
-                encType === 'combat'
+                rawEncType.toLowerCase().includes('combat')
                   ? 'rgba(239, 68, 68, 0.15)'
-                  : encType === 'roleplay'
+                  : rawEncType.toLowerCase().includes('roleplay') || rawEncType.toLowerCase().includes('social')
                   ? 'rgba(59, 130, 246, 0.15)'
-                  : encType === 'puzzle'
+                  : rawEncType.toLowerCase().includes('puzzle') || rawEncType.toLowerCase().includes('mystery')
                   ? 'rgba(168, 85, 247, 0.15)'
+                  : rawEncType.toLowerCase().includes('exploration') || rawEncType.toLowerCase().includes('explore')
+                  ? 'rgba(6, 182, 212, 0.15)'
                   : 'rgba(245, 158, 11, 0.15)',
               color:
-                encType === 'combat'
+                rawEncType.toLowerCase().includes('combat')
                   ? '#ef4444'
-                  : encType === 'roleplay'
+                  : rawEncType.toLowerCase().includes('roleplay') || rawEncType.toLowerCase().includes('social')
                   ? '#60a5fa'
-                  : encType === 'puzzle'
+                  : rawEncType.toLowerCase().includes('puzzle') || rawEncType.toLowerCase().includes('mystery')
                   ? '#c084fc'
+                  : rawEncType.toLowerCase().includes('exploration') || rawEncType.toLowerCase().includes('explore')
+                  ? '#22d3ee'
                   : 'var(--color-gold)',
               border: 'none',
               textTransform: 'uppercase',
-              letterSpacing: '0.4px',
+              letterSpacing: '0.3px',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              maxWidth: '120px',
             }}
+            title={`Encounter Type: ${rawEncType}`}
           >
-            {encType}
+            {encTypeDisplay}
           </span>
         </div>
 
@@ -206,13 +244,12 @@ export const TapestryEncounterCard: React.FC<TapestryEncounterCardProps> = ({
       </div>
 
       {/* Title & Summary */}
-      <div style={{ minWidth: 0 }}>
+      <div style={{ minWidth: 0, position: 'relative' }}>
         <div
           style={{
             fontSize: '0.82rem',
             fontWeight: 600,
             color: encStatus === 'completed' ? 'var(--text-secondary)' : 'var(--text-primary)',
-            textDecoration: encStatus === 'completed' ? 'line-through' : 'none',
             lineHeight: 1.3,
             overflow: 'hidden',
             textOverflow: 'ellipsis',
@@ -408,30 +445,86 @@ export const TapestryEncounterCard: React.FC<TapestryEncounterCardProps> = ({
               ))}
             </select>
           )}
-          {isOpenRow && quests.length > 0 && (
-            <select
-              defaultValue=""
-              onChange={(e) => {
-                if (e.target.value) {
-                  onAssignToQuest(enc.id, e.target.value);
-                }
-              }}
-              style={{
-                fontSize: '0.68rem',
-                padding: '2px 4px',
-                background: 'var(--bg-surface)',
-                color: 'var(--text-secondary)',
-                border: '1px solid var(--border-subtle)',
-                borderRadius: '4px',
-                maxWidth: '110px',
-              }}
-            >
-              <option value="" disabled>Link Quest...</option>
-              {quests.map((q: NodeItem) => (
-                <option key={q.id} value={q.id}>{q.title}</option>
-              ))}
-            </select>
+          {isOpenRow && (
+            (() => {
+              const activeQuests = quests.filter((q: NodeItem) => q.data_json?.status !== 'archived');
+              if (activeQuests.length === 0) return null;
+              return (
+                <select
+                  defaultValue=""
+                  onChange={(e) => {
+                    if (e.target.value) {
+                      onAssignToQuest(enc.id, e.target.value);
+                    }
+                  }}
+                  style={{
+                    fontSize: '0.68rem',
+                    padding: '2px 4px',
+                    background: 'var(--bg-surface)',
+                    color: 'var(--text-secondary)',
+                    border: '1px solid var(--border-subtle)',
+                    borderRadius: '4px',
+                    maxWidth: '110px',
+                  }}
+                >
+                  <option value="" disabled>Link Quest...</option>
+                  {activeQuests.map((q: NodeItem) => (
+                    <option key={q.id} value={q.id}>{q.title}</option>
+                  ))}
+                </select>
+              );
+            })()
           )}
+        </div>
+      )}
+
+      {/* Green checkmark badge in bottom right corner when completed */}
+      {encStatus === 'completed' && (
+        <div
+          style={{
+            position: 'absolute',
+            bottom: '8px',
+            right: '8px',
+            width: '18px',
+            height: '18px',
+            borderRadius: '50%',
+            background: 'rgba(16, 185, 129, 0.2)',
+            border: '1px solid rgba(16, 185, 129, 0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'var(--color-emerald)',
+            boxShadow: '0 0 8px rgba(16, 185, 129, 0.3)',
+            pointerEvents: 'none',
+          }}
+          title="Completed Encounter"
+        >
+          <Check size={11} strokeWidth={3} />
+        </div>
+      )}
+
+      {/* Archived badge in bottom right corner when archived */}
+      {isArchived && (
+        <div
+          style={{
+            position: 'absolute',
+            bottom: '8px',
+            right: '8px',
+            padding: '1px 6px',
+            borderRadius: '4px',
+            background: 'rgba(100, 116, 139, 0.25)',
+            border: '1px solid rgba(148, 163, 184, 0.4)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '3px',
+            color: '#94a3b8',
+            fontSize: '0.62rem',
+            fontWeight: 700,
+            pointerEvents: 'none',
+          }}
+          title="Archived Encounter"
+        >
+          📦 Archived
         </div>
       )}
     </div>

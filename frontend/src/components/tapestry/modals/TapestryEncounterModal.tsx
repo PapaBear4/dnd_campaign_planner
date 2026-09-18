@@ -283,9 +283,13 @@ export const TapestryEncounterModal: React.FC<TapestryEncounterModalProps> = ({
                     }}
                   >
                     <option value="">None (Open / World Event)</option>
-                    {quests.map((q) => (
-                      <option key={q.id} value={q.id}>{q.title}</option>
-                    ))}
+                    {quests
+                      .filter((q) => q.data_json?.status !== 'archived' || q.id === encounterQuestMap.get(encounter.id))
+                      .map((q) => (
+                        <option key={q.id} value={q.id}>
+                          {q.title}{q.data_json?.status === 'archived' ? ' (Archived)' : ''}
+                        </option>
+                      ))}
                   </select>
                 </div>
 
@@ -406,9 +410,11 @@ export const TapestryEncounterModal: React.FC<TapestryEncounterModalProps> = ({
                   }}
                 >
                   <option value="">Select Impacted Quest...</option>
-                  {quests.map((q) => (
-                    <option key={q.id} value={q.id}>{q.title}</option>
-                  ))}
+                  {quests
+                    .filter((q) => q.data_json?.status !== 'archived')
+                    .map((q) => (
+                      <option key={q.id} value={q.id}>{q.title}</option>
+                    ))}
                 </select>
                 <input
                   type="text"

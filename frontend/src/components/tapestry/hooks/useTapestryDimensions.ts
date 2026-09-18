@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { NodeItem } from '../../../types';
 
-export const LEFT_COL_WIDTH = 280;
+export const LEFT_COL_WIDTH = 300;
 export const SESSION_COL_EXPANDED_WIDTH = 680;
 export const SESSION_COL_COLLAPSED_WIDTH = 48;
 export const COL_GAP = 12;
@@ -15,8 +15,11 @@ interface UseTapestryDimensionsProps {
   encounterSessionMap: Map<string, string>;
   encounterQuestMap: Map<string, string>;
   collapsedSessionIds: Set<string>;
+  collapsedSubQuestParents?: Set<string>;
+  childQuestsMap?: Map<string, string[]>;
   displayQuests: Array<NodeItem & { isSubQuest?: boolean }>;
   milestoneReceivers: Map<string, any[]>;
+  encounterDensity?: 'detailed' | 'compact';
 }
 
 export function useTapestryDimensions({
@@ -28,8 +31,11 @@ export function useTapestryDimensions({
   encounterSessionMap,
   encounterQuestMap,
   collapsedSessionIds,
+  collapsedSubQuestParents,
+  childQuestsMap,
   displayQuests,
   milestoneReceivers,
+  encounterDensity = 'detailed',
 }: UseTapestryDimensionsProps) {
   // Display columns & arc layouts
   const { displayColumns, arcLayouts } = useMemo(() => {
@@ -142,9 +148,26 @@ export function useTapestryDimensions({
 
       displayQuests.forEach((quest) => {
         const isOpenRow = quest.id === 'open-world-events';
+        const isCollapsedSubQuests = collapsedSubQuestParents?.has(quest.id);
+        const subQuestIdSet = new Set<string>();
+        if (isCollapsedSubQuests && childQuestsMap) {
+          const addChildren = (qid: string) => {
+            const childIds = childQuestsMap.get(qid) || [];
+            for (const cid of childIds) {
+              if (!subQuestIdSet.has(cid)) {
+                subQuestIdSet.add(cid);
+                addChildren(cid);
+              }
+            }
+          };
+          addChildren(quest.id);
+        }
+
         const matchingEncounters = encounters.filter((e) => {
           const eQuestId = encounterQuestMap.get(e.id);
-          const isQuestMatch = isOpenRow ? !eQuestId : eQuestId === quest.id;
+          const isQuestMatch = isOpenRow
+            ? !eQuestId
+            : eQuestId === quest.id || (isCollapsedSubQuests && eQuestId ? subQuestIdSet.has(eQuestId) : false);
           const isSessionMatch = isStaging ? !encounterSessionMap.get(e.id) : encounterSessionMap.get(e.id) === col.id;
           return isQuestMatch && isSessionMatch;
         });
@@ -165,18 +188,21 @@ export function useTapestryDimensions({
         maxCardsInCol = Math.max(maxCardsInCol, Math.min(3, unassignedCount));
       }
 
-      const MIN_SESSION_WIDTH = 260;
+      const MIN_SESSION_WIDTH = encounterDensity === 'compact' ? 220 : 280;
 
       if (maxCardsInCol <= 0) {
         map.set(col.id, MIN_SESSION_WIDTH);
       } else {
-        const computed = 40 + (maxCardsInCol * 185) + ((maxCardsInCol - 1) * 14);
+        // TapestryEncounterCard width: 230px (detailed) vs 180px (compact). TapestryMilestoneSyncCard: 230px.
+        // Gap is 14px, and padding is 12px on each side (24px total) + 16px safety margin.
+        const cardWidth = encounterDensity === 'compact' ? 185 : 240;
+        const computed = 40 + (maxCardsInCol * cardWidth) + ((maxCardsInCol - 1) * 14);
         map.set(col.id, Math.max(MIN_SESSION_WIDTH, computed));
       }
     });
 
     return map;
-  }, [displayColumns, collapsedSessionIds, displayQuests, encounters, encounterQuestMap, encounterSessionMap, milestoneReceivers]);
+  }, [displayColumns, collapsedSessionIds, collapsedSubQuestParents, childQuestsMap, displayQuests, encounters, encounterQuestMap, encounterSessionMap, milestoneReceivers, encounterDensity]);
 
   const matrixGridCols = useMemo(() => {
     const cols = displayColumns.map((col) => `${sessionColWidths.get(col.id) || 260}px`);

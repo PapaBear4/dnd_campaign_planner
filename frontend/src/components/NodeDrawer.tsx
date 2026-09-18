@@ -1,11 +1,13 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
+  Archive,
   Check,
   ChevronDown,
   Eye,
   EyeOff,
   Feather,
   FileText,
+  RotateCcw,
   Save,
   ShieldCheck,
   Sparkles,
@@ -146,6 +148,30 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
       onRefresh();
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const handleFastArchive = async () => {
+    try {
+      const nextData = { ...dataJson, status: 'archived' };
+      setDataJson(nextData);
+      await updateNode(node.id, { data_json: nextData });
+      onRefresh();
+    } catch (err) {
+      console.error('Failed to archive node:', err);
+      alert('Failed to archive node: ' + err);
+    }
+  };
+
+  const handleFastRestore = async (targetStatus: string = 'active') => {
+    try {
+      const nextData = { ...dataJson, status: targetStatus };
+      setDataJson(nextData);
+      await updateNode(node.id, { data_json: nextData });
+      onRefresh();
+    } catch (err) {
+      console.error('Failed to restore node:', err);
+      alert('Failed to restore node: ' + err);
     }
   };
 
@@ -380,6 +406,46 @@ export const NodeDrawer: React.FC<NodeDrawerProps> = ({
               {revealed ? <Eye size={15} style={{ color: 'var(--color-emerald)' }} /> : <EyeOff size={15} />}
               {revealed ? 'Revealed to Players' : 'Hidden Secret'}
             </button>
+
+            {(currentNode.type === 'quest' || currentNode.type === 'encounter') && (
+              dataJson.status === 'archived' ? (
+                <button
+                  type="button"
+                  onClick={() => handleFastRestore('active')}
+                  className="btn btn-secondary"
+                  style={{
+                    fontSize: '0.78rem',
+                    padding: '6px 12px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    color: '#4ade80',
+                    borderColor: 'rgba(74, 222, 128, 0.4)',
+                  }}
+                  title="Restore this node to the active campaign deck"
+                >
+                  <RotateCcw size={14} /> Restore to Active
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleFastArchive}
+                  className="btn btn-secondary"
+                  style={{
+                    fontSize: '0.78rem',
+                    padding: '6px 12px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    color: '#c4b5fd',
+                    borderColor: 'rgba(139, 92, 246, 0.4)',
+                  }}
+                  title="Archive this node to the Compendium Vault"
+                >
+                  <Archive size={14} /> Archive {currentNode.type === 'quest' ? 'Quest' : 'Encounter'}
+                </button>
+              )
+            )}
 
             <button
               type="button"

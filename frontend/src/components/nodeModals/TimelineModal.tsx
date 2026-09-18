@@ -40,9 +40,10 @@ interface TimelineModalProps {
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
   planned: { label: 'Planned / Upcoming', color: 'var(--text-secondary)', bg: 'rgba(255,255,255,0.05)' },
-  in_progress: { label: 'In Progress / Active', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.12)' },
+  active: { label: 'Active / In Progress', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.12)' },
   completed: { label: 'Completed / Resolved', color: '#10b981', bg: 'rgba(16, 185, 129, 0.12)' },
   abandoned: { label: 'Bypassed / Abandoned', color: '#ef4444', bg: 'rgba(239, 68, 68, 0.12)' },
+  archived: { label: 'Archived (Compendium Vault)', color: '#a78bfa', bg: 'rgba(139, 92, 246, 0.15)' },
 };
 
 const ENCOUNTER_TYPES = ['Combat', 'Social Roleplay', 'Trap & Hazard', 'Puzzle & Mystery', 'Exploration & Travel'];
@@ -58,7 +59,7 @@ export const TimelineModal: React.FC<TimelineModalProps> = ({
   edges = [],
   onNavigateNode,
 }) => {
-  const status = dataJson.status || 'planned';
+  const status = dataJson.status === 'in_progress' ? 'active' : (dataJson.status || 'planned');
   const [showRunSheet, setShowRunSheet] = useState<boolean>(false);
 
   // Sub-quest and branching state
@@ -108,14 +109,14 @@ export const TimelineModal: React.FC<TimelineModalProps> = ({
       .filter((item) => !!item.node);
   }, [node.id, node.type, edges, nodeMap]);
 
-  // Find Prerequisites (incoming precedes edges)
+  // Find Prerequisites (incoming leads_to or precedes edges)
   const prerequisites = useMemo(() => {
     if (node.type !== 'quest') return [];
     return edges
       .filter(
         (e) =>
           e.target_id === node.id &&
-          e.relation_type === 'precedes' &&
+          (e.relation_type === 'leads_to' || e.relation_type === 'precedes') &&
           nodeMap.get(e.source_id)?.type === 'quest'
       )
       .map((e) => ({
@@ -126,14 +127,14 @@ export const TimelineModal: React.FC<TimelineModalProps> = ({
       .filter((item) => !!item.node);
   }, [node.id, node.type, edges, nodeMap]);
 
-  // Find Downstream Branches (outgoing precedes edges)
+  // Find Downstream Branches (outgoing leads_to or precedes edges)
   const downstreamBranches = useMemo(() => {
     if (node.type !== 'quest') return [];
     return edges
       .filter(
         (e) =>
           e.source_id === node.id &&
-          e.relation_type === 'precedes' &&
+          (e.relation_type === 'leads_to' || e.relation_type === 'precedes') &&
           nodeMap.get(e.target_id)?.type === 'quest'
       )
       .map((e) => ({
@@ -144,19 +145,19 @@ export const TimelineModal: React.FC<TimelineModalProps> = ({
       .filter((item) => !!item.node);
   }, [node.id, node.type, edges, nodeMap]);
 
-  // Available quests to link as prerequisite (excluding self, existing prereqs, and sub-quests)
+  // Available quests to link as prerequisite (excluding self, existing prereqs, archived quests, and sub-quests)
   const availablePrereqQuests = useMemo(() => {
     const existingPrereqIds = new Set(prerequisites.map((p) => p.node.id));
     return allNodes.filter(
-      (n) => n.type === 'quest' && n.id !== node.id && !existingPrereqIds.has(n.id)
+      (n) => n.type === 'quest' && n.data_json?.status !== 'archived' && n.id !== node.id && !existingPrereqIds.has(n.id)
     );
   }, [allNodes, node.id, prerequisites]);
 
-  // Available quests to link as branch target
+  // Available quests to link as branch target (excluding self, existing branches, and archived quests)
   const availableBranchQuests = useMemo(() => {
     const existingBranchIds = new Set(downstreamBranches.map((b) => b.node.id));
     return allNodes.filter(
-      (n) => n.type === 'quest' && n.id !== node.id && !existingBranchIds.has(n.id)
+      (n) => n.type === 'quest' && n.data_json?.status !== 'archived' && n.id !== node.id && !existingBranchIds.has(n.id)
     );
   }, [allNodes, node.id, downstreamBranches]);
 
@@ -191,7 +192,7 @@ export const TimelineModal: React.FC<TimelineModalProps> = ({
         campaign_id: campaignId,
         source_id: selectedPrereqId,
         target_id: node.id,
-        relation_type: 'precedes',
+        relation_type: 'leads_to',
         label: 'Prerequisite',
       });
       setSelectedPrereqId('');
@@ -208,7 +209,7 @@ export const TimelineModal: React.FC<TimelineModalProps> = ({
         campaign_id: campaignId,
         source_id: node.id,
         target_id: selectedBranchTargetId,
-        relation_type: 'precedes',
+        relation_type: 'leads_to',
         label: branchConditionLabel.trim() || 'Next Objective',
       });
       setSelectedBranchTargetId('');

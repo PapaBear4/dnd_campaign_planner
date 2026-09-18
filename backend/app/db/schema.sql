@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS edges (
     campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
     source_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
     target_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
-    relation_type TEXT NOT NULL, -- contains, precedes, located_at, allied_with, hostile_to, gives_quest, rewards, frequents, knows_secret, involved_in, member_of, parent_of
+    relation_type TEXT NOT NULL, -- contains, leads_to, precedes, recorded_in, located_at, allied_with, hostile_to, gives_quest, rewards, frequents, knows_secret, involved_in, member_of, parent_of, associated_with
     label TEXT DEFAULT '',
     metadata_json TEXT DEFAULT '{}',
     revealed_to_players INTEGER NOT NULL DEFAULT 0,

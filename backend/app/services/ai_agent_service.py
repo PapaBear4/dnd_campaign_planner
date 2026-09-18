@@ -391,19 +391,19 @@ AGENT_TOOLS = [
     },
     {
         "name": "update_node_status",
-        "description": "Set the status of a node (planned, active, completed, abandoned). Use this to mark quests, sessions, or encounters as done.",
+        "description": "Set the status of a node (planned, active, completed, abandoned, archived). Use this to mark quests, sessions, or encounters as done or archive unused adventure material.",
         "parameters": {
             "type": "object",
             "properties": {
                 "node_id": {"type": "string", "description": "ID of the node to update."},
-                "status": {"type": "string", "description": "New status value: planned, active, completed, or abandoned."},
+                "status": {"type": "string", "description": "New status value: planned, active, completed, abandoned, or archived."},
             },
             "required": ["node_id", "status"],
         },
     },
     {
         "name": "bulk_update_node_status",
-        "description": "Quickly set the status for multiple nodes at once (planned, active, completed, abandoned). Use this to align entire questlines or chapter encounters in a single tool call.",
+        "description": "Quickly set the status for multiple nodes at once (planned, active, completed, abandoned, archived). Use this to align or archive entire questlines or chapter encounters in a single tool call.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -413,7 +413,7 @@ AGENT_TOOLS = [
                         "type": "object",
                         "properties": {
                             "node_id": {"type": "string", "description": "ID of the node."},
-                            "status": {"type": "string", "description": "Status: planned, active, completed, or abandoned."},
+                            "status": {"type": "string", "description": "Status: planned, active, completed, abandoned, or archived."},
                         },
                         "required": ["node_id", "status"],
                     },

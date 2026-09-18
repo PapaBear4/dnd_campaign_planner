@@ -1,7 +1,7 @@
 import React from 'react';
 import { ChevronsDownUp, ChevronsUpDown, BookOpen, Plus } from 'lucide-react';
 import { NodeItem } from '../../types';
-import { COL_GAP } from './hooks/useTapestryDimensions';
+import { COL_GAP, LEFT_COL_WIDTH } from './hooks/useTapestryDimensions';
 
 interface TapestrySessionHeadersProps {
   matrixGridCols: string;
@@ -55,7 +55,24 @@ export const TapestrySessionHeaders: React.FC<TapestrySessionHeadersProps> = ({
         alignItems: 'stretch'
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 10px' }}>
+      <div
+        style={{
+          position: 'sticky',
+          left: 0,
+          zIndex: 25,
+          background: 'var(--bg-app)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '0 12px 0 20px',
+          boxSizing: 'border-box',
+          width: `${LEFT_COL_WIDTH}px`,
+          minWidth: `${LEFT_COL_WIDTH}px`,
+          maxWidth: `${LEFT_COL_WIDTH}px`,
+          borderRight: '1px solid rgba(255, 255, 255, 0.06)',
+          boxShadow: '4px 0 12px -2px rgba(0, 0, 0, 0.45)',
+        }}
+      >
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
           <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', fontWeight: 600 }}>
             {displayQuests.length} Story Lines
@@ -224,6 +241,29 @@ export const TapestrySessionHeaders: React.FC<TapestrySessionHeadersProps> = ({
 
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleSessionCollapse(sess.id);
+                  }}
+                  className="btn btn-ghost"
+                  style={{
+                    fontSize: '0.62rem',
+                    padding: '1px 5px',
+                    height: '20px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '2px',
+                    color: 'var(--text-muted)',
+                    border: '1px solid rgba(255,255,255,0.08)',
+                    borderRadius: '4px',
+                    background: 'rgba(0,0,0,0.15)'
+                  }}
+                  title="Fold session column"
+                >
+                  ◀
+                </button>
                 <span style={{ fontSize: '0.78rem', fontWeight: 800, color: isStaging ? '#60a5fa' : isCurrent ? 'var(--color-gold)' : 'var(--text-primary)' }}>
                   {isStaging ? '📥 Prep Staging' : isVirtual ? `Virtual Session ${sess.data_json?.session_number || idx}` : `Session ${sessNum}`}
                 </span>

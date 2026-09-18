@@ -602,6 +602,7 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
       style={{
         position: 'relative',
         width: `${panelWidth}px`,
+        minWidth: '280px',
         maxWidth: '85vw',
         height: '100%',
         flexShrink: 0,
@@ -1132,7 +1133,10 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
                   display: 'flex',
                   gap: '10px',
                   alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
-                  maxWidth: '90%',
+                  maxWidth: '94%',
+                  width: 'fit-content',
+                  minWidth: 0,
+                  boxSizing: 'border-box',
                 }}
               >
                 {m.role === 'assistant' && (
@@ -1161,6 +1165,11 @@ export const CoDMPanel: React.FC<CoDMPanelProps> = ({
                     fontSize: '0.84rem',
                     lineHeight: 1.6,
                     color: 'var(--text-primary)',
+                    minWidth: 0,
+                    flex: 1,
+                    overflowWrap: 'anywhere',
+                    wordBreak: 'break-word',
+                    boxSizing: 'border-box',
                   }}
                 >
                   <MarkdownView content={m.content} />

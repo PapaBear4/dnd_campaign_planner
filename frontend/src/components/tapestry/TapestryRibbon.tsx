@@ -34,7 +34,20 @@ export const TapestryRibbon: React.FC<TapestryRibbonProps> = ({
         position: 'relative'
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+      <div
+        style={{
+          position: 'sticky',
+          left: '20px',
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '16px',
+          width: 'fit-content',
+          maxWidth: 'calc(100vw - 380px)',
+          marginBottom: '4px',
+          zIndex: 5
+        }}
+      >
         <span style={{ fontSize: '0.72rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.8px', color: 'var(--text-muted)' }}>
           Narrative Flow Ribbon • Saga Threads &amp; Encounters:
         </span>

@@ -114,3 +114,10 @@ def init_db():
     from app.db.seed_data import seed_sample_campaign
     seed_sample_campaign()
 
+    # Automatically run safe narrative edge migrations
+    try:
+        from app.db.migrate_story_graph import run_migration
+        run_migration(DB_PATH)
+    except Exception as e:
+        print(f"Warning: Story graph migration failed: {e}")
+

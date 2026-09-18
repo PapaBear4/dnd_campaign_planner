@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import confetti from 'canvas-confetti';
 import {
   AlertCircle,
+  Archive,
   ArrowDown,
   ArrowUp,
   BookOpen,
@@ -20,6 +21,7 @@ import {
   MessageSquare,
   Mic,
   Plus,
+  RotateCcw,
   Shield,
   ShieldCheck,
   Sparkles,
@@ -28,6 +30,7 @@ import {
 } from 'lucide-react';
 import { createEdge, createNode, deleteNode, toggleNodeCanon, toggleNodeReveal, updateNode } from '../api';
 import { CampaignTapestry } from './CampaignTapestry';
+import { ContextMenu } from './ContextMenu';
 import { GraphData, HierarchyItem, NodeItem, NodeType } from '../types';
 
 interface HierarchyPlannerProps {
@@ -39,6 +42,8 @@ interface HierarchyPlannerProps {
   onFocusCoDM: (node: NodeItem) => void;
   onNavigateToIngestion?: () => void;
   onNavigateToTranscript?: (sessionNodeId?: string) => void;
+  showArchived?: boolean;
+  onToggleShowArchived?: () => void;
 }
 
 export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
@@ -50,6 +55,8 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
   onFocusCoDM,
   onNavigateToIngestion,
   onNavigateToTranscript,
+  showArchived = false,
+  onToggleShowArchived,
 }) => {
   const [viewMode, setViewMode] = useState<'tapestry' | 'tree'>('tapestry');
   const [expandedNodes, setExpandedNodes] = useState<Record<string, boolean>>({});
@@ -58,6 +65,24 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
   const [targetChildType, setTargetChildType] = useState<NodeType>('arc');
   const [newTitle, setNewTitle] = useState('');
   const [newSummary, setNewSummary] = useState('');
+  const [contextMenuState, setContextMenuState] = useState<{ x: number; y: number; node: NodeItem } | null>(null);
+
+  // Filter archived nodes when showArchived is false
+  const filteredHierarchy = React.useMemo(() => {
+    if (showArchived) return hierarchy;
+    const filterRecurse = (items: HierarchyItem[]): HierarchyItem[] => {
+      const res: HierarchyItem[] = [];
+      for (const it of items) {
+        if (it.node.data_json?.status === 'archived') continue;
+        res.push({
+          ...it,
+          children: it.children ? filterRecurse(it.children) : [],
+        });
+      }
+      return res;
+    };
+    return filterRecurse(hierarchy);
+  }, [hierarchy, showArchived]);
 
   const toggleExpand = (id: string) => {
     setExpandedNodes((prev) => ({
@@ -74,7 +99,7 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
         if (item.children && item.children.length > 0) recurse(item.children);
       }
     };
-    recurse(hierarchy);
+    recurse(filteredHierarchy);
     setExpandedNodes(allExpanded);
   };
 
@@ -86,7 +111,7 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
         if (item.children && item.children.length > 0) recurse(item.children);
       }
     };
-    recurse(hierarchy);
+    recurse(filteredHierarchy);
     setExpandedNodes(allCollapsed);
   };
 
@@ -287,26 +312,37 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
     else if (node.type === 'quest') nextChildType = 'session';
     else if (node.type === 'session') nextChildType = 'encounter';
 
+    const isArchived = status === 'archived';
+
     return (
       <div key={node.id} style={{ marginLeft: `${depth * 20}px`, marginTop: '8px' }}>
         <div
           onClick={() => onSelectNode(node)}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setContextMenuState({ x: e.clientX, y: e.clientY, node });
+          }}
           className="glass-panel"
           style={{
             padding: '12px 16px',
             borderRadius: '10px',
             cursor: 'pointer',
+            opacity: isArchived ? 0.65 : 1,
             border: `1px solid ${
-              status === 'completed'
+              isArchived
+                ? 'rgba(139, 92, 246, 0.4)'
+                : status === 'completed'
                 ? 'rgba(16, 185, 129, 0.4)'
-                : status === 'in_progress'
+                : status === 'in_progress' || status === 'active'
                 ? 'rgba(245, 158, 11, 0.5)'
                 : 'var(--border-subtle)'
             }`,
             background:
-              status === 'completed'
+              isArchived
+                ? 'rgba(139, 92, 246, 0.05)'
+                : status === 'completed'
                 ? 'rgba(16, 185, 129, 0.05)'
-                : status === 'in_progress'
+                : status === 'in_progress' || status === 'active'
                 ? 'rgba(245, 158, 11, 0.05)'
                 : 'var(--bg-card)',
             display: 'flex',
@@ -315,12 +351,14 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
             gap: '12px',
             transition: 'all 0.15s ease',
           }}
-          onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--color-gold)')}
+          onMouseEnter={(e) => (e.currentTarget.style.borderColor = isArchived ? '#a78bfa' : 'var(--color-gold)')}
           onMouseLeave={(e) =>
             (e.currentTarget.style.borderColor =
-              status === 'completed'
+              isArchived
+                ? 'rgba(139, 92, 246, 0.4)'
+                : status === 'completed'
                 ? 'rgba(16, 185, 129, 0.4)'
-                : status === 'in_progress'
+                : status === 'in_progress' || status === 'active'
                 ? 'rgba(245, 158, 11, 0.5)'
                 : 'var(--border-subtle)')
           }
@@ -357,6 +395,25 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
             )}
 
             <span className={`badge badge-${node.type}`}>{node.type}</span>
+
+            {isArchived && (
+              <span
+                style={{
+                  fontSize: '0.68rem',
+                  padding: '2px 8px',
+                  borderRadius: '12px',
+                  background: 'rgba(139, 92, 246, 0.2)',
+                  color: '#c4b5fd',
+                  border: '1px solid rgba(139, 92, 246, 0.4)',
+                  fontWeight: 700,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                }}
+              >
+                <Archive size={11} /> Archived 📦
+              </span>
+            )}
 
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -430,11 +487,11 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
                 Planned
               </button>
               <button
-                onClick={(e) => handleStatusChange(e, node, 'in_progress')}
-                title="Status: In Progress"
-                className={`status-pill ${status === 'in_progress' ? 'status-inprogress' : 'status-inactive'}`}
+                onClick={(e) => handleStatusChange(e, node, 'active')}
+                title="Status: Active / In Progress"
+                className={`status-pill ${status === 'active' || status === 'in_progress' ? 'status-inprogress' : 'status-inactive'}`}
               >
-                In Progress
+                Active
               </button>
               <button
                 onClick={(e) => handleStatusChange(e, node, 'completed')}
@@ -442,6 +499,14 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
                 className={`status-pill ${status === 'completed' ? 'status-completed' : 'status-inactive'}`}
               >
                 Completed
+              </button>
+              <button
+                onClick={(e) => handleStatusChange(e, node, 'archived')}
+                title="Status: Archived (Shelved in Vault)"
+                className={`status-pill ${status === 'archived' ? 'status-archived' : 'status-inactive'}`}
+                style={status === 'archived' ? { background: 'rgba(139, 92, 246, 0.25)', color: '#c4b5fd', border: '1px solid rgba(139, 92, 246, 0.5)' } : undefined}
+              >
+                Archived
               </button>
             </div>
 
@@ -564,7 +629,7 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
   if (viewMode === 'tapestry') {
     const activeGraphData = graphData || { nodes: [], edges: [] };
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, minWidth: 0, overflow: 'hidden', position: 'relative' }}>
         {/* Top-right view mode toggle */}
         <div style={{ position: 'absolute', top: '12px', right: '24px', zIndex: 10 }}>
           <div style={{ display: 'flex', gap: '4px', background: 'var(--bg-surface)', padding: '2px', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
@@ -595,6 +660,8 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
           onFocusCoDM={onFocusCoDM}
           onNavigateToIngestion={onNavigateToIngestion}
           onNavigateToTranscript={onNavigateToTranscript}
+          showArchived={showArchived}
+          onToggleShowArchived={onToggleShowArchived}
         />
       </div>
     );
@@ -693,7 +760,7 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
       </div>
 
       {/* Tree Content */}
-      {hierarchy.length === 0 ? (
+      {filteredHierarchy.length === 0 ? (
         <div
           className="glass-panel"
           style={{
@@ -713,7 +780,7 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
           </button>
         </div>
       ) : (
-        <div>{hierarchy.map((item, idx) => renderTreeItem(item, 0, hierarchy, idx))}</div>
+        <div>{filteredHierarchy.map((item, idx) => renderTreeItem(item, 0, filteredHierarchy, idx))}</div>
       )}
 
       {/* Add Modal */}
@@ -806,6 +873,44 @@ export const HierarchyPlanner: React.FC<HierarchyPlannerProps> = ({
             </form>
           </div>
         </div>
+      )}
+
+      {/* Right-click Context Menu */}
+      {contextMenuState && (
+        <ContextMenu
+          x={contextMenuState.x}
+          y={contextMenuState.y}
+          items={[
+            contextMenuState.node.data_json?.status === 'archived'
+              ? {
+                  label: 'Restore to Active',
+                  icon: <RotateCcw size={14} />,
+                  onClick: () => handleStatusChange({ stopPropagation: () => {} } as any, contextMenuState.node, 'active'),
+                }
+              : {
+                  label: 'Archive to Vault',
+                  icon: <Archive size={14} />,
+                  onClick: () => handleStatusChange({ stopPropagation: () => {} } as any, contextMenuState.node, 'archived'),
+                },
+            {
+              label: 'Focus in Co-DM Studio',
+              icon: <Sparkles size={14} />,
+              onClick: () => onFocusCoDM(contextMenuState.node),
+            },
+            {
+              label: 'Open Details',
+              icon: <BookOpen size={14} />,
+              onClick: () => onSelectNode(contextMenuState.node),
+            },
+            {
+              label: 'Delete Node',
+              icon: <Trash2 size={14} />,
+              danger: true,
+              onClick: () => handleDelete({ stopPropagation: () => {} } as any, contextMenuState.node.id),
+            },
+          ]}
+          onClose={() => setContextMenuState(null)}
+        />
       )}
     </div>
   );

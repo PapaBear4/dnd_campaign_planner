@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Query
 from typing import List, Optional
+from pydantic import BaseModel
 from app.models import NodeCreate, NodeResponse, NodeUpdate
 from app.services import graph_service
 
@@ -60,4 +61,45 @@ def toggle_canon(node_id: str, is_canon: Optional[bool] = None):
     new_state = (not node.is_canon) if is_canon is None else is_canon
     updated = graph_service.update_node(node_id, NodeUpdate(is_canon=new_state))
     return updated
+
+
+class BulkStatusItem(BaseModel):
+    node_id: str
+    status: str
+
+
+class BulkStatusRequest(BaseModel):
+    updates: Optional[List[BulkStatusItem]] = None
+    node_ids: Optional[List[str]] = None
+    status: Optional[str] = None
+
+
+@router.post("/bulk-status")
+def bulk_update_status(req: BulkStatusRequest):
+    updates: List[dict] = []
+    if req.updates:
+        updates = [{"node_id": u.node_id, "status": u.status} for u in req.updates]
+    elif req.node_ids and req.status:
+        updates = [{"node_id": nid, "status": req.status} for nid in req.node_ids]
+    else:
+        raise HTTPException(status_code=400, detail="Must provide updates list or node_ids with status")
+    
+    return graph_service.bulk_update_node_status(updates)
+
+
+@router.post("/{node_id}/archive", response_model=NodeResponse)
+def archive_node(node_id: str):
+    res = graph_service.update_node_status(node_id, "archived")
+    if not res:
+        raise HTTPException(status_code=404, detail="Node not found")
+    return res
+
+
+@router.post("/{node_id}/restore", response_model=NodeResponse)
+def restore_node(node_id: str, target_status: str = Query("active")):
+    status = target_status if target_status in ("planned", "active", "in_progress") else "active"
+    res = graph_service.update_node_status(node_id, status)
+    if not res:
+        raise HTTPException(status_code=404, detail="Node not found")
+    return res
 

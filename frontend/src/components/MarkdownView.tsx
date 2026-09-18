@@ -94,6 +94,9 @@ function renderInline(text: string): React.ReactNode {
               fontSize: '0.88em',
               color: 'var(--color-gold, #f59e0b)',
               border: '1px solid rgba(255, 255, 255, 0.1)',
+              wordBreak: 'break-word',
+              overflowWrap: 'anywhere',
+              whiteSpace: 'pre-wrap',
             }}
           >
             {token.value}
@@ -294,6 +297,9 @@ export const MarkdownView: React.FC<MarkdownViewProps> = ({ content, className, 
         lineHeight: 1.6,
         color: 'var(--text-primary)',
         fontSize: '0.86rem',
+        overflowWrap: 'anywhere',
+        wordBreak: 'break-word',
+        minWidth: 0,
         ...style,
       }}
     >
@@ -301,12 +307,12 @@ export const MarkdownView: React.FC<MarkdownViewProps> = ({ content, className, 
         switch (b.type) {
           case 'heading': {
             const headingStyles: Record<number, React.CSSProperties> = {
-              1: { fontSize: '1.25rem', fontWeight: 700, color: 'var(--color-gold, #f59e0b)', margin: '14px 0 6px 0', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '4px' },
-              2: { fontSize: '1.12rem', fontWeight: 700, color: 'var(--color-gold, #f59e0b)', margin: '12px 0 5px 0' },
-              3: { fontSize: '1.02rem', fontWeight: 700, color: 'var(--text-gold, #fbbf24)', margin: '10px 0 4px 0' },
-              4: { fontSize: '0.94rem', fontWeight: 600, color: 'var(--text-primary)', margin: '8px 0 3px 0' },
-              5: { fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-primary)', margin: '6px 0 2px 0' },
-              6: { fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-secondary)', margin: '6px 0 2px 0' },
+              1: { fontSize: '1.25rem', fontWeight: 700, color: 'var(--color-gold, #f59e0b)', margin: '14px 0 6px 0', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '4px', overflowWrap: 'anywhere', wordBreak: 'break-word' },
+              2: { fontSize: '1.12rem', fontWeight: 700, color: 'var(--color-gold, #f59e0b)', margin: '12px 0 5px 0', overflowWrap: 'anywhere', wordBreak: 'break-word' },
+              3: { fontSize: '1.02rem', fontWeight: 700, color: 'var(--text-gold, #fbbf24)', margin: '10px 0 4px 0', overflowWrap: 'anywhere', wordBreak: 'break-word' },
+              4: { fontSize: '0.94rem', fontWeight: 600, color: 'var(--text-primary)', margin: '8px 0 3px 0', overflowWrap: 'anywhere', wordBreak: 'break-word' },
+              5: { fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-primary)', margin: '6px 0 2px 0', overflowWrap: 'anywhere', wordBreak: 'break-word' },
+              6: { fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-secondary)', margin: '6px 0 2px 0', overflowWrap: 'anywhere', wordBreak: 'break-word' },
             };
             const headingContent = renderInline(b.text);
             const hStyle = headingStyles[b.level] || headingStyles[3];
@@ -391,13 +397,60 @@ export const MarkdownView: React.FC<MarkdownViewProps> = ({ content, className, 
                   display: 'flex',
                   flexDirection: 'column',
                   gap: '4px',
+                  minWidth: 0,
                 }}
               >
-                {b.items.map((item, itemIdx) => (
-                  <li key={itemIdx} style={{ lineHeight: 1.55 }}>
-                    {renderInline(item)}
-                  </li>
-                ))}
+                {b.items.map((item, itemIdx) => {
+                  const taskMatch = item.match(/^\[([ xX])\]\s*(.*)$/);
+                  if (taskMatch) {
+                    const isChecked = taskMatch[1].toLowerCase() === 'x';
+                    const taskText = taskMatch[2];
+                    return (
+                      <li
+                        key={itemIdx}
+                        style={{
+                          listStyleType: 'none',
+                          marginLeft: '-18px',
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          gap: '8px',
+                          lineHeight: 1.55,
+                          minWidth: 0,
+                          overflowWrap: 'anywhere',
+                          wordBreak: 'break-word',
+                        }}
+                      >
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            width: '18px',
+                            height: '18px',
+                            marginTop: '2px',
+                            flexShrink: 0,
+                            borderRadius: '4px',
+                            border: isChecked ? '1px solid #10b981' : '1px solid var(--border-medium, rgba(255,255,255,0.25))',
+                            background: isChecked ? 'rgba(16, 185, 129, 0.2)' : 'rgba(255,255,255,0.04)',
+                            color: isChecked ? '#10b981' : 'transparent',
+                            fontSize: '0.75rem',
+                            fontWeight: 800,
+                          }}
+                        >
+                          {isChecked ? '✓' : ''}
+                        </span>
+                        <span style={{ textDecoration: isChecked ? 'line-through' : 'none', opacity: isChecked ? 0.75 : 1 }}>
+                          {renderInline(taskText)}
+                        </span>
+                      </li>
+                    );
+                  }
+                  return (
+                    <li key={itemIdx} style={{ lineHeight: 1.55, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
+                      {renderInline(item)}
+                    </li>
+                  );
+                })}
               </ul>
             );
 
@@ -411,10 +464,11 @@ export const MarkdownView: React.FC<MarkdownViewProps> = ({ content, className, 
                   display: 'flex',
                   flexDirection: 'column',
                   gap: '4px',
+                  minWidth: 0,
                 }}
               >
                 {b.items.map((item, itemIdx) => (
-                  <li key={itemIdx} style={{ lineHeight: 1.55 }}>
+                  <li key={itemIdx} style={{ lineHeight: 1.55, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
                     {renderInline(item)}
                   </li>
                 ))}
@@ -479,6 +533,8 @@ export const MarkdownView: React.FC<MarkdownViewProps> = ({ content, className, 
                 style={{
                   margin: '0 0 8px 0',
                   lineHeight: 1.6,
+                  overflowWrap: 'anywhere',
+                  wordBreak: 'break-word',
                 }}
               >
                 {renderInline(b.text)}

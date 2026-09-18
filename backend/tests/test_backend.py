@@ -509,3 +509,95 @@ def test_mutable_node_type_preserves_edges_and_id(client):
     assert rechecked_node.type == "clue"
     assert rechecked_node.id == node1.id
     assert rechecked_node.title == "Sunsword of Ravenloft"
+
+
+def test_archived_status_and_story_edge_standardization(client):
+    campaign = graph_service.create_campaign(
+        CampaignCreate(name="Archived & Edge Standardization Test", setting="Sword Coast")
+    )
+    cid = campaign.id
+
+    # 1. Create quest and encounter nodes
+    q1 = graph_service.create_node(
+        NodeCreate(
+            campaign_id=cid,
+            type="quest",
+            title="Faction: Harpers Mission",
+            data_json={"status": "planned", "faction": "Harpers"}
+        ),
+        default_campaign_id=cid
+    )
+    q2 = graph_service.create_node(
+        NodeCreate(
+            campaign_id=cid,
+            type="quest",
+            title="Sub-Quest: Infiltrate Warehouse",
+            data_json={"status": "planned"}
+        ),
+        default_campaign_id=cid
+    )
+    enc = graph_service.create_node(
+        NodeCreate(
+            campaign_id=cid,
+            type="encounter",
+            title="Encounter: Kenku Ambush",
+            data_json={"status": "planned"}
+        ),
+        default_campaign_id=cid
+    )
+
+    # 2. Wire canonical edges: contains and leads_to
+    e1 = graph_service.create_edge(
+        EdgeCreate(
+            campaign_id=cid,
+            source_id=q1.id,
+            target_id=q2.id,
+            relation_type="contains"
+        ),
+        default_campaign_id=cid
+    )
+    assert e1.relation_type == "contains"
+
+    e2 = graph_service.create_edge(
+        EdgeCreate(
+            campaign_id=cid,
+            source_id=q2.id,
+            target_id=enc.id,
+            relation_type="contains"
+        ),
+        default_campaign_id=cid
+    )
+    assert e2.relation_type == "contains"
+
+    e3 = graph_service.create_edge(
+        EdgeCreate(
+            campaign_id=cid,
+            source_id=q1.id,
+            target_id=q2.id,
+            relation_type="leads_to"
+        ),
+        default_campaign_id=cid
+    )
+    assert e3.relation_type == "leads_to"
+
+    # 3. Test single archive action
+    res_archive = client.post(f"/api/nodes/{q1.id}/archive")
+    assert res_archive.status_code == 200
+    assert res_archive.json()["data_json"]["status"] == "archived"
+
+    # 4. Test single restore action
+    res_restore = client.post(f"/api/nodes/{q1.id}/restore?target_status=active")
+    assert res_restore.status_code == 200
+    assert res_restore.json()["data_json"]["status"] == "active"
+
+    # 5. Test bulk status update (e.g. bulk archive)
+    res_bulk = client.post("/api/nodes/bulk-status", json={
+        "node_ids": [q1.id, q2.id, enc.id],
+        "status": "archived"
+    })
+    assert res_bulk.status_code == 200
+    assert res_bulk.json()["updated_count"] == 3
+
+    # Check updated status on node
+    check_q2 = graph_service.get_node(q2.id)
+    assert check_q2.data_json["status"] == "archived"

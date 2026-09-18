@@ -21,6 +21,7 @@ NodeType = Literal[
 RelationType = Literal[
     "contains",
     "precedes",
+    "leads_to",
     "located_at",
     "allied_with",
     "hostile_to",
@@ -37,6 +38,15 @@ RelationType = Literal[
     "created_by",
     "recorded_in",
     "custom",
+]
+
+NodeStatus = Literal[
+    "planned",
+    "active",
+    "completed",
+    "abandoned",
+    "archived",
+    "in_progress",
 ]
 
 # --- Campaign Models ---

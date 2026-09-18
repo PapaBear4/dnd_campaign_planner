@@ -24,6 +24,7 @@ import { NodeDrawer } from './components/NodeDrawer';
 import { PlayerPortal } from './components/PlayerPortal';
 import { SettingsModal } from './components/SettingsModal';
 import { FeedbackModal } from './components/FeedbackModal';
+import { BulkArchiveModal } from './components/BulkArchiveModal';
 import { StatBlockLab } from './components/StatBlockLab';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Campaign, GraphData, HierarchyItem, NodeItem } from './types';
@@ -42,6 +43,12 @@ export function App() {
     if (saved !== null) return saved === 'true';
     return window.location.pathname.includes('/player');
   });
+
+  // Show Archived compendium toggle (defaults to false for clean Active Campaign Deck)
+  const [showArchived, setShowArchived] = useState<boolean>(() => {
+    return localStorage.getItem('dnd_show_archived') === 'true';
+  });
+  const [isBulkArchiveOpen, setIsBulkArchiveOpen] = useState(false);
 
   // DM Workspace Tabs: hierarchy | graph | nodes | ingestion | statblock | map
   const [activeTab, setActiveTab] = useState<DMTab>(() => {
@@ -67,6 +74,10 @@ export function App() {
     localStorage.setItem('dnd_active_tab', activeTab);
   }, [activeTab]);
 
+  useEffect(() => {
+    localStorage.setItem('dnd_show_archived', String(showArchived));
+  }, [showArchived]);
+
   // Co-DM Studio width (docked split-pane)
   const [coDmWidth, setCoDmWidth] = useState<number>(440);
 
@@ -74,6 +85,10 @@ export function App() {
   const [graphData, setGraphData] = useState<GraphData>({ nodes: [], edges: [] });
   const [hierarchy, setHierarchy] = useState<HierarchyItem[]>([]);
   const [loading, setLoading] = useState(true);
+
+  const archivedCount = React.useMemo(() => {
+    return graphData.nodes.filter((n) => n.data_json?.status === 'archived').length;
+  }, [graphData.nodes]);
 
   // Modals & Drawers
   const [isAgentOpen, setIsAgentOpen] = useState(false);
@@ -174,18 +189,32 @@ export function App() {
         onToggleAgent={() => setIsAgentOpen(!isAgentOpen)}
         isAgentOpen={isAgentOpen}
         onSelectNode={(n) => setSelectedNode(n)}
+        showArchived={showArchived}
+        onToggleShowArchived={() => setShowArchived((prev) => !prev)}
+        archivedCount={archivedCount}
+        onOpenBulkArchive={() => setIsBulkArchiveOpen(true)}
       />
 
       {/* Master Split-Pane: Main Workspace + Resizable Docked Co-DM Studio */}
       <div style={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden', height: 'calc(100vh - 64px)' }}>
         {/* Main Content Area */}
-        <main style={{ flex: 1, height: '100%', minHeight: 0, overflowY: 'auto', minWidth: 0, position: 'relative' }}>
+        <main
+          style={{
+            flex: 1,
+            height: '100%',
+            minHeight: 0,
+            overflowX: 'hidden',
+            overflowY: activeTab === 'hierarchy' ? 'hidden' : 'auto',
+            minWidth: 0,
+            position: 'relative',
+          }}
+        >
           {isPlayerMode ? (
             /* Player Portal View */
             <PlayerPortal campaignId={activeCampaignId} />
           ) : (
             /* DM Master Suite */
-            <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: '100%' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: '100%', minWidth: 0, overflow: 'hidden' }}>
               {/* DM Secondary Tab Bar */}
               <div
                 style={{
@@ -287,7 +316,7 @@ export function App() {
               </div>
 
               {/* Active Workspace View */}
-              <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+              <div style={{ flex: 1, minHeight: 0, minWidth: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
                 <ErrorBoundary fallbackTitle="Workspace Tab Encountered an Issue">
                   {activeTab === 'hierarchy' && (
                     <HierarchyPlanner
@@ -299,6 +328,8 @@ export function App() {
                       onFocusCoDM={handleFocusCoDM}
                       onNavigateToIngestion={handleOpenBookDecomposition}
                       onNavigateToTranscript={handleOpenTranscriptIngestion}
+                      showArchived={showArchived}
+                      onToggleShowArchived={() => setShowArchived((prev) => !prev)}
                     />
                   )}
 
@@ -400,6 +431,16 @@ export function App() {
         campaignId={activeCampaignId}
         campaignName={campaigns.find((c) => c.id === activeCampaignId)?.name}
         activeTab={activeTab}
+      />
+
+      {/* Bulk Archive Faction Missions Modal */}
+      <BulkArchiveModal
+        isOpen={isBulkArchiveOpen}
+        onClose={() => setIsBulkArchiveOpen(false)}
+        nodes={graphData.nodes}
+        edges={graphData.edges}
+        campaignId={activeCampaignId}
+        onRefresh={() => loadData()}
       />
     </div>
   );

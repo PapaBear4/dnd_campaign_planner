@@ -787,5 +787,28 @@ export async function uploadFeedbackScreenshot(file: File): Promise<{ url: strin
   return handleResponse<{ url: string; filename: string }>(res);
 }
 
+export async function archiveNode(nodeId: string): Promise<NodeItem> {
+  const res = await fetch(`${BASE_URL}/api/nodes/${nodeId}/archive`, {
+    method: 'POST',
+  });
+  return handleResponse<NodeItem>(res);
+}
 
+export async function restoreNode(nodeId: string, targetStatus: string = 'active'): Promise<NodeItem> {
+  const res = await fetch(`${BASE_URL}/api/nodes/${nodeId}/restore?target_status=${encodeURIComponent(targetStatus)}`, {
+    method: 'POST',
+  });
+  return handleResponse<NodeItem>(res);
+}
 
+export async function bulkUpdateNodeStatus(
+  nodeIds: string[],
+  status: string
+): Promise<{ updated_count: number; results: any[]; errors: string[] }> {
+  const res = await fetch(`${BASE_URL}/api/nodes/bulk-status`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ node_ids: nodeIds, status }),
+  });
+  return handleResponse<{ updated_count: number; results: any[]; errors: string[] }>(res);
+}

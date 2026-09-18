@@ -32,6 +32,7 @@ interface QuestFlowchartProps {
   graphData: GraphData;
   onSelectNode: (node: NodeItem) => void;
   onRefresh: () => void;
+  showArchived?: boolean;
 }
 
 interface BranchInfo {
@@ -46,6 +47,7 @@ export const QuestFlowchart: React.FC<QuestFlowchartProps> = ({
   graphData,
   onSelectNode,
   onRefresh,
+  showArchived = false,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [zoom, setZoom] = useState<number>(1);
@@ -62,6 +64,20 @@ export const QuestFlowchart: React.FC<QuestFlowchartProps> = ({
   const [addingSubQuestToId, setAddingSubQuestToId] = useState<string | null>(null);
   const [newSubQuestTitle, setNewSubQuestTitle] = useState<string>('');
 
+  // Track collapsed sub-quests in flowchart (parentQuestId -> collapsed)
+  const [collapsedSubQuests, setCollapsedSubQuests] = useState<Set<string>>(new Set());
+
+  // Toggle collapsing sub-quests under a parent on flowchart
+  const toggleSubQuestCollapse = (parentId: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setCollapsedSubQuests((prev) => {
+      const next = new Set(prev);
+      if (next.has(parentId)) next.delete(parentId);
+      else next.add(parentId);
+      return next;
+    });
+  };
+
   // Quick Branch Dialog state
   const [branchingSourceQuest, setBranchingSourceQuest] = useState<NodeItem | null>(null);
   const [newBranchTitle, setNewBranchTitle] = useState<string>('');
@@ -77,7 +93,9 @@ export const QuestFlowchart: React.FC<QuestFlowchartProps> = ({
       graphData.nodes.forEach((n) => nodeMap.set(n.id, n));
 
       const arcList = graphData.nodes.filter((n) => n.type === 'arc');
-      const questList = graphData.nodes.filter((n) => n.type === 'quest');
+      const questList = graphData.nodes.filter(
+        (n) => n.type === 'quest' && (showArchived || n.data_json?.status !== 'archived')
+      );
 
       const parentMap = new Map<string, string>(); // childQuestId -> parentQuestId
       const childMap = new Map<string, string[]>(); // parentQuestId -> childQuestIds[]
@@ -107,7 +125,7 @@ export const QuestFlowchart: React.FC<QuestFlowchartProps> = ({
               children.push(target.id);
               childMap.set(source.id, children);
             }
-          } else if (edge.relation_type === 'precedes') {
+          } else if (edge.relation_type === 'precedes' || edge.relation_type === 'leads_to') {
             const bInfo: BranchInfo = {
               edgeId: edge.id,
               sourceId: source.id,
@@ -134,7 +152,7 @@ export const QuestFlowchart: React.FC<QuestFlowchartProps> = ({
         precedesInMap: precIn,
         precedesOutMap: precOut,
       };
-    }, [graphData.nodes, graphData.edges]);
+    }, [graphData.nodes, graphData.edges, showArchived]);
 
   // 2. Filter Quests by Arc & Search
   const filteredQuests = useMemo(() => {
@@ -218,7 +236,8 @@ export const QuestFlowchart: React.FC<QuestFlowchartProps> = ({
       const x = colIdx * (colWidth + colGap) + 40;
       colQuests.forEach((q) => {
         const childCount = (childQuestsMap.get(q.id) || []).length;
-        const estHeight = 190 + childCount * 32;
+        const isFolded = collapsedSubQuests.has(q.id);
+        const estHeight = childCount === 0 ? 190 : (isFolded ? 190 : 190 + childCount * 32);
         qCoords.set(q.id, { x, y: currentY, width: colWidth, height: estHeight });
         qCol.set(q.id, colIdx);
         currentY += estHeight + rowGap;
@@ -231,7 +250,7 @@ export const QuestFlowchart: React.FC<QuestFlowchartProps> = ({
       questCoords: qCoords,
       stageColumns: stageList.length,
     };
-  }, [filteredQuests, parentQuestMap, precedesInMap, childQuestsMap]);
+  }, [filteredQuests, parentQuestMap, precedesInMap, childQuestsMap, collapsedSubQuests]);
 
   // 4. Connectors (precedes edges between root quests)
   const connectors = useMemo(() => {
@@ -345,12 +364,12 @@ export const QuestFlowchart: React.FC<QuestFlowchartProps> = ({
         },
       });
 
-      // 2. Link sourceQuest -> precedes -> newQuest
+      // 2. Link sourceQuest -> leads_to -> newQuest
       await createEdge({
         campaign_id: campaignId,
         source_id: branchingSourceQuest.id,
         target_id: newQuest.id,
-        relation_type: 'precedes',
+        relation_type: 'leads_to',
         label: newBranchCondition.trim() || 'Next Objective',
       });
 
@@ -712,7 +731,7 @@ export const QuestFlowchart: React.FC<QuestFlowchartProps> = ({
               const childIds = childQuestsMap.get(quest.id) || [];
               const childNodes = childIds
                 .map((cid) => graphData.nodes.find((n) => n.id === cid))
-                .filter((n): n is NodeItem => !!n);
+                .filter((n): n is NodeItem => !!n && (showArchived || n.data_json?.status !== 'archived'));
 
               const completedChildCount = childNodes.filter(
                 (c) => c.data_json?.status === 'completed'
@@ -733,7 +752,7 @@ export const QuestFlowchart: React.FC<QuestFlowchartProps> = ({
                 borderGlow = isHovered ? '#10b981' : 'rgba(16, 185, 129, 0.4)';
                 statusPillBg = 'rgba(16, 185, 129, 0.15)';
                 statusPillColor = '#34d399';
-              } else if (status === 'in_progress') {
+              } else if (status === 'in_progress' || status === 'active') {
                 borderGlow = isHovered ? '#f59e0b' : 'rgba(245, 158, 11, 0.5)';
                 statusPillBg = 'rgba(245, 158, 11, 0.15)';
                 statusPillColor = '#fbbf24';
@@ -741,6 +760,10 @@ export const QuestFlowchart: React.FC<QuestFlowchartProps> = ({
                 borderGlow = 'rgba(239, 68, 68, 0.3)';
                 statusPillBg = 'rgba(239, 68, 68, 0.12)';
                 statusPillColor = '#f87171';
+              } else if (status === 'archived') {
+                borderGlow = 'rgba(148, 163, 184, 0.3)';
+                statusPillBg = 'rgba(100, 116, 139, 0.2)';
+                statusPillColor = '#94a3b8';
               } else if (isHovered) {
                 borderGlow = '#3b82f6';
               }
@@ -770,7 +793,7 @@ export const QuestFlowchart: React.FC<QuestFlowchartProps> = ({
                     flexDirection: 'column',
                     gap: '12px',
                     transition: 'border-color 0.15s, box-shadow 0.15s',
-                    opacity: status === 'abandoned' ? 0.6 : 1,
+                    opacity: (status === 'abandoned' || status === 'archived') ? 0.6 : 1,
                   }}
                 >
                   {/* Card Header: Type Badge & Status Pill */}
@@ -801,7 +824,7 @@ export const QuestFlowchart: React.FC<QuestFlowchartProps> = ({
                         textTransform: 'capitalize',
                       }}
                     >
-                      {status.replace('_', ' ')}
+                      {status === 'archived' ? '📦 Archived' : status.replace('_', ' ')}
                     </span>
                   </div>
 
@@ -859,7 +882,7 @@ export const QuestFlowchart: React.FC<QuestFlowchartProps> = ({
                   {childNodes.length > 0 && (
                     <div
                       style={{
-                        padding: '10px',
+                        padding: '8px 10px',
                         borderRadius: '8px',
                         background: 'rgba(255, 255, 255, 0.03)',
                         border: '1px solid var(--border-subtle)',
@@ -868,14 +891,38 @@ export const QuestFlowchart: React.FC<QuestFlowchartProps> = ({
                         gap: '6px',
                       }}
                     >
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.7rem' }}>
-                        <span style={{ fontWeight: 700, color: 'var(--text-secondary)' }}>
-                          Objectives ({completedChildCount}/{childNodes.length})
-                        </span>
-                        <span style={{ color: completedChildCount === childNodes.length ? '#10b981' : 'var(--text-muted)' }}>
-                          {Math.round(progressPct)}%
-                        </span>
+                      <div
+                        onClick={(e) => toggleSubQuestCollapse(quest.id, e)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          fontSize: '0.7rem',
+                          cursor: 'pointer',
+                          userSelect: 'none',
+                        }}
+                        title={collapsedSubQuests.has(quest.id) ? "Click to expand sub-quests" : "Click to fold sub-quests"}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          {collapsedSubQuests.has(quest.id) ? (
+                            <ChevronRight size={13} style={{ color: 'var(--text-muted)' }} />
+                          ) : (
+                            <ChevronDown size={13} style={{ color: 'var(--text-muted)' }} />
+                          )}
+                          <span style={{ fontWeight: 700, color: 'var(--text-secondary)' }}>
+                            Objectives ({completedChildCount}/{childNodes.length})
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <span style={{ color: completedChildCount === childNodes.length ? '#10b981' : 'var(--text-muted)' }}>
+                            {Math.round(progressPct)}%
+                          </span>
+                          <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
+                            {collapsedSubQuests.has(quest.id) ? 'Folded' : ''}
+                          </span>
+                        </div>
                       </div>
+
                       {/* Mini Progress Bar */}
                       <div
                         style={{
@@ -896,39 +943,68 @@ export const QuestFlowchart: React.FC<QuestFlowchartProps> = ({
                         />
                       </div>
 
-                      {/* Objectives List */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px' }}>
-                        {childNodes.map((child) => {
-                          const isDone = child.data_json?.status === 'completed';
-                          return (
-                            <div
-                              key={child.id}
-                              onClick={(e) => handleToggleSubQuestStatus(child, e)}
-                              style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '6px',
-                                fontSize: '0.74rem',
-                                color: isDone ? 'var(--text-muted)' : 'var(--text-primary)',
-                                textDecoration: isDone ? 'line-through' : 'none',
-                                cursor: 'pointer',
-                                padding: '2px 4px',
-                                borderRadius: '4px',
-                              }}
-                              title="Click to toggle objective completion"
-                            >
-                              {isDone ? (
-                                <CheckCircle2 size={13} style={{ color: '#10b981', flexShrink: 0 }} />
-                              ) : (
-                                <Circle size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
-                              )}
-                              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                {child.title}
-                              </span>
-                            </div>
-                          );
-                        })}
-                      </div>
+                      {/* Objectives List (hidden when folded) */}
+                      {!collapsedSubQuests.has(quest.id) && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '2px' }}>
+                          {childNodes.map((child) => {
+                            const isDone = child.data_json?.status === 'completed';
+                            return (
+                              <div
+                                key={child.id}
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '6px',
+                                  fontSize: '0.74rem',
+                                  padding: '2px 4px',
+                                  borderRadius: '4px',
+                                  background: 'rgba(255, 255, 255, 0.015)',
+                                }}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={(e) => handleToggleSubQuestStatus(child, e)}
+                                  style={{
+                                    background: 'none',
+                                    border: 'none',
+                                    padding: 0,
+                                    margin: 0,
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                  }}
+                                  title={isDone ? "Mark as in-progress" : "Mark as completed"}
+                                >
+                                  {isDone ? (
+                                    <CheckCircle2 size={13} style={{ color: '#10b981', flexShrink: 0 }} />
+                                  ) : (
+                                    <Circle size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+                                  )}
+                                </button>
+                                <span
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onSelectNode(child);
+                                  }}
+                                  style={{
+                                    flex: 1,
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    whiteSpace: 'nowrap',
+                                    cursor: 'pointer',
+                                    color: isDone ? 'var(--text-muted)' : 'var(--text-primary)',
+                                    textDecoration: isDone ? 'line-through' : 'none',
+                                  }}
+                                  className="hover:underline"
+                                  title={`Open "${child.title}" quest node details`}
+                                >
+                                  {child.title}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   )}
 

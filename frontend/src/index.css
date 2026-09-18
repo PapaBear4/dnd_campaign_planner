@@ -763,14 +763,13 @@ input::placeholder, textarea::placeholder {
   flex-direction: row;
   align-items: center;
   gap: 14px;
-  overflow-x: auto;
+  overflow-x: visible;
   padding: 8px 12px;
   border-radius: var(--radius-md);
   background: rgba(15, 20, 32, 0.3);
   border: 1px solid rgba(255, 255, 255, 0.04);
   min-height: 96px;
   position: relative;
-  scrollbar-width: thin;
 }
 
 .tapestry-encounter-card {
@@ -787,7 +786,7 @@ input::placeholder, textarea::placeholder {
   flex-direction: column;
   gap: 5px;
   position: relative;
-  z-index: 2;
+  z-index: 6;
   cursor: grab;
   box-shadow: var(--shadow-sm);
   transition: all 0.15s ease;
@@ -868,8 +867,37 @@ input::placeholder, textarea::placeholder {
   width: 100%;
   height: 100%;
   pointer-events: none;
-  z-index: 5;
+  z-index: 3;
   overflow: visible;
+}
+
+.tapestry-unlinked-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.tapestry-unlinked-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 200px));
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.tapestry-sequenced-pipeline {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 14px;
+  flex-shrink: 0;
+}
+
+.tapestry-stack-divider {
+  width: 1px;
+  align-self: stretch;
+  background: rgba(255, 255, 255, 0.08);
+  margin: 0 4px;
 }
 
 .matrix-curve {

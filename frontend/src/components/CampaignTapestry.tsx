@@ -44,12 +44,15 @@ import {
   updateNode,
   deleteNode,
   toggleNodeCanon,
-  toggleNodeReveal
+  toggleNodeReveal,
+  archiveNode,
+  restoreNode,
 } from '../api';
 import { GraphData, NodeItem, NodeType } from '../types';
 import { MarkdownView } from './MarkdownView';
 import { QuestFlowchart } from './QuestFlowchart';
 import { RunSheetModal } from './RunSheetModal';
+import { ContextMenu, ContextMenuItem } from './ContextMenu';
 import { TapestryEncounterModal } from './tapestry/modals/TapestryEncounterModal';
 import { TapestryQuestModal } from './tapestry/modals/TapestryQuestModal';
 import { TapestrySessionModal } from './tapestry/modals/TapestrySessionModal';
@@ -73,6 +76,8 @@ interface CampaignTapestryProps {
   onFocusCoDM: (node: NodeItem) => void;
   onNavigateToIngestion?: () => void;
   onNavigateToTranscript?: (sessionNodeId?: string) => void;
+  showArchived?: boolean;
+  onToggleShowArchived?: () => void;
 }
 
 export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
@@ -83,6 +88,8 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
   onFocusCoDM,
   onNavigateToIngestion,
   onNavigateToTranscript,
+  showArchived = false,
+  onToggleShowArchived,
 }) => {
   // Tapestry View Mode: 'matrix' (Sessions x Quests) or 'flowchart' (Story Flow & Branches DAG)
   const [tapestryViewMode, setTapestryViewMode] = useState<'matrix' | 'flowchart'>('matrix');
@@ -323,7 +330,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
   const [isSavingPrecedence, setIsSavingPrecedence] = useState(false);
 
   const toggleSessionCollapse = (sessionId: string) => {
-    setCollapsedSessionIds((prev) => {
+    setCollapsedSessionIds(prev => {
       const next = new Set(prev);
       if (next.has(sessionId)) {
         next.delete(sessionId);
@@ -333,7 +340,26 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
       try {
         localStorage.setItem(`dnd_tapestry_collapsed_sessions_${campaignId}`, JSON.stringify(Array.from(next)));
       } catch (e) {
-        console.error(e);
+        console.error('Failed to save collapsed sessions:', e);
+      }
+      return next;
+    });
+  };
+
+  const toggleArcCollapse = (sessionIds: string[], forceCollapse?: boolean) => {
+    setCollapsedSessionIds(prev => {
+      const next = new Set(prev);
+      const shouldCollapse = forceCollapse !== undefined
+        ? forceCollapse
+        : !sessionIds.every(id => next.has(id));
+      sessionIds.forEach(id => {
+        if (shouldCollapse) next.add(id);
+        else next.delete(id);
+      });
+      try {
+        localStorage.setItem(`dnd_tapestry_collapsed_sessions_${campaignId}`, JSON.stringify(Array.from(next)));
+      } catch (e) {
+        console.error('Failed to save collapsed sessions:', e);
       }
       return next;
     });
@@ -358,6 +384,9 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
     }
   };
 
+  // Context menu state for right-clicking quests and encounters
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; node: NodeItem } | null>(null);
+
   // 1. Graph Data, Filtered Nodes, and Relations from custom hook
   const {
     arcs,
@@ -376,7 +405,79 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
     unassignedSessionEncounters,
     unassignedQuestEncounters,
     encounterPrecedenceEdges,
-  } = useTapestryGraph(graphData);
+  } = useTapestryGraph(graphData, showArchived);
+
+  // Context menu action items
+  const contextMenuItems = useMemo((): ContextMenuItem[] => {
+    if (!contextMenu) return [];
+    const { node } = contextMenu;
+    const isArchived = node.data_json?.status === 'archived';
+    const isQuest = node.type === 'quest';
+    const isEncounter = node.type === 'encounter';
+
+    const items: ContextMenuItem[] = [
+      {
+        label: `Open ${isQuest ? 'Quest' : isEncounter ? 'Encounter' : 'Node'} Details`,
+        onClick: () => {
+          onSelectNode(node);
+          setContextMenu(null);
+        },
+      },
+      {
+        label: 'Focus in Co-DM',
+        onClick: () => {
+          onFocusCoDM(node);
+          setContextMenu(null);
+        },
+      },
+    ];
+
+    if (isQuest || isEncounter) {
+      if (isArchived) {
+        items.push(
+          {
+            label: 'Restore to Active',
+            onClick: async () => {
+              try {
+                await restoreNode(node.id, 'active');
+                onRefresh();
+              } catch (e) {
+                console.error('Failed to restore node:', e);
+              }
+              setContextMenu(null);
+            },
+          },
+          {
+            label: 'Restore to Planned',
+            onClick: async () => {
+              try {
+                await restoreNode(node.id, 'planned');
+                onRefresh();
+              } catch (e) {
+                console.error('Failed to restore node:', e);
+              }
+              setContextMenu(null);
+            },
+          }
+        );
+      } else {
+        items.push({
+          label: `Archive ${isQuest ? 'Quest' : 'Encounter'} 📦`,
+          onClick: async () => {
+            try {
+              await archiveNode(node.id);
+              onRefresh();
+            } catch (e) {
+              console.error('Failed to archive node:', e);
+            }
+            setContextMenu(null);
+          },
+        });
+      }
+    }
+
+    return items;
+  }, [contextMenu, onSelectNode, onFocusCoDM, onRefresh]);
 
   // Toggle collapsing sub-quests under a parent quest
   const toggleSubQuestsCollapse = (parentQuestId: string, e: React.MouseEvent) => {
@@ -758,11 +859,12 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
       parentQuestId?: string;
       subQuestCount?: number;
       completedSubQuestCount?: number;
+      depth?: number;
     }> = [];
 
-    // For each root quest, add it, and if it has sub-quests, insert them right beneath
-    rootQuests.forEach((rootQ: NodeItem) => {
-      const childIds = childQuestsMap.get(rootQ.id) || [];
+    // Helper to recursively append a quest and its sub-quests
+    const appendQuestBranch = (q: NodeItem, currentDepth: number, parentId?: string) => {
+      const childIds = childQuestsMap.get(q.id) || [];
       const childNodes = childIds
         .map((cid) => nodeMap.get(cid))
         .filter((n): n is NodeItem => !!n);
@@ -771,24 +873,25 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
       ).length;
 
       list.push({
-        ...rootQ,
-        isSubQuest: false,
+        ...q,
+        isSubQuest: currentDepth > 0,
+        parentQuestId: parentId,
         subQuestCount: childNodes.length,
         completedSubQuestCount: completedCount,
+        depth: currentDepth,
       });
 
-      // If parent's sub-quests are not collapsed, include each child sub-quest directly below
-      if (childNodes.length > 0 && !collapsedSubQuestParents.has(rootQ.id)) {
+      // If parent's sub-quests are not collapsed, recursively add each child sub-quest directly below
+      if (childNodes.length > 0 && !collapsedSubQuestParents.has(q.id)) {
         childNodes.forEach((childQ) => {
-          list.push({
-            ...childQ,
-            isSubQuest: true,
-            parentQuestId: rootQ.id,
-            subQuestCount: 0,
-            completedSubQuestCount: 0,
-          });
+          appendQuestBranch(childQ, currentDepth + 1, q.id);
         });
       }
+    };
+
+    // Append all root quests and their descendant sub-quest trees
+    rootQuests.forEach((rootQ: NodeItem) => {
+      appendQuestBranch(rootQ, 0);
     });
 
     // Also include any orphan sub-quests whose parent was deleted or not in list
@@ -796,7 +899,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
       if (subQuestIds.has(q.id)) {
         const pId = parentQuestMap.get(q.id);
         if (pId && !nodeMap.has(pId)) {
-          list.push({ ...q, isSubQuest: false });
+          appendQuestBranch(q, 0);
         }
       }
     });
@@ -905,15 +1008,18 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
     encounterSessionMap,
     encounterQuestMap,
     collapsedSessionIds,
+    collapsedSubQuestParents,
+    childQuestsMap,
     displayQuests,
     milestoneReceivers,
+    encounterDensity,
   });
 
   // Quest Color Palette
   const questColors = ['#f59e0b', '#ef4444', '#06b6d4', '#a855f7', '#10b981', '#ec4899', '#3b82f6'];
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--bg-app)', color: 'var(--text-primary)', overflow: 'hidden' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, minWidth: 0, background: 'var(--bg-app)', color: 'var(--text-primary)', overflow: 'hidden', position: 'relative' }}>
       {/* Top Header & Tapestry Controls */}
       <div
         style={{
@@ -926,6 +1032,9 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
           flexWrap: 'wrap',
           gap: '12px',
           flexShrink: 0,
+          minWidth: 0,
+          maxWidth: '100%',
+          boxSizing: 'border-box',
           zIndex: 10
         }}
       >
@@ -1102,20 +1211,22 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
           graphData={graphData}
           onSelectNode={onSelectNode}
           onRefresh={onRefresh}
+          showArchived={showArchived}
         />
       ) : (
         /* Main Tapestry Canvas Area with True Horizontal Scroll */
         <div
           style={{
-          flex: 1,
-          minHeight: 0,
-          overflowX: 'auto',
-          overflowY: 'auto',
-          padding: '20px 24px',
-          display: 'flex',
-          flexDirection: 'column'
-        }}
-      >
+            flex: 1,
+            minHeight: 0,
+            minWidth: 0,
+            overflowX: 'auto',
+            overflowY: 'auto',
+            padding: '16px 24px 24px 0',
+            display: 'flex',
+            flexDirection: 'column'
+          }}
+        >
         {displayQuests.length === 0 && displayColumns.length === 0 && encounters.length === 0 ? (
           /* Empty State */
           <div
@@ -1170,7 +1281,13 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                   alignItems: 'center',
                   justifyContent: 'space-between',
                   gap: '12px',
-                  flexWrap: 'wrap'
+                  flexWrap: 'wrap',
+                  position: 'sticky',
+                  left: '20px',
+                  width: 'fit-content',
+                  maxWidth: 'calc(100vw - 340px)',
+                  marginLeft: '20px',
+                  zIndex: 15
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '0.82rem', color: '#93c5fd' }}>
@@ -1217,6 +1334,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
               arcLayouts={arcLayouts}
               collapsedSessionIds={collapsedSessionIds}
               onSelectArc={setActiveArcModal}
+              onToggleArcCollapse={toggleArcCollapse}
             />
 
             {/* ========================================================================= */}
@@ -1269,6 +1387,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                   collapsedQuestIds={collapsedQuestIds}
                   collapsedSessionIds={collapsedSessionIds}
                   collapsedSubQuestParents={collapsedSubQuestParents}
+                  childQuestsMap={childQuestsMap}
                   hoveredQuestId={hoveredQuestId}
                   hoveredSessionId={hoveredSessionId}
                   hoveredEncounterId={hoveredEncounterId}
@@ -1281,6 +1400,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                   encounters={encounters}
                   encounterQuestMap={encounterQuestMap}
                   encounterSessionMap={encounterSessionMap}
+                  encounterPrecedenceEdges={encounterPrecedenceEdges}
                   unassignedQuestEncounters={unassignedQuestEncounters}
                   questPrereqsMap={questPrereqsMap}
                   questBranchesMap={questBranchesMap}
@@ -1303,6 +1423,7 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                   onAssignToQuest={handleAssignEncounterToQuest}
                   onMoveEncounter={handleMoveEncounter}
                   onReorderQuests={handleReorderQuests}
+                  onNodeContextMenu={(node, e) => setContextMenu({ x: e.clientX, y: e.clientY, node })}
                   onOpenAddEncounterModal={(qId, sId) => {
                     setShowAddModal('encounter');
                     setTargetQuestId(qId);
@@ -1430,6 +1551,16 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
           onChangeSummary={setNewSummary}
           onSubmit={handleCreateNewNode}
           onClose={() => setShowAddModal(null)}
+        />
+      )}
+
+      {/* Right-click Context Menu */}
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={contextMenuItems}
+          onClose={() => setContextMenu(null)}
         />
       )}
     </div>

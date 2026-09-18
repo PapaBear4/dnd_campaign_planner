@@ -136,16 +136,69 @@ export function useTapestryOverlays({
       const fRect = fromEl.getBoundingClientRect();
       const tRect = toEl.getBoundingClientRect();
 
-      const x1 = fRect.right - mRect.left;
-      const y1 = fRect.top + fRect.height / 2 - mRect.top;
-      const x2 = tRect.left - mRect.left;
-      const y2 = tRect.top + tRect.height / 2 - mRect.top;
+      let x1: number, y1: number, x2: number, y2: number;
+      let d: string;
+      let midX: number, midY: number;
 
-      const dx = Math.max(30, Math.abs(x2 - x1) * 0.5);
-      const d = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
+      const sameVerticalLevel = Math.abs((fRect.top + fRect.height / 2) - (tRect.top + tRect.height / 2)) < 40;
+      const isDirectlyAdjacent = tRect.left > fRect.right && (tRect.left - fRect.right) < 240;
 
-      const midX = (x1 + x2) / 2;
-      const midY = (y1 + y2) / 2;
+      if (sameVerticalLevel && isDirectlyAdjacent) {
+        // Direct adjacent cards in a horizontal sequence (clean straight connector through the gap)
+        x1 = fRect.right - mRect.left;
+        y1 = fRect.top + fRect.height / 2 - mRect.top;
+        x2 = tRect.left - mRect.left;
+        y2 = tRect.top + tRect.height / 2 - mRect.top;
+
+        const dx = Math.max(15, (x2 - x1) * 0.45);
+        d = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
+        midX = (x1 + x2) / 2;
+        midY = (y1 + y2) / 2;
+      } else if (sameVerticalLevel && tRect.left > fRect.right) {
+        // Same horizontal row, but SKIPS one or more cards:
+        // Arch underneath the card row so the line never cuts horizontally through card text!
+        const bottomGutter = Math.max(fRect.bottom, tRect.bottom) - mRect.top + 20;
+        x1 = fRect.right - 15 - mRect.left;
+        y1 = fRect.bottom - mRect.top;
+        x2 = tRect.left + 15 - mRect.left;
+        y2 = tRect.bottom - mRect.top;
+
+        d = `M ${x1} ${y1} C ${x1} ${bottomGutter}, ${x2} ${bottomGutter}, ${x2} ${y2}`;
+        midX = (x1 + x2) / 2;
+        midY = bottomGutter;
+      } else if (tRect.right < fRect.left) {
+        // Backward edge (target is to the left of source):
+        // Loop underneath both cards
+        const bottomGutter = Math.max(fRect.bottom, tRect.bottom) - mRect.top + 28;
+        x1 = fRect.left + 20 - mRect.left;
+        y1 = fRect.bottom - mRect.top;
+        x2 = tRect.right - 20 - mRect.left;
+        y2 = tRect.bottom - mRect.top;
+
+        d = `M ${x1} ${y1} C ${x1} ${bottomGutter}, ${x2} ${bottomGutter}, ${x2} ${y2}`;
+        midX = (x1 + x2) / 2;
+        midY = bottomGutter;
+      } else {
+        // Different vertical levels (e.g. from vertical stack to horizontal pipeline or across rows)
+        if (tRect.left >= fRect.right - 20) {
+          x1 = fRect.right - mRect.left;
+          y1 = fRect.top + fRect.height / 2 - mRect.top;
+          x2 = tRect.left - mRect.left;
+          y2 = tRect.top + tRect.height / 2 - mRect.top;
+          const dx = Math.max(30, Math.abs(x2 - x1) * 0.5);
+          d = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
+        } else {
+          // Vertical flow (top to bottom)
+          x1 = fRect.left + fRect.width / 2 - mRect.left;
+          y1 = fRect.bottom - mRect.top;
+          x2 = tRect.left + tRect.width / 2 - mRect.left;
+          y2 = tRect.top - mRect.top;
+          const dy = Math.max(25, Math.abs(y2 - y1) * 0.5);
+          d = `M ${x1} ${y1} C ${x1} ${y1 + dy}, ${x2} ${y2 - dy}, ${x2} ${y2}`;
+        }
+        midX = (x1 + x2) / 2;
+        midY = (y1 + y2) / 2;
+      }
 
       let isTight = false;
       if (edge.label) {
@@ -168,7 +221,7 @@ export function useTapestryOverlays({
         const overlapsSource = (pillRight > srcLeft && pillLeft < srcRight && pillBottom > srcTop && pillTop < srcBottom);
         const overlapsTarget = (pillRight > tgtLeft && pillLeft < tgtRight && pillBottom > tgtTop && pillTop < tgtBottom);
 
-        isTight = overlapsSource || overlapsTarget || (Math.abs(y1 - y2) < 40 && (x2 - x1) < estWidth + 16);
+        isTight = overlapsSource || overlapsTarget || (sameVerticalLevel && isDirectlyAdjacent && (tRect.left - fRect.right) < estWidth + 16);
       }
 
       lines.push({

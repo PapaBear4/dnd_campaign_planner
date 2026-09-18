@@ -25,6 +25,7 @@ export type {
 export type RelationType =
   | 'contains'
   | 'precedes'
+  | 'leads_to'
   | 'located_at'
   | 'allied_with'
   | 'hostile_to'
@@ -40,6 +41,8 @@ export type RelationType =
   | 'created_by'
   | 'recorded_in'
   | 'custom';
+
+export type NodeStatus = 'planned' | 'active' | 'completed' | 'abandoned' | 'archived';
 
 export type LoreStatus = 'fact' | 'suspicion' | 'rumor';
 
