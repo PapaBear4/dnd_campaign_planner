@@ -770,6 +770,22 @@ input::placeholder, textarea::placeholder {
   border: 1px solid rgba(255, 255, 255, 0.04);
   min-height: 96px;
   position: relative;
+  cursor: grab;
+}
+
+/* Grab-to-pan timeline matrix canvas container */
+.tapestry-canvas-container {
+  cursor: grab;
+}
+
+.tapestry-canvas-container.is-panning,
+.tapestry-canvas-container.is-panning * {
+  cursor: grabbing !important;
+  user-select: none !important;
+}
+
+.tapestry-canvas-container.is-space-pressed {
+  cursor: grab !important;
 }
 
 .tapestry-encounter-card {

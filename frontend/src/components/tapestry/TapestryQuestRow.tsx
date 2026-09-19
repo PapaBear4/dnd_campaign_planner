@@ -311,7 +311,7 @@ export const TapestryQuestRow: React.FC<TapestryQuestRowProps> = ({
                 onNodeContextMenu(quest, e);
               }
             }}
-            className="glass-panel"
+            className="glass-panel tapestry-quest-header-card"
             style={{
               borderRadius: '8px',
               padding: '0 10px',
@@ -583,7 +583,7 @@ export const TapestryQuestRow: React.FC<TapestryQuestRowProps> = ({
                 onNodeContextMenu(quest, e);
               }
             }}
-            className="glass-panel"
+            className="glass-panel tapestry-quest-header-card"
             style={{
               flex: 1,
               borderRadius: '10px',

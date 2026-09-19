@@ -149,6 +149,7 @@ export const TapestrySessionHeaders: React.FC<TapestrySessionHeadersProps> = ({
         return (
           <div
             key={sess.id}
+            className="tapestry-session-header-card"
             onClick={() => {
               if (!isStaging && !isVirtual) onSelectSession(sess);
             }}

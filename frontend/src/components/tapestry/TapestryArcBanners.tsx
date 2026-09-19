@@ -100,6 +100,7 @@ export const TapestryArcBanners: React.FC<TapestryArcBannersProps> = ({
           return (
             <div
               key={item.arc.id}
+              className="tapestry-arc-banner-card"
               onClick={() => onToggleArcCollapse(item.sessionIds, false)}
               style={{
                 gridColumn: `span ${item.colSpan}`,
@@ -134,6 +135,7 @@ export const TapestryArcBanners: React.FC<TapestryArcBannersProps> = ({
         return (
           <div
             key={item.arc.id}
+            className="tapestry-arc-banner-card"
             onClick={() => onSelectArc(item.arc)}
             style={{
               gridColumn: `span ${item.colSpan}`,

@@ -56,6 +56,11 @@ Completed:
   - Any quest with status `completed` defaults to folded (single-line 38px horizontal lane).
   - Collapsed quest headers display `✓ Done` status pill alongside scene counts.
   - Automatically loads and synchronizes when switching active campaigns while preserving user unroll/fold toggles in localStorage.
+- [x] Grab-to-Drag Timeline Matrix Panning:
+  - Smooth 2D canvas panning by clicking and dragging anywhere on empty space or cells in the encounter timeline matrix.
+  - Interactive element isolation (encounter cards, buttons, links, and headers retain native interactions and drag-and-drop).
+  - Spacebar + drag and middle-click drag support.
+  - Real-time cursor state changes (`grab` and `grabbing`) and toolbar indicator.
 
 
 

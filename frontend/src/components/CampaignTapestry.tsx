@@ -35,7 +35,8 @@ import {
   Circle,
   MapPin,
   Skull,
-  Users
+  Users,
+  Move
 } from 'lucide-react';
 import {
   createNode,
@@ -67,6 +68,7 @@ import { TapestryArcBanners } from './tapestry/TapestryArcBanners';
 import { TapestrySessionHeaders } from './tapestry/TapestrySessionHeaders';
 import { TapestrySvgOverlays } from './tapestry/TapestrySvgOverlays';
 import { TapestryQuestRow } from './tapestry/TapestryQuestRow';
+import { useTapestryPan } from './tapestry/hooks/useTapestryPan';
 
 interface CampaignTapestryProps {
   campaignId: string;
@@ -1018,6 +1020,17 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
   // Quest Color Palette
   const questColors = ['#f59e0b', '#ef4444', '#06b6d4', '#a855f7', '#10b981', '#ec4899', '#3b82f6'];
 
+  // 5. Canvas Scroll Container & Grab-to-Pan Timeline Matrix
+  const canvasScrollRef = useRef<HTMLDivElement>(null);
+  const {
+    isPanning,
+    isSpacePressed,
+    handleMouseDown: handleCanvasMouseDown,
+  } = useTapestryPan({
+    canvasScrollRef,
+    disabled: tapestryViewMode !== 'matrix',
+  });
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, minWidth: 0, background: 'var(--bg-app)', color: 'var(--text-primary)', overflow: 'hidden', position: 'relative' }}>
       {/* Top Header & Tapestry Controls */}
@@ -1090,6 +1103,29 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
                 <GitFork size={13} /> Story Flow &amp; Branches
               </button>
             </div>
+
+            {tapestryViewMode === 'matrix' && (
+              <div
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  padding: '3px 8px',
+                  borderRadius: '6px',
+                  background: isPanning ? 'rgba(245, 158, 11, 0.18)' : 'rgba(255, 255, 255, 0.04)',
+                  border: `1px solid ${isPanning ? 'var(--color-gold)' : 'var(--border-subtle)'}`,
+                  fontSize: '0.72rem',
+                  color: isPanning ? 'var(--color-gold)' : 'var(--text-muted)',
+                  transition: 'all 0.15s ease',
+                  marginLeft: '8px',
+                  userSelect: 'none',
+                }}
+                title="Grab & drag anywhere on empty space (or hold Spacebar, or middle-click) to pan the timeline"
+              >
+                <Move size={12} style={{ color: isPanning ? 'var(--color-gold)' : 'var(--text-secondary)' }} />
+                <span>{isPanning ? 'Panning Canvas...' : 'Grab to Pan'}</span>
+              </div>
+            )}
           </div>
           <p style={{ margin: '3px 0 0', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
             Quests flow horizontally • Sessions weave vertically • Encounters bridge your narrative goals with game night reality.
@@ -1214,8 +1250,11 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
           showArchived={showArchived}
         />
       ) : (
-        /* Main Tapestry Canvas Area with True Horizontal Scroll */
+        /* Main Tapestry Canvas Area with True Horizontal Scroll & Grab-to-Pan */
         <div
+          ref={canvasScrollRef}
+          onMouseDown={handleCanvasMouseDown}
+          className={`tapestry-canvas-container ${isPanning ? 'is-panning' : ''} ${isSpacePressed ? 'is-space-pressed' : ''}`}
           style={{
             flex: 1,
             minHeight: 0,
@@ -1224,7 +1263,8 @@ export const CampaignTapestry: React.FC<CampaignTapestryProps> = ({
             overflowY: 'auto',
             padding: '16px 24px 24px 0',
             display: 'flex',
-            flexDirection: 'column'
+            flexDirection: 'column',
+            cursor: isPanning ? 'grabbing' : isSpacePressed ? 'grab' : undefined,
           }}
         >
         {displayQuests.length === 0 && displayColumns.length === 0 && encounters.length === 0 ? (
